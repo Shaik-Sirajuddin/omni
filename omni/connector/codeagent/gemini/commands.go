@@ -12,7 +12,6 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
-	"github.com/creack/pty"
 )
 
 const (
@@ -76,9 +75,7 @@ func (a *geminiAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	if err := syncModelAndModeConfig(workDir, model, permMode); err != nil {
 		logger.Warn("Create: could not sync model/mode config", "err", err)
 	}
-	if err := a.syncSandboxConfig(); err != nil {
-		logger.Warn("Create: could not sync sandbox config", "err", err)
-	}
+	// sandbox disabled: a.syncSandboxConfig() is now a no-op
 
 	sessionPrompt := "reply-with-hi-" + id
 	if _, err := captureOutput(workDir, "gemini", "-p", sessionPrompt); err != nil {
@@ -147,37 +144,7 @@ func (a *geminiAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 			logger.Info("Resume: PTY daemon session started detached", "sessionID", resolvedSessionID)
 			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID}, nil
 		}
-
-		master, err := pty.Start(cmd)
-		if err != nil {
-			return nil, fmt.Errorf("gemini: resume: pty start: %w", err)
-		}
-		pid := fmt.Sprintf("%d", cmd.Process.Pid)
-		if resolvedSessionID == "" {
-			resolvedSessionID = "latest"
-		}
-
-		a.mu.Lock()
-		a.masterPTY = master
-		a.activeCmd = cmd
-		a.sessionID = resolvedSessionID
-		a.mu.Unlock()
-
-		go func(sessionID string, client PTYClient, master *os.File) {
-			_ = cmd.Wait()
-			_ = master.Close()
-			a.mu.Lock()
-			a.masterPTY = nil
-			a.mu.Unlock()
-			if stopper, ok := client.(interface {
-				Stop(agentID, sessionID string) error
-			}); ok {
-				_ = stopper.Stop(string(Gemini), sessionID)
-			}
-		}(resolvedSessionID, ptyClient, master)
-
-		logger.Info("Resume: interactive PTY session started", "pid", pid, "sessionID", resolvedSessionID)
-		return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resolvedSessionID}, nil
+		return nil, fmt.Errorf("gemini: resume/background exec not supported")
 	}
 
 	cmd.Stdin = interactiveStdin
@@ -295,10 +262,10 @@ func (a *geminiAgent) Exec(p codeagent.ExecuteParams) (*codeagent.ExecuteResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	sbx := a.sbx
+	// sbx := a.sbx // sandbox disabled
 	a.mu.RUnlock()
 
-	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, p.OutputFormat, p.MaxTurns, sbx)
+	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, p.OutputFormat, p.MaxTurns, nil)
 	logger.Debug("Exec", "workDir", workDir, "args", args)
 
 	cmd := exec.Command("gemini", args...)
@@ -325,10 +292,10 @@ func (a *geminiAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	sbx := a.sbx
+	// sbx := a.sbx // sandbox disabled
 	a.mu.RUnlock()
 
-	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, p.MaxTurns, sbx)
+	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, p.MaxTurns, nil)
 	logger.Debug("Stream", "workDir", workDir, "args", args)
 
 	cmd := exec.Command("gemini", args...)

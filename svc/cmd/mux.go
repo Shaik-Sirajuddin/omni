@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
+	"errors"
 	"sync"
 
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
@@ -112,7 +112,7 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 				},
 				Global: true,
 			}); err != nil {
-				if strings.Contains(err.Error(), "not supported") {
+				if errors.Is(err, codeagent.ErrMCPNotSupported) {
 					log.Warn("axolink-mcp: connector does not support MCP", "provider", provider)
 				} else {
 					log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
