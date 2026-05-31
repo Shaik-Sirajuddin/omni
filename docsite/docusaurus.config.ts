@@ -32,8 +32,20 @@ const config: Config = {
   // may want to replace "en" with "zh-Hans".
   i18n: {
     defaultLocale: 'en',
-    locales: ['en'],
+    locales: ['en', 'de', 'fr', 'ja', 'ru'],
   },
+
+  plugins: [
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'contributing',
+        path: 'contributing',
+        routeBasePath: 'contributing',
+        sidebarPath: './sidebarsContributing.ts',
+      },
+    ],
+  ],
 
   presets: [
     [
@@ -96,7 +108,16 @@ const config: Config = {
           position: 'left',
           label: 'Docs',
         },
+        {
+          to: '/contributing/development/commands',
+          label: 'Contributing',
+          position: 'left',
+        },
         {to: '/blog', label: 'Blog', position: 'left'},
+        {
+          type: 'localeDropdown',
+          position: 'right',
+        },
         {
           href: 'https://github.com/facebook/docusaurus',
           label: 'GitHub',
