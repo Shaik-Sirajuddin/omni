@@ -214,6 +214,9 @@ type MCPRegistry struct {
 func (r *MCPRegistry) Register(p Provider, m MCPManager) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.entries == nil {
+		r.entries = make(map[Provider]MCPManager)
+	}
 	r.entries[p] = m
 }
 
