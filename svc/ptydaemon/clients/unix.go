@@ -205,6 +205,15 @@ func (c *UnixSocketClient) Attach(ctx context.Context, sessionID string) error {
 	}
 	ptylog.Debug("client: attach accepted by daemon, reading SCM_RIGHTS fd", "session_id", sessionID)
 
+	// Clear the daemon's attachment record when we leave (agent exits or the
+	// user hits the detach key) so a later resume is not rejected as
+	// "already attached". Best-effort; the daemon also reclaims stale PIDs.
+	defer func() {
+		if derr := c.do(unixRequest{Op: "detach", SessionID: sessionID}); derr != nil {
+			ptylog.Debug("client: detach-on-exit failed (daemon will reclaim stale pid)", "err", derr, "session_id", sessionID)
+		}
+	}()
+
 	scms, err := unix.ParseSocketControlMessage(oob[:oobn])
 	if err != nil || len(scms) == 0 {
 		ptylog.Error("client: attach no control message", "err", err, "session_id", sessionID)
@@ -395,9 +404,11 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 		_ = ptmx.Close()
 	}()
 
-	// Sync PTY size to the current terminal and force the child to repaint its
-	// current screen, even when the size is unchanged from the previous client.
-	forceRedraw(ptmx)
+	// Sync PTY size so the child lays out at the real terminal size as it boots.
+	// The forced repaint is deferred until the child actually emits output (see
+	// the output loop below) — firing it now would hit the child before its
+	// resize handler is installed, and the SIGWINCH would be lost.
+	inheritSize(ptmx)
 
 	// Forward SIGWINCH so PTY tracks terminal resizes.
 	winch := make(chan os.Signal, 1)
@@ -426,15 +437,31 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 
 	done := make(chan struct{}, 2)
 	go func() {
-		n, err := io.Copy(stdinDst, os.Stdin)
-		if err != nil && stdinDst != ptmx {
-			// Relay conn died — fall back to writing stdin directly to ptmx
-			// so the session stays alive and input is not silently lost.
-			// ptmx is safe to write here: deferred ptmx.Close() only runs after
-			// the select below exits, which waits for this goroutine's done signal.
-			ptylog.Warn("stdin-relay write failed, falling back to direct ptmx write",
-				"err", err, "bytes_relayed", n)
-			_, _ = io.Copy(ptmx, os.Stdin)
+		// Scan stdin for the detach key (Ctrl+\, 0x1c): it leaves the session
+		// running and returns to the caller, which clears the attachment record.
+		// Everything else is forwarded raw to the child (so Ctrl+C still reaches
+		// the agent). On relay failure we fall back to writing ptmx directly.
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := os.Stdin.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				if i := bytes.IndexByte(chunk, detachKey); i >= 0 {
+					if i > 0 {
+						_, _ = stdinDst.Write(chunk[:i])
+					}
+					ptylog.Info("redraw-debug: detach key (Ctrl+\\) pressed — detaching")
+					break
+				}
+				if _, werr := stdinDst.Write(chunk); werr != nil && stdinDst != ptmx {
+					ptylog.Warn("stdin-relay write failed, falling back to direct ptmx write", "err", werr)
+					stdinDst = ptmx
+					_, _ = ptmx.Write(chunk)
+				}
+			}
+			if rerr != nil {
+				break
+			}
 		}
 		done <- struct{}{}
 	}()
@@ -448,8 +475,12 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 			n, rerr := ptmx.Read(buf)
 			if n > 0 {
 				if first {
-					ptylog.Info("redraw-debug: first child output received", "bytes", n)
 					first = false
+					// The child has booted (it just emitted its terminal setup),
+					// so its SIGWINCH handler is up: force one repaint now so a
+					// resumed TUI paints its content without waiting for a keypress.
+					ptylog.Info("redraw-debug: first child output received → forcing repaint", "bytes", n)
+					go forceRedraw(ptmx)
 				}
 				if _, werr := os.Stdout.Write(buf[:n]); werr != nil {
 					break
@@ -481,6 +512,10 @@ func inheritSize(ptmx *os.File) {
 // size so the child's SIGWINCH handler runs for each — standard signals
 // coalesce, so a rapid set/restore would merge into a single no-op event.
 const redrawSettle = 40 * time.Millisecond
+
+// detachKey is the byte that detaches the interactive client (Ctrl+\). Ctrl+C
+// is intentionally NOT used — it is forwarded to the agent.
+const detachKey = 0x1c
 
 // forceRedraw sets ptmx to the calling terminal's size, guaranteeing a genuine
 // SIGWINCH to the child even when the PTY is already at that size.
