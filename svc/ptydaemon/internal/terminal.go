@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type Status string
@@ -37,6 +39,10 @@ const (
 	// applies each step in order. Without it the submit key races ahead of the
 	// bracketed paste and lands on stale human input.
 	pasteSettle = 40 * time.Millisecond
+
+	// drainReadTimeout bounds each idle-drain read so the drainer periodically
+	// re-checks pause/close state even when the child is silent.
+	drainReadTimeout = 200 * time.Millisecond
 )
 
 // submitRetryDelays are the delays before each bare resubmit of an already-pasted
@@ -87,6 +93,18 @@ type PTYTerminal struct {
 	// that span two consecutive reads.
 	carry  [carrySize]byte
 	carryN int
+
+	// --- idle output drain (created sessions only) ---
+	// While no fd-passing client holds the master, drainLoop reads and discards
+	// output so the kernel PTY buffer never fills and the child never blocks on
+	// write. It is paused while a client is attached (one reader at a time) and
+	// resumed on detach. Adopted sessions leave hasDrain=false (their master fd
+	// is externally owned), so all drain calls are no-ops for them.
+	drainMu     sync.Mutex
+	drainCond   *sync.Cond
+	hasDrain    bool
+	drainActive bool
+	drainClosed bool
 }
 
 func (t *PTYTerminal) write(p []byte) error {
@@ -109,6 +127,152 @@ func (t *PTYTerminal) kill() error {
 	return nil
 }
 
+// closeMaster releases the PTY master fd and nils it so any later write fails
+// cleanly ("no pty master") instead of operating on a dead descriptor. Called
+// on every session-exit path so the fd is freed immediately rather than at GC.
+// Idempotent and safe to call more than once.
+func (t *PTYTerminal) closeMaster() {
+	t.stopDrain() // stop the drainer before the fd disappears
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.master != nil {
+		_ = t.master.SetReadDeadline(time.Now()) // interrupt any in-progress drain read
+		_ = t.master.Close()
+		t.master = nil
+	}
+}
+
+// startDrain launches the idle output-drain goroutine for a created session.
+// The session begins detached, so draining starts active. Call once per
+// terminal, after master/cmd are set.
+func (t *PTYTerminal) startDrain() {
+	t.drainMu.Lock()
+	if t.hasDrain {
+		t.drainMu.Unlock()
+		return
+	}
+	t.drainCond = sync.NewCond(&t.drainMu)
+	t.hasDrain = true
+	t.drainActive = true
+	t.drainMu.Unlock()
+	go t.drainLoop()
+}
+
+// drainLoop reads the master and discards the bytes, keeping the kernel PTY
+// output buffer empty so the child never blocks on write. It parks while paused
+// (a client is attached) and exits when the master is closed. This is the
+// "0-buffer" drain: nothing is retained — a late client repaints from the child
+// (see repaint), it does not replay history.
+func (t *PTYTerminal) drainLoop() {
+	buf := make([]byte, 4096)
+	for {
+		t.drainMu.Lock()
+		for !t.drainActive && !t.drainClosed {
+			t.drainCond.Wait()
+		}
+		closed := t.drainClosed
+		t.drainMu.Unlock()
+		if closed {
+			return
+		}
+
+		t.mu.Lock()
+		m := t.master
+		t.mu.Unlock()
+		if m == nil {
+			return
+		}
+
+		// Bounded deadline so a paused/closed transition is noticed even when
+		// the child is silent, and so a paused drainer instant-timeouts instead
+		// of stealing the attached client's bytes.
+		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
+		if _, err := m.Read(buf); err != nil {
+			if os.IsTimeout(err) {
+				continue
+			}
+			return // EOF / EIO / closed — master is gone
+		}
+		// bytes discarded; keep draining
+	}
+}
+
+// pauseDrain stops the drainer before a client takes over reading the master,
+// enforcing one-reader-at-a-time. No-op for adopted sessions.
+func (t *PTYTerminal) pauseDrain() {
+	t.drainMu.Lock()
+	if !t.hasDrain {
+		t.drainMu.Unlock()
+		return
+	}
+	t.drainActive = false
+	cond := t.drainCond
+	t.drainMu.Unlock()
+	// Keep a past deadline so any in-progress or subsequent drain read returns
+	// immediately and parks rather than consuming the client's output.
+	t.mu.Lock()
+	if t.master != nil {
+		_ = t.master.SetReadDeadline(time.Now())
+	}
+	t.mu.Unlock()
+	cond.Signal()
+}
+
+// resumeDrain restarts draining after a client detaches. No-op for adopted
+// sessions.
+func (t *PTYTerminal) resumeDrain() {
+	t.drainMu.Lock()
+	if !t.hasDrain {
+		t.drainMu.Unlock()
+		return
+	}
+	t.drainActive = true
+	cond := t.drainCond
+	t.drainMu.Unlock()
+	t.mu.Lock()
+	if t.master != nil {
+		_ = t.master.SetReadDeadline(time.Time{}) // clear deadline
+	}
+	t.mu.Unlock()
+	cond.Signal()
+}
+
+// stopDrain permanently stops the drainer (called from closeMaster). No-op for
+// adopted sessions or if already stopped.
+func (t *PTYTerminal) stopDrain() {
+	t.drainMu.Lock()
+	if !t.hasDrain {
+		t.drainMu.Unlock()
+		return
+	}
+	t.drainClosed = true
+	cond := t.drainCond
+	t.drainMu.Unlock()
+	cond.Signal()
+}
+
+// repaint nudges the PTY window size to force the child to redraw its full
+// current screen for a freshly-attached client. Full-screen TUIs (claude,
+// codex) repaint on SIGWINCH; line-oriented programs are unaffected. No
+// retained buffer is needed — the child is the source of truth for the screen.
+func (t *PTYTerminal) repaint() {
+	t.mu.Lock()
+	m := t.master
+	t.mu.Unlock()
+	if m == nil {
+		return
+	}
+	fd := int(m.Fd())
+	ws, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
+	if err != nil || ws.Row <= 1 || ws.Col == 0 {
+		return // no usable size yet; nothing to force a redraw against
+	}
+	nudged := *ws
+	nudged.Row = ws.Row - 1
+	_ = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &nudged)
+	_ = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) // restore → SIGWINCH → full redraw
+}
+
 // readLastInput returns a full copy of the active queue top (inputQueue[queueLen]).
 // This is what the human is currently typing — never pops, never clears.
 func (t *PTYTerminal) readLastInput() []byte {
@@ -126,10 +290,10 @@ func (t *PTYTerminal) readLastInput() []byte {
 // concatenated write lets the submit key race ahead of the paste and submit
 // stale human input instead of the prompt.
 //
-//	1. ctrlU                          clear the human's partial line
-//	2. paste(prompt)                  bracketed-paste the prompt (no submit yet)
-//	3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
-//	4. human input (once, no submit)  restore what the human was typing
+//  1. ctrlU                          clear the human's partial line
+//  2. paste(prompt)                  bracketed-paste the prompt (no submit yet)
+//  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
+//  4. human input (once, no submit)  restore what the human was typing
 //
 // execMu is held across the whole sequence (including the settle/retry sleeps)
 // so concurrent exec calls cannot interleave their writes.
