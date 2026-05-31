@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	mcpapi "github.com/Shaik-Sirajuddin/memory/mcp/server/mcp"
 	"github.com/Shaik-Sirajuddin/memory/mcp/server/proxy"
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
 const (
@@ -318,29 +318,6 @@ func envDefault(key, fallback string) string {
 	return fallback
 }
 
-// DefaultServiceUnixSocketPath resolves the unix socket path using the same
-// priority as pkg/sockpath: XDG_RUNTIME_DIR → /run/user/<uid> → /run/omni-<user>.
-// This ensures non-root users don't attempt to mkdir inside /run directly.
 func DefaultServiceUnixSocketPath() string {
-	const name = "service.sock"
-	if xdg := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); xdg != "" {
-		return filepath.Join(xdg, "omni", name)
-	}
-	if u, err := user.Current(); err == nil && u.Uid != "" {
-		candidate := filepath.Join("/run/user", u.Uid, "omni", name)
-		if _, err := os.Stat(filepath.Dir(candidate)); err == nil {
-			return candidate
-		}
-	}
-	return filepath.Join("/run", "omni-"+currentUsername(), name)
-}
-
-func currentUsername() string {
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return u.Username
-	}
-	if v := os.Getenv("USER"); v != "" {
-		return v
-	}
-	return "omni"
+	return sockpath.Service()
 }

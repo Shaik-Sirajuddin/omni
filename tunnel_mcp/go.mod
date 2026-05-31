@@ -6,9 +6,12 @@ replace github.com/Shaik-Sirajuddin/memory => ../omni
 
 replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../pkg/log
 
+replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../pkg/sockpath
+
 require (
 	github.com/Shaik-Sirajuddin/memory v1.1.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
 	github.com/adrg/xdg v0.5.3
 	github.com/docker/docker v28.5.2+incompatible // test-only: e2e Docker SDK executor
 	github.com/google/uuid v1.6.0
