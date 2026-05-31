@@ -177,7 +177,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Omni Project. Built with Docusaurus.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Omni Project.`,
     },
     prism: {
       theme: prismThemes.github,
