@@ -66,9 +66,7 @@ func (a *agyAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateSes
 	} else {
 		a.sessionID = id
 	}
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
 	workDir := a.workDir
 	sessionID := a.sessionID
 	binPath := a.binPath
@@ -136,10 +134,9 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 	a.mu.Lock()
 	binPath := a.binPath
 	workDir := a.workDir
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
-	rt := a.sbxRuntime
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
+	// rt := a.sbxRuntime // sandbox disabled
+	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
 	client := a.ptyClient
 	currentSessionID := a.sessionID
 	env := mergeEnv(os.Environ(), p.Envs)
@@ -162,14 +159,12 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 		args = append(args, "--continue")
 	}
 
-	if rt != nil {
-		if err := rt.Command(binPath, args); err != nil {
-			return nil, fmt.Errorf("agy: resume: sandbox command: %w", err)
-		}
-		pid := runtimePID(rt)
-		logger.Info("Resume: interactive sandbox session completed", "pid", pid, "sessionID", resumeID)
-		return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resumeID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil {
+	//     if err := rt.Command(binPath, args); err != nil { return nil, fmt.Errorf(...) }
+	//     return &codeagent.ResumeSessionResult{ProcessID: runtimePID(rt), SessionID: resumeID}, nil
+	// }
+	_ = rt
 
 	if client != nil {
 		command := append([]string{binPath}, args...)
@@ -348,13 +343,13 @@ func (a *agyAgent) Exec(p codeagent.ExecuteParams) (*codeagent.ExecuteResult, er
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
 	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, sessionID, p.OutputFormat, p.MaxTurns)
 	logger.Debug("Exec", "workDir", workDir, "args", args)
 
-	response, err := execOutput(workDir, rt, binPath, args...)
+	response, err := execOutput(workDir, nil, binPath, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -380,44 +375,15 @@ func (a *agyAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult, er
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
 	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, sessionID, p.MaxTurns)
 	logger.Debug("Stream", "workDir", workDir, "args", args)
 
 	ch := make(chan codeagent.StreamEvent, 32)
-	if rt != nil {
-		proc, err := rt.Start(binPath, args)
-		if err != nil {
-			return nil, fmt.Errorf("agy stream: sandbox start: %w", err)
-		}
-		go func() {
-			defer close(ch)
-			res, waitErr := proc.Wait()
-			if waitErr != nil {
-				msg := runtimeErrorf("agy stream", res, waitErr).Error()
-				logger.Error("Stream: sandbox process exited with error", "err", msg)
-				ch <- codeagent.StreamEvent{Type: "stop", Done: true, Content: msg}
-				return
-			}
-			scanner := bufio.NewScanner(strings.NewReader(res.Stdout))
-			for scanner.Scan() {
-				line := scanner.Text()
-				if line == "" {
-					continue
-				}
-				ev := parseAgyLine(line)
-				ch <- ev
-				if ev.Done {
-					return
-				}
-			}
-			ch <- codeagent.StreamEvent{Type: "stop", Done: true}
-			logger.Debug("Stream completed via sandbox runtime")
-		}()
-		return &codeagent.StreamResult{Events: ch, SessionID: sessionID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil { proc, err := rt.Start(binPath, args); ... return &StreamResult{...} }
 
 	cmd := localCommand(workDir, binPath, args...)
 	stdout, err := cmd.StdoutPipe()

@@ -60,9 +60,7 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	} else {
 		a.sessionID = id
 	}
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
 	workDir := a.workDir
 	sessionID := a.sessionID
 	binPath := a.binPath
@@ -98,8 +96,9 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	// session after at least one print-mode exchange.
 	a.mu.RLock()
 	model := a.model
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
+	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
 
 	seedArgs := []string{
 		"-p", "hello",
@@ -140,10 +139,9 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 	a.mu.Lock()
 	binPath := a.binPath
 	workDir := a.workDir
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
-	rt := a.sbxRuntime
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
+	// rt := a.sbxRuntime // sandbox disabled
+	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
 	client := a.ptyClient
 	currentSessionID := a.sessionID
 	env := mergeEnv(os.Environ(), p.Envs)
@@ -166,14 +164,12 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 		args = append(args, "--fork-session")
 	}
 
-	if rt != nil {
-		if err := rt.Command(binPath, args); err != nil {
-			return nil, fmt.Errorf("claude: resume: sandbox command: %w", err)
-		}
-		pid := runtimePID(rt)
-		logger.Info("Resume: interactive sandbox session completed", "pid", pid, "sessionID", resumeID)
-		return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resumeID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil {
+	//     if err := rt.Command(binPath, args); err != nil { return nil, fmt.Errorf(...) }
+	//     return &codeagent.ResumeSessionResult{ProcessID: runtimePID(rt), SessionID: resumeID}, nil
+	// }
+	_ = rt
 
 	if client != nil {
 		info, err := client.Get("", resumeID)
@@ -347,13 +343,13 @@ func (a *claudeAgent) Exec(p codeagent.ExecuteParams) (*codeagent.ExecuteResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
 	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, sessionID, p.OutputFormat, p.MaxTurns)
 	logger.Debug("Exec", "workDir", workDir, "args", args)
 
-	response, err := execOutput(workDir, rt, binPath, args...)
+	response, err := execOutput(workDir, nil, binPath, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -379,44 +375,15 @@ func (a *claudeAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
 	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, sessionID, p.MaxTurns)
 	logger.Debug("Stream", "workDir", workDir, "args", args)
 
 	ch := make(chan codeagent.StreamEvent, 32)
-	if rt != nil {
-		proc, err := rt.Start(binPath, args)
-		if err != nil {
-			return nil, fmt.Errorf("claude stream: sandbox start: %w", err)
-		}
-		go func() {
-			defer close(ch)
-			res, waitErr := proc.Wait()
-			if waitErr != nil {
-				msg := runtimeErrorf("claude stream", res, waitErr).Error()
-				logger.Error("Stream: sandbox process exited with error", "err", msg)
-				ch <- codeagent.StreamEvent{Type: "stop", Done: true, Content: msg}
-				return
-			}
-			scanner := bufio.NewScanner(strings.NewReader(res.Stdout))
-			for scanner.Scan() {
-				line := scanner.Text()
-				if line == "" {
-					continue
-				}
-				ev := parseClaudeLine(line)
-				ch <- ev
-				if ev.Done {
-					return
-				}
-			}
-			ch <- codeagent.StreamEvent{Type: "stop", Done: true}
-			logger.Debug("Stream completed via sandbox runtime")
-		}()
-		return &codeagent.StreamResult{Events: ch, SessionID: sessionID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil { proc, err := rt.Start(binPath, args); ... return &StreamResult{...} }
 
 	cmd := localCommand(workDir, binPath, args...)
 	stdout, err := cmd.StdoutPipe()

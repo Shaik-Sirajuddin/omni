@@ -75,9 +75,7 @@ func (a *geminiAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	if err := syncModelAndModeConfig(workDir, model, permMode); err != nil {
 		logger.Warn("Create: could not sync model/mode config", "err", err)
 	}
-	if err := a.syncSandboxConfig(); err != nil {
-		logger.Warn("Create: could not sync sandbox config", "err", err)
-	}
+	// sandbox disabled: a.syncSandboxConfig() is now a no-op
 
 	sessionPrompt := "reply-with-hi-" + id
 	if _, err := captureOutput(workDir, "gemini", "-p", sessionPrompt); err != nil {
@@ -264,10 +262,10 @@ func (a *geminiAgent) Exec(p codeagent.ExecuteParams) (*codeagent.ExecuteResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	sbx := a.sbx
+	// sbx := a.sbx // sandbox disabled
 	a.mu.RUnlock()
 
-	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, p.OutputFormat, p.MaxTurns, sbx)
+	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, p.OutputFormat, p.MaxTurns, nil)
 	logger.Debug("Exec", "workDir", workDir, "args", args)
 
 	cmd := exec.Command("gemini", args...)
@@ -294,10 +292,10 @@ func (a *geminiAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	sbx := a.sbx
+	// sbx := a.sbx // sandbox disabled
 	a.mu.RUnlock()
 
-	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, p.MaxTurns, sbx)
+	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, p.MaxTurns, nil)
 	logger.Debug("Stream", "workDir", workDir, "args", args)
 
 	cmd := exec.Command("gemini", args...)

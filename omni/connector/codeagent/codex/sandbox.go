@@ -10,15 +10,12 @@ import (
 )
 
 // sandboxFlagValue maps a *sandbox.Config to the --sandbox flag value codex accepts.
-// nil → "" (flag omitted); AgentPolicy AllPermissiveRead → "danger-full-access"; else "read-only".
-func sandboxFlagValue(s *sandbox.Config) string {
-	if s == nil {
-		return ""
-	}
-	if s.AgentPolicy != nil && s.AgentPolicy.FSPolicy == sandbox.FSPolicy(sandbox.AllPermissiveRead) {
-		return "danger-full-access"
-	}
-	return "read-only"
+// sandbox disabled — always returns "" so no sandbox flag is appended to CLI args.
+func sandboxFlagValue(_ *sandbox.Config) string {
+	// if s == nil { return "" }
+	// if s.AgentPolicy != nil && s.AgentPolicy.FSPolicy == sandbox.FSPolicy(sandbox.AllPermissiveRead) { return "danger-full-access" }
+	// return "read-only"
+	return "" // sandbox disabled
 }
 
 // ============================================================
@@ -26,29 +23,16 @@ func sandboxFlagValue(s *sandbox.Config) string {
 // ============================================================
 
 func (a *codexAgent) GetSessionSandbox(_ codeagent.GetSessionSandboxParams) (*codeagent.GetSessionSandboxResult, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	logger.Debug("GetSessionSandbox", "sandbox", a.sbx)
-	return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	// sandbox disabled
+	// a.mu.RLock(); defer a.mu.RUnlock()
+	// return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	return &codeagent.GetSessionSandboxResult{}, nil
 }
 
-func (a *codexAgent) UpdateSessionSandbox(p codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
-	a.mu.Lock()
-	a.sbx = p.Sandbox
-	if err := a.syncSandboxRuntimeLocked(); err != nil {
-		a.mu.Unlock()
-		logger.Error("UpdateSessionSandbox: runtime sync failed", "err", err)
-		return nil, fmt.Errorf("codex: update sandbox: sync runtime: %w", err)
-	}
-	a.mu.Unlock()
-
-	if err := a.syncSandboxConfig(); err != nil {
-		logger.Error("UpdateSessionSandbox: config sync failed", "err", err)
-		return nil, fmt.Errorf("codex: update sandbox: sync config: %w", err)
-	}
-
-	logger.Info("UpdateSessionSandbox: updated", "flag", sandboxFlagValue(p.Sandbox))
-	return &codeagent.UpdateSessionSandboxResult{Sandbox: p.Sandbox}, nil
+func (a *codexAgent) UpdateSessionSandbox(_ codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
+	// sandbox disabled
+	// a.mu.Lock(); a.sbx = p.Sandbox; syncSandboxRuntimeLocked; syncSandboxConfig
+	return &codeagent.UpdateSessionSandboxResult{}, nil
 }
 
 // syncModelConfig writes the chosen model into .codex/config.yaml so that
@@ -67,23 +51,8 @@ func syncModelConfig(workDir, model string) error {
 // into .codex/config.toml in the active working directory so that interactive
 // codex sessions launched later inherit the same sandbox policy.
 func (a *codexAgent) syncSandboxConfig() error {
-	a.mu.RLock()
-	workDir := a.workDir
-	sbx := a.sbx
-	a.mu.RUnlock()
-
-	flag := sandboxFlagValue(sbx)
-	err := writeCodexConfig(workDir, func(cfg map[string]string) {
-		if flag != "" {
-			cfg["sandbox_mode"] = flag
-		} else {
-			delete(cfg, "sandbox_mode")
-		}
-	})
-	if err != nil {
-		return err
-	}
-	logger.Debug("syncSandboxConfig: wrote", "workDir", workDir, "sandbox", flag)
+	// sandbox disabled — no-op
+	// flag := sandboxFlagValue(a.sbx); writeCodexConfig(a.workDir, ...)
 	return nil
 }
 

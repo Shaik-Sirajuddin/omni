@@ -17,34 +17,23 @@ import (
 // ============================================================
 
 func (a *claudeAgent) GetSessionSandbox(_ codeagent.GetSessionSandboxParams) (*codeagent.GetSessionSandboxResult, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	logger.Debug("GetSessionSandbox", "sandbox", a.sbx)
-	return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	// sandbox disabled
+	// a.mu.RLock()
+	// defer a.mu.RUnlock()
+	// logger.Debug("GetSessionSandbox", "sandbox", a.sbx)
+	// return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	return &codeagent.GetSessionSandboxResult{}, nil
 }
 
-func (a *claudeAgent) UpdateSessionSandbox(p codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
-	a.mu.Lock()
-	a.sbx = p.Sandbox
-	workDir := a.workDir
-	if err := a.syncSandboxRuntimeLocked(); err != nil {
-		a.mu.Unlock()
-		logger.Error("UpdateSessionSandbox: runtime sync failed", "err", err)
-		return nil, fmt.Errorf("claude: update sandbox: sync runtime: %w", err)
-	}
-	a.mu.Unlock()
-
-	if err := writeClaudeSettings(claudeWorkspaceSettingsPath(workDir), &codeagent.Settings{
-		Provider: Claude,
-		Config: codeagent.Config{
-			Sandbox: p.Sandbox,
-		},
-	}); err != nil {
-		logger.Error("UpdateSessionSandbox: settings sync failed", "err", err)
-		return nil, fmt.Errorf("claude: update sandbox: sync settings: %w", err)
-	}
-	logger.Info("UpdateSessionSandbox: updated")
-	return &codeagent.UpdateSessionSandboxResult{Sandbox: p.Sandbox}, nil
+func (a *claudeAgent) UpdateSessionSandbox(_ codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
+	// sandbox disabled
+	// a.mu.Lock()
+	// a.sbx = p.Sandbox
+	// workDir := a.workDir
+	// if err := a.syncSandboxRuntimeLocked(); err != nil { ... }
+	// a.mu.Unlock()
+	// writeClaudeSettings(...) — sandbox sync disabled
+	return &codeagent.UpdateSessionSandboxResult{}, nil
 }
 
 // ============================================================
