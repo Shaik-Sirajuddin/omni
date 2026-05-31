@@ -25,7 +25,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/gemini"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
-	"github.com/Shaik-Sirajuddin/memory/operator/impl/defaults"
+	// "github.com/Shaik-Sirajuddin/memory/operator/impl/defaults" // re-enable with sandbox wiring
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
@@ -195,20 +195,20 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			return fmt.Errorf("operator: switch provider: init code agent: %w", err)
 		}
 
-		var sbxRuntime *sandbox.SandboxRuntime
-		if o.provisioner != nil {
-			workDir := string(agent.WorkspaceDir)
-			cfg := defaults.SandboxConfig(params.Provider, workDir)
-			configDir := sandboxConfigDir(workDir, agent.Name)
-			rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
-				ID:        agent.ID,
-				ConfigDir: configDir,
-				Config:    cfg,
-			})
-			if sbxErr == nil {
-				sbxRuntime = &rt
-			}
-		}
+		// var sbxRuntime *sandbox.SandboxRuntime
+		// if o.provisioner != nil {
+		// 	workDir := string(agent.WorkspaceDir)
+		// 	cfg := defaults.SandboxConfig(params.Provider, workDir)
+		// 	configDir := sandboxConfigDir(workDir, agent.Name)
+		// 	rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
+		// 		ID:        agent.ID,
+		// 		ConfigDir: configDir,
+		// 		Config:    cfg,
+		// 	})
+		// 	if sbxErr == nil {
+		// 		sbxRuntime = &rt
+		// 	}
+		// }
 
 		requestedSessionID := strings.TrimSpace(params.SessionID)
 		newID := requestedSessionID
@@ -223,7 +223,6 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
-			RunTime:   sbxRuntime,
 		})
 		if err != nil {
 			return fmt.Errorf("operator: switch provider: create session for agent %q: %w", agent.ID, err)
@@ -693,30 +692,30 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
 	}
 
-	// Provision a sandbox runtime for this resume session.
-	var sbxRuntime *sandbox.SandboxRuntime
-	if o.provisioner != nil {
-		workDir := string(agent.WorkspaceDir)
-		cfg := defaults.SandboxConfig(provider, workDir)
-		configDir := sandboxConfigDir(workDir, agent.Name)
-		rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
-			ID:        agent.ID,
-			ConfigDir: configDir,
-			Config:    cfg,
-		})
-		if sbxErr != nil {
-			logger.Warn("ResumeAgent: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
-		} else {
-			sbxRuntime = &rt
-			logger.Debug("ResumeAgent: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
-		}
-	}
+	// Sandbox runtime provisioning disabled — uncomment to re-enable.
+	// var sbxRuntime *sandbox.SandboxRuntime
+	// if o.provisioner != nil {
+	// 	workDir := string(agent.WorkspaceDir)
+	// 	cfg := defaults.SandboxConfig(provider, workDir)
+	// 	configDir := sandboxConfigDir(workDir, agent.Name)
+	// 	rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
+	// 		ID:        agent.ID,
+	// 		ConfigDir: configDir,
+	// 		Config:    cfg,
+	// 	})
+	// 	if sbxErr != nil {
+	// 		logger.Warn("ResumeAgent: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
+	// 	} else {
+	// 		sbxRuntime = &rt
+	// 		logger.Debug("ResumeAgent: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
+	// 	}
+	// }
 
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 
 	envs := mcpSessionEnvs(agent)
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: sbxRuntime})
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
@@ -730,7 +729,6 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
-			RunTime:   sbxRuntime,
 		})
 		if createErr != nil {
 			logger.Error("ResumeAgent: fallback create failed", "agentID", agent.ID, "err", createErr)
@@ -749,7 +747,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				logger.Warn("ResumeAgent: fallback session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", storeErr)
 			}
 		}
-		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: sbxRuntime})
+		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
@@ -805,17 +803,17 @@ func New() (operator.Operator, error) {
 		logger.Error("New: session store initialisation failed", "err", err)
 		return nil, fmt.Errorf("operator: init session store: %w", err)
 	}
-	// Initialise a sandbox provisioner when a supported kind is available on the host.
+	// Sandbox provisioner disabled — uncomment to re-enable.
 	var provisioner sandbox.SandboxProvisioner
-	if kinds := sandbox.HostSupportedProvisioners(); len(kinds) > 0 {
-		p, perr := sandbox.NewProvisioner(kinds[0], nil, sandbox.ProvisionerOptions{})
-		if perr != nil {
-			logger.Warn("New: sandbox provisioner init failed", "kind", kinds[0], "err", perr)
-		} else {
-			provisioner = p
-			logger.Info("New: sandbox provisioner ready", "kind", kinds[0])
-		}
-	}
+	// if kinds := sandbox.HostSupportedProvisioners(); len(kinds) > 0 {
+	// 	p, perr := sandbox.NewProvisioner(kinds[0], nil, sandbox.ProvisionerOptions{})
+	// 	if perr != nil {
+	// 		logger.Warn("New: sandbox provisioner init failed", "kind", kinds[0], "err", perr)
+	// 	} else {
+	// 		provisioner = p
+	// 		logger.Info("New: sandbox provisioner ready", "kind", kinds[0])
+	// 	}
+	// }
 
 	ptySocketPath := ptydaemon.DefaultSocketPath()
 	ptyDaemon := ptyclients.NewUnixSocketClient(ptySocketPath)
@@ -1292,24 +1290,24 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		return fmt.Errorf("operator: init code agent: %w", err)
 	}
 
-	// Provision a sandbox runtime for this session when the provisioner is available.
-	var sbxRuntime *sandbox.SandboxRuntime
-	if o.provisioner != nil {
-		workDir := string(agent.WorkspaceDir)
-		cfg := defaults.SandboxConfig(provider, workDir)
-		configDir := sandboxConfigDir(workDir, agent.Name)
-		rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
-			ID:        agent.ID,
-			ConfigDir: configDir,
-			Config:    cfg,
-		})
-		if sbxErr != nil {
-			logger.Warn("startAgentSession: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
-		} else {
-			sbxRuntime = &rt
-			logger.Debug("startAgentSession: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
-		}
-	}
+	// Sandbox runtime provisioning disabled — uncomment to re-enable.
+	// var sbxRuntime *sandbox.SandboxRuntime
+	// if o.provisioner != nil {
+	// 	workDir := string(agent.WorkspaceDir)
+	// 	cfg := defaults.SandboxConfig(provider, workDir)
+	// 	configDir := sandboxConfigDir(workDir, agent.Name)
+	// 	rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
+	// 		ID:        agent.ID,
+	// 		ConfigDir: configDir,
+	// 		Config:    cfg,
+	// 	})
+	// 	if sbxErr != nil {
+	// 		logger.Warn("startAgentSession: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
+	// 	} else {
+	// 		sbxRuntime = &rt
+	// 		logger.Debug("startAgentSession: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
+	// 	}
+	// }
 
 	requestedSessionID = strings.TrimSpace(requestedSessionID)
 	createID := agent.ID
@@ -1324,7 +1322,6 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		WorkDir:   string(agent.WorkspaceDir),
 		SessionID: requestedSessionID,
 		Envs:      envs,
-		RunTime:   sbxRuntime,
 	})
 	if err != nil {
 		return fmt.Errorf("operator: create session for agent %q: %w", agent.ID, err)
