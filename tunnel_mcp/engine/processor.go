@@ -471,6 +471,8 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	agentState, _ = e.state.GetAgent(agentID)
 
 	// Determine warm-up vs active prompt via PromptSessionStore.
+	// msgs[0].ID is the promptID for the whole batch: a batch is a single delivery unit,
+	// so the first message ID is a stable key for the warm-up/active decision.
 	sessionID := agentState.CodeSession.SessionID
 	promptID := msgs[0].ID
 	isWarmUp := true
@@ -706,6 +708,7 @@ func senderNameFromRefs(refs string) string {
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(refs), &m); err != nil {
+		logger.Debug("senderNameFromRefs: JSON parse failed", "err", err)
 		return ""
 	}
 	var name string
@@ -868,6 +871,10 @@ var recallPrompt = map[message.RequestType]string{
 // OnStop is called by HookHandler on Stop / PostPrompt events.
 // Returns a non-nil recall prompt string when the mandatory tool was not invoked
 // and retries remain, so the handler can inject it as a systemMessage.
+//
+// The HTTP request context (r.Context()) is intentionally discarded in favour of the
+// engine lifetime context (e.ctx) so that DB writes are never cancelled by a short-lived
+// hook request timeout.
 func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) *string {
 	logger.Debug("hook: stop", "agent_id", agentID, "session_id", sessionID)
 
@@ -901,6 +908,9 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		return nil
 	}
 
+	// Capture the flag into a local before resetting it in agentState.
+	// The local is used for all checks below; agentState (with MandatoryToolInvoked=false)
+	// is persisted via SetAgent only after the check, so no concurrent OnStop can race.
 	mandatoryToolInvoked := agentState.CodeSession.MandatoryToolInvoked
 	agentState.CodeSession.MandatoryToolInvoked = false
 
@@ -912,6 +922,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	}
 
 	// execute/query: mandatory tool must be invoked; retry up to maxMandatoryToolRetries.
+	// msg.Retries is persisted in the DB (messages table), so the counter survives process restarts.
 	if len(msgs) > 0 && !mandatoryToolInvoked {
 		retries := msgs[0].Retries
 		if retries < maxMandatoryToolRetries {
