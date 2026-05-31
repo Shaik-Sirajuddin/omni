@@ -24,6 +24,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	"github.com/Shaik-Sirajuddin/memory/operator"
+	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
 	"github.com/Shaik-Sirajuddin/memory/operator/impl/defaults"
 	omnisandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
@@ -345,14 +346,18 @@ func (c *DefaultCli) newDoctorTerminalCheckCommand() *cobra.Command {
 		Use:   "check",
 		Short: "Check terminal multiplexer availability",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if c.operator == nil {
-				return errors.New("operator is required")
-			}
 			resolved := flags
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
 			}
-			result, err := c.operator.DoctorTerminals()
+			var result interface{}
+			var err error
+			if c.operator != nil {
+				result, err = c.operator.DoctorTerminals()
+			} else {
+				// standalone: no operator daemon required for terminal health checks
+				result, err = operatorimpl.DoctorTerminalsStandalone()
+			}
 			if err != nil {
 				return err
 			}
@@ -371,9 +376,6 @@ func (c *DefaultCli) newDoctorTerminalInstallCommand() *cobra.Command {
 		Use:   "install",
 		Short: "Install a terminal multiplexer by name",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if c.operator == nil {
-				return errors.New("operator is required")
-			}
 			resolved := flags
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
@@ -381,7 +383,11 @@ func (c *DefaultCli) newDoctorTerminalInstallCommand() *cobra.Command {
 			if resolved.Name == "" {
 				return errors.New("--name is required")
 			}
-			return c.operator.InstallTerminal(resolved.Name)
+			if c.operator != nil {
+				return c.operator.InstallTerminal(resolved.Name)
+			}
+			// standalone: no operator daemon required for terminal install
+			return operatorimpl.InstallTerminalStandalone(resolved.Name)
 		},
 	}
 
