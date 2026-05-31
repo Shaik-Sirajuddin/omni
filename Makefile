@@ -1,7 +1,7 @@
 COMPOSE_FILE := development/docker-compose.yaml
 VERSION      ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
 
-.PHONY: build install uninstall release snapshot docker-build docker-up docker-down docker-rebuild docker-relaunch docker-connect dev-preflight tools
+.PHONY: build install uninstall release snapshot docker-build docker-up docker-down docker-rebuild docker-relaunch docker-connect dev-preflight docker-fix-volumes tools
 
 # ── tools ────────────────────────────────────────────────────────────────────
 
@@ -43,11 +43,12 @@ dev-preflight:
 	        cp -r development/local.example development/local && echo "created development/local/ (no main worktree local found)"; \
 	    fi \
 	fi
-	@[ -d development/local/.codex ]               || mkdir -p development/local/.codex
-	@[ -d development/local/.gemini/antigravity-cli ] || mkdir -p development/local/.gemini/antigravity-cli
-	@[ -f development/local/.codex/auth.json ]     || echo '{}' > development/local/.codex/auth.json
-	@[ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token
-	@[ -f development/local/.env.docker ]                                        || { cp development/.env.docker.example development/local/.env.docker && echo "created development/local/.env.docker"; }
+	@[ -L development/local ] || { \
+	    mkdir -p development/local/.codex development/local/.gemini/antigravity-cli; \
+	    [ -f development/local/.codex/auth.json ] || echo '{}' > development/local/.codex/auth.json; \
+	    [ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token; \
+	}
+	@[ -f development/local/.env.docker ] || { cp development/.env.docker.example development/local/.env.docker && echo "created development/local/.env.docker"; }
 	@echo "==> preflight done — edit development/local/.env.docker before docker-up"
 
 # ── docker ────────────────────────────────────────────────────────────────────
@@ -55,7 +56,15 @@ dev-preflight:
 docker-build:
 	docker compose -f $(COMPOSE_FILE) build --build-arg VERSION=$(VERSION)
 
-docker-up: dev-preflight
+docker-fix-volumes:
+	@vol=$$(docker volume ls --format '{{.Name}}' | grep '_agent-codex$$' | head -1); \
+	 [ -z "$$vol" ] || docker run --rm -v "$$vol":/data alpine sh -c \
+	    '[ -d /data/auth.json ] && rm -rf /data/auth.json && echo "fixed $$vol: auth.json was a directory" || true' 2>/dev/null || true
+	@vol=$$(docker volume ls --format '{{.Name}}' | grep '_agent-gemini$$' | head -1); \
+	 [ -z "$$vol" ] || docker run --rm -v "$$vol":/data alpine sh -c \
+	    '[ -d /data/antigravity-cli/antigravity-oauth-token ] && rm -rf /data/antigravity-cli/antigravity-oauth-token && echo "fixed $$vol: antigravity-oauth-token was a directory" || true' 2>/dev/null || true
+
+docker-up: dev-preflight docker-fix-volumes
 	docker compose -f $(COMPOSE_FILE) up -d --wait
 	docker compose -f $(COMPOSE_FILE) exec ubuntu bash -l
 
