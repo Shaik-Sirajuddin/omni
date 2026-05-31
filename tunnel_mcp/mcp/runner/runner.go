@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	mcpapi "github.com/Shaik-Sirajuddin/memory/mcp/server/mcp"
 	"github.com/Shaik-Sirajuddin/memory/mcp/server/proxy"
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
 const (
@@ -319,15 +319,5 @@ func envDefault(key, fallback string) string {
 }
 
 func DefaultServiceUnixSocketPath() string {
-	return filepath.Join("/run", "omni-"+currentUsername(), "service.sock")
-}
-
-func currentUsername() string {
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return u.Username
-	}
-	if v := os.Getenv("USER"); v != "" {
-		return v
-	}
-	return "omni"
+	return sockpath.Service()
 }

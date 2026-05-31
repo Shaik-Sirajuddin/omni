@@ -35,32 +35,30 @@ uninstall:
 # ── dev preflight ─────────────────────────────────────────────────────────────
 
 dev-preflight:
-	@if [ -e development/local ] && [ "$$(stat -c '%U' development/local)" != "$$(id -un)" ]; then \
+	@if [ -e development/local ] && [ "$$(stat -c '%U' development/local 2>/dev/null || echo root)" != "$$(id -un)" ]; then \
 	    echo "==> development/local is root-owned (docker ran before preflight); fixing ownership..."; \
 	    sudo chown -R "$$(id -un)" development/local; \
 	fi
-	@if [ ! -e development/local ]; then \
+	@mkdir -p development/local/agents
+	@if [ ! -e development/local/shared ]; then \
 	    main=$$(git worktree list --porcelain | head -1 | awk '{print $$2}'); \
-	    if [ -d "$$main/development/local" ]; then \
-	        ln -s "$$main/development/local" development/local \
-	            || { echo "ERROR: cannot create symlink development/local -> $$main/development/local"; \
-	                 echo "       development/ may be root-owned; run: sudo chown -R $$(id -un) development/"; \
+	    if [ -d "$$main/development/local/shared" ]; then \
+	        ln -s "$$main/development/local/shared" development/local/shared \
+	            || { echo "ERROR: cannot create symlink development/local/shared -> $$main/development/local/shared"; \
+	                 echo "       development/local/ may be root-owned; run: sudo chown -R $$(id -un) development/local/"; \
 	                 exit 1; }; \
-	        echo "linked development/local -> $$main/development/local"; \
+	        echo "linked development/local/shared -> $$main/development/local/shared"; \
 	    else \
-	        cp -r development/local.example development/local \
-	            || { echo "ERROR: cannot copy local.example to development/local"; exit 1; }; \
-	        echo "created development/local/ (no main worktree local found)"; \
+	        mkdir -p development/local/shared \
+	            || { echo "ERROR: cannot mkdir development/local/shared"; exit 1; }; \
+	        echo "created development/local/shared/ (no main worktree shared found)"; \
 	    fi \
 	fi
-	@[ -L development/local ] || { \
-	    mkdir -p development/local/.codex development/local/.gemini/antigravity-cli \
-	        || { echo "ERROR: cannot mkdir inside development/local/ — run: sudo chown -R $$(id -un) development/local/"; exit 1; }; \
-	    [ -f development/local/.codex/auth.json ] || echo '{}' > development/local/.codex/auth.json; \
-	    [ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token; \
-	}
-	@[ -f development/local/.env.docker ] || { cp development/.env.docker.example development/local/.env.docker && echo "created development/local/.env.docker"; }
-	@echo "==> preflight done — edit development/local/.env.docker before docker-up"
+	@mkdir -p development/local/shared/.codex development/local/shared/.gemini/antigravity-cli 2>/dev/null || true
+	@[ -f development/local/shared/.codex/auth.json ]                                || echo '{}' > development/local/shared/.codex/auth.json
+	@[ -f development/local/shared/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/shared/.gemini/antigravity-cli/antigravity-oauth-token
+	@[ -f development/local/shared/.env.docker ] || { cp development/local.example/.env.docker.example development/local/shared/.env.docker && echo "created development/local/shared/.env.docker"; }
+	@echo "==> preflight done — edit development/local/shared/.env.docker before docker-up"
 
 # ── docker ────────────────────────────────────────────────────────────────────
 

@@ -198,6 +198,7 @@ type SetMCPToolPromptResult struct{}
 // ErrMCPNotSupported is returned by connectors that do not implement MCP.
 var ErrMCPNotSupported = errors.New("MCP not supported")
 
+
 // MCPManager manages MCP server registrations for a connector.
 // Implementations must guard config-file access with an in-memory mutex and
 // an mtime-based optimistic lock (read → check mtime → write atomically).
