@@ -157,6 +157,21 @@ func (a *codexPTYAdapter) Get(_ string, sessionID string) (*codeagent.PTYTermina
 	}, nil
 }
 
+// SessionPID returns the OS process ID of the PTY session's agent process.
+// Satisfies the ptyPIDGetter interface asserted by connector Resume paths so
+// that registerPTYSession can receive a non-empty ProcessID.
+func (a *codexPTYAdapter) SessionPID(_, sessionID string) (int, error) {
+	if a == nil || a.inner == nil {
+		return 0, nil
+	}
+	info, err := a.inner.Get(a.agentID, sessionID)
+	if err != nil || info == nil {
+		return 0, err
+	}
+	return info.PID, nil
+}
+
+
 // SwitchProvider implements [Operator].
 // SwitchProvider when switching between models , if a non fill session exists matching provider , agent , session is reused , override by CleanStart
 func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) error {
