@@ -280,7 +280,7 @@ EOF
   fi
 }
 # MCP seeding: entrypoint seeds provider config files at container-start (write-if-absent).
-# svc/cmd/mux.go also calls AddMCP via GlobalMCPRegistry at daemon startup.
+# svc/cmd/mux.go also calls AddMCP via GlobalMCPRegistry at daemon startup (supplementary/override).
 # Both paths are intentional; entrypoint ensures files exist before omni@root starts.
 seed_mcp_configs
 
