@@ -35,16 +35,27 @@ uninstall:
 # ── dev preflight ─────────────────────────────────────────────────────────────
 
 dev-preflight:
+	@if [ -e development/local ] && [ "$$(stat -c '%U' development/local)" != "$$(id -un)" ]; then \
+	    echo "==> development/local is root-owned (docker ran before preflight); fixing ownership..."; \
+	    sudo chown -R "$$(id -un)" development/local; \
+	fi
 	@if [ ! -e development/local ]; then \
 	    main=$$(git worktree list --porcelain | head -1 | awk '{print $$2}'); \
 	    if [ -d "$$main/development/local" ]; then \
-	        ln -s "$$main/development/local" development/local && echo "linked development/local -> $$main/development/local"; \
+	        ln -s "$$main/development/local" development/local \
+	            || { echo "ERROR: cannot create symlink development/local -> $$main/development/local"; \
+	                 echo "       development/ may be root-owned; run: sudo chown -R $$(id -un) development/"; \
+	                 exit 1; }; \
+	        echo "linked development/local -> $$main/development/local"; \
 	    else \
-	        cp -r development/local.example development/local && echo "created development/local/ (no main worktree local found)"; \
+	        cp -r development/local.example development/local \
+	            || { echo "ERROR: cannot copy local.example to development/local"; exit 1; }; \
+	        echo "created development/local/ (no main worktree local found)"; \
 	    fi \
 	fi
 	@[ -L development/local ] || { \
-	    mkdir -p development/local/.codex development/local/.gemini/antigravity-cli; \
+	    mkdir -p development/local/.codex development/local/.gemini/antigravity-cli \
+	        || { echo "ERROR: cannot mkdir inside development/local/ — run: sudo chown -R $$(id -un) development/local/"; exit 1; }; \
 	    [ -f development/local/.codex/auth.json ] || echo '{}' > development/local/.codex/auth.json; \
 	    [ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token; \
 	}
