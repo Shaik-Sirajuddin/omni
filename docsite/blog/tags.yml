@@ -1,0 +1,6 @@
+releases:
+  label: Releases
+  description: Updates and release notes for the Omni project.
+announcements:
+  label: Announcements
+  description: Major announcements and community news.

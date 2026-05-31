@@ -1,0 +1,9 @@
+# Omni Full Documentation
+
+(This file will contain the fully concatenated context of all primary documentation for Omni.)
+
+## Quickstart
+...
+
+## Advanced Setup
+...

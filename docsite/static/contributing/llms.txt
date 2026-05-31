@@ -1,0 +1,12 @@
+# Omni Contributing Documentation
+
+Welcome to the Omni contributor documentation. This file helps AI agents navigate the internal development resources.
+
+## Development Guides
+- [Commands](https://docs.domain.name/contributing/development/commands)
+- [Docker Dev](https://docs.domain.name/contributing/development/docker-dev)
+- [Hook Operator Test](https://docs.domain.name/contributing/development/hook-operator-test)
+
+---
+
+For more comprehensive documentation, see [llms-full.txt](https://docs.domain.name/contributing/llms-full.txt)
