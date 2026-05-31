@@ -182,6 +182,7 @@ func ProvisionDefaultOmniConfig() *OmniConfig {
 			AutoSync:         true,
 			RandomAgentNames: true,
 		},
+		Dev: &Developer{Debug: false},
 	}
 }
 
@@ -196,6 +197,10 @@ func ApplyOmniConfigDefaults(cfg *OmniConfig) *OmniConfig {
 			AutoSync:         true,
 			RandomAgentNames: true,
 		}
+	}
+
+	if cfg.Dev == nil {
+		cfg.Dev = &Developer{Debug: false}
 	}
 
 	return cfg
