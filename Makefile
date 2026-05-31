@@ -35,16 +35,26 @@ uninstall:
 # ── dev preflight ─────────────────────────────────────────────────────────────
 
 dev-preflight:
-	@[ -f development/.env.docker ] || { cp development/.env.docker.example development/.env.docker && echo "created development/.env.docker"; }
-	@[ -d development/local ] || { cp -r development/local.example development/local && echo "created development/local/"; }
-	@echo "==> preflight done — edit development/.env.docker and development/local/ before docker-up"
+	@if [ ! -e development/local ]; then \
+	    main=$$(git worktree list --porcelain | head -1 | awk '{print $$2}'); \
+	    if [ -d "$$main/development/local" ]; then \
+	        ln -s "$$main/development/local" development/local && echo "linked development/local -> $$main/development/local"; \
+	    else \
+	        cp -r development/local.example development/local && echo "created development/local/ (no main worktree local found)"; \
+	    fi \
+	fi
+	@mkdir -p development/local/.codex development/local/.gemini/antigravity-cli
+	@[ -f development/local/.codex/auth.json ]                                  || echo '{}' > development/local/.codex/auth.json
+	@[ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ]   || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token
+	@[ -f development/local/.env.docker ]                                        || { cp development/.env.docker.example development/local/.env.docker && echo "created development/local/.env.docker"; }
+	@echo "==> preflight done — edit development/local/.env.docker before docker-up"
 
 # ── docker ────────────────────────────────────────────────────────────────────
 
 docker-build:
 	docker compose -f $(COMPOSE_FILE) build --build-arg VERSION=$(VERSION)
 
-docker-up:
+docker-up: dev-preflight
 	docker compose -f $(COMPOSE_FILE) up -d --wait
 	docker compose -f $(COMPOSE_FILE) exec ubuntu bash -l
 
