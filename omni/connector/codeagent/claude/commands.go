@@ -122,6 +122,14 @@ type ptyMetaAttached interface {
 	MetaAttached(sessionID string) (int, error)
 }
 
+// ptyPIDGetter is optionally satisfied by PTY clients that can report the OS
+// process ID of a managed session. codexPTYAdapter implements this once the
+// daemon's "get" response includes the pid field (see collab instruction:
+// memory/team/entry/instructions/ptydaemon/pty_session_pid.md).
+type ptyPIDGetter interface {
+	SessionPID(agentID, sessionID string) (int, error)
+}
+
 // Resume launches an interactive claude session via `claude -r <id>`.
 func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSessionResult, error) {
 	ctx := p.Context
@@ -188,17 +196,30 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 			}
 			started = true
 		}
+
+		// Capture the session process ID so the operator's registerPTYSession can
+		// call adopt, establishing the agentID→sessionID→PID mapping in the daemon.
+		// Requires codexPTYAdapter to implement ptyPIDGetter — see collab instruction:
+		// memory/team/entry/instructions/ptydaemon/pty_session_pid.md
+		var processID string
+		if pg, ok := client.(ptyPIDGetter); ok {
+			if pid, err := pg.SessionPID("", resumeID); err == nil && pid > 0 {
+				processID = fmt.Sprintf("%d", pid)
+				logger.Debug("Resume: captured session PID", "sessionID", resumeID, "pid", processID)
+			}
+		}
+
 		a.mu.Lock()
 		a.sessionID = resumeID
 		a.mu.Unlock()
 		if started {
-			logger.Info("Resume: PTY daemon session started", "sessionID", resumeID)
+			logger.Info("Resume: PTY daemon session started", "sessionID", resumeID, "pid", processID)
 		} else {
 			logger.Info("Resume: reusing active PTY daemon session", "sessionID", resumeID)
 		}
 		if p.Detached {
 			logger.Info("Resume: leaving PTY daemon session detached", "sessionID", resumeID)
-			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID}, nil
+			return &codeagent.ResumeSessionResult{ProcessID: processID, SessionID: resumeID}, nil
 		}
 		logger.Info("Resume: attaching PTY daemon session", "sessionID", resumeID)
 		done := make(chan error, 1)
@@ -212,7 +233,7 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 			logger.Info("Resume: PTY daemon session detached", "sessionID", resumeID)
 			done <- nil
 		}()
-		return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID, Done: done}, nil
+		return &codeagent.ResumeSessionResult{ProcessID: processID, SessionID: resumeID, Done: done}, nil
 	}
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
