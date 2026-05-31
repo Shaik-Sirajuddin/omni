@@ -28,8 +28,13 @@ services:
       - agent-gemini:/root/.gemini
       - ./local/.gemini/antigravity-cli/antigravity-oauth-token:/root/.gemini/antigravity-cli/antigravity-oauth-token
       - agent-agy:/root/.agy
+    environment:
+      # self-MCP wiring: codex reads these at request time for tunnel-mcp HTTP headers
+      AXO_LINK_MCP_SENDER_TYPE: ${AXO_LINK_MCP_SENDER_TYPE:-omni_agent}
+      AXO_LINK_MCP_SENDER_ID: ${AXO_LINK_MCP_SENDER_ID:-}
+      AXO_LINK_MCP_AGENT_WORKSPACE: ${AXO_LINK_MCP_AGENT_WORKSPACE:-/build}
     env_file:
-      - path: ./.env.docker
+      - path: ./local/.env.docker
         required: false
     stop_signal: SIGRTMIN+3          # clean systemd shutdown
     stop_grace_period: 15s
