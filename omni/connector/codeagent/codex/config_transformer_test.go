@@ -302,3 +302,78 @@ func TestConfigTransformer_ContextG_ConcurrentWrites(t *testing.T) {
 			"concurrent write %d: entry %q must be in final config", i, name)
 	}
 }
+
+// ─── S2 — exhaustive key preservation (strict e2e) ───────────────────────────
+//
+// If CODEX_E2E_S2_CONFIG_PATH is set, the test uses that path so the calling
+// shell test can grep the resulting file directly after this test exits.
+// Otherwise a t.TempDir() path is used (safe for isolated unit-test runs).
+
+func TestConfigTransformer_S2_ExhaustiveStrict(t *testing.T) {
+	path := os.Getenv("CODEX_E2E_S2_CONFIG_PATH")
+	if path == "" {
+		path = filepath.Join(t.TempDir(), ".codex", "config.toml")
+	} else {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	}
+	t.Logf("S2 config path: %s", path)
+
+	// Seed: known sections + completely unknown top-level key + unknown table.
+	seedTOML(t, path, map[string]interface{}{
+		"model":           "claude-3-5-sonnet",
+		"custom_user_key": "sentinel",
+		"unknown_section": map[string]interface{}{
+			"foo": "bar",
+		},
+		"mcp_servers": map[string]interface{}{
+			"existing-mcp": map[string]interface{}{
+				"command": "/usr/bin/existing-mcp",
+				"enabled": true,
+			},
+		},
+		"hooks": map[string]interface{}{
+			"PreToolUse": []interface{}{
+				map[string]interface{}{
+					"hooks": []interface{}{
+						map[string]interface{}{"type": "command", "command": "echo pre-tool-use"},
+					},
+				},
+			},
+		},
+	})
+
+	// ── MCP write ────────────────────────────────────────────────────────────
+	require.NoError(t, addTestMCP(path, "omni-mcp", "omni-server"))
+
+	raw1 := readRawTOML(t, path)
+	assert.Equal(t, "claude-3-5-sonnet", raw1["model"], "S2: model preserved after MCP write")
+	assert.Equal(t, "sentinel", raw1["custom_user_key"], "S2: custom_user_key=sentinel after MCP write")
+	unk1, _ := raw1["unknown_section"].(map[string]interface{})
+	require.NotNil(t, unk1, "S2: [unknown_section] survives MCP write")
+	assert.Equal(t, "bar", unk1["foo"], "S2: unknown_section.foo=bar after MCP write")
+	srvs1, _ := raw1["mcp_servers"].(map[string]interface{})
+	assert.Contains(t, srvs1, "existing-mcp", "S2: existing-mcp survives MCP write")
+	assert.Contains(t, srvs1, "omni-mcp", "S2: omni-mcp added by MCP write")
+	_, h1ok := raw1["hooks"]
+	assert.True(t, h1ok, "S2: hooks section survives MCP write")
+
+	// ── Hook write ───────────────────────────────────────────────────────────
+	require.NoError(t, writeHooksConfig(path, map[string][]codexHookMatcher{
+		"UserPromptSubmit": {{
+			Hooks: []codexHookDef{{Type: "command", Command: "omni hook --event UserPromptSubmit"}},
+		}},
+	}))
+
+	raw2 := readRawTOML(t, path)
+	assert.Equal(t, "claude-3-5-sonnet", raw2["model"], "S2: model preserved after hook write")
+	assert.Equal(t, "sentinel", raw2["custom_user_key"], "S2: custom_user_key=sentinel after hook write")
+	unk2, _ := raw2["unknown_section"].(map[string]interface{})
+	require.NotNil(t, unk2, "S2: [unknown_section] survives hook write")
+	assert.Equal(t, "bar", unk2["foo"], "S2: unknown_section.foo=bar after hook write")
+	srvs2, _ := raw2["mcp_servers"].(map[string]interface{})
+	assert.Contains(t, srvs2, "existing-mcp", "S2: existing-mcp survives hook write")
+	assert.Contains(t, srvs2, "omni-mcp", "S2: omni-mcp survives hook write")
+	hooksMap, _ := raw2["hooks"].(map[string]interface{})
+	require.NotNil(t, hooksMap, "S2: hooks section present after hook write")
+	assert.Contains(t, hooksMap, "UserPromptSubmit", "S2: UserPromptSubmit hook written")
+}
