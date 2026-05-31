@@ -55,9 +55,7 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	if p.Model != "" {
 		a.model = p.Model
 	}
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
 	workDir := a.workDir
 	model := a.model
 	env := mergeEnv(os.Environ(), p.Envs)
@@ -264,13 +262,12 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 	a.mu.RLock()
 	binPath := a.binPath
 	workDir := a.workDir
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	ptyClient := a.ptyClient
 	currentSessionID := a.sessionID
 	a.mu.RUnlock()
-	if p.RunTime != nil {
-		rt = *p.RunTime
-	}
+	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
+	// if p.RunTime != nil { rt = *p.RunTime } // sandbox disabled
 	env := mergeEnv(os.Environ(), p.Envs)
 
 	resolvedSessionID := strings.TrimSpace(p.ID)
@@ -296,14 +293,12 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 
 	logger.Info("Resume: running command", "bin", binPath, "args", args)
 
-	if rt != nil {
-		if err := rt.Command(binPath, args); err != nil {
-			return nil, fmt.Errorf("codex: resume: sandbox command: %w", err)
-		}
-		pid := runtimePID(rt)
-		logger.Info("Resume: interactive sandbox session completed", "pid", pid, "sessionID", resolvedSessionID, "fork", p.ForkSession)
-		return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resolvedSessionID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil {
+	//     if err := rt.Command(binPath, args); err != nil { return nil, fmt.Errorf(...) }
+	//     return &codeagent.ResumeSessionResult{ProcessID: runtimePID(rt), SessionID: resolvedSessionID}, nil
+	// }
+	_ = rt
 
 	if ptyClient != nil {
 		var (
@@ -354,7 +349,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		a.mu.Unlock()
 		if p.Detached {
 			logger.Info("Resume: leaving PTY daemon session detached", "sessionID", resolvedSessionID)
-			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID}, nil
+			return &codeagent.ResumeSessionResult{ProcessID: resolvedSessionID, SessionID: resolvedSessionID}, nil
 		}
 		done := make(chan error, 1)
 		go func() {
@@ -385,7 +380,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 			logger.Info("Resume: attached to active PTY daemon session", "sessionID", resolvedSessionID)
 		}
 		logger.Info("Resume: attaching PTY daemon session", "sessionID", resolvedSessionID)
-		return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID, Done: done}, nil
+		return &codeagent.ResumeSessionResult{ProcessID: resolvedSessionID, SessionID: resolvedSessionID, Done: done}, nil
 	}
 
 	pid, _ := a.attachAndRun(ctx, binPath, workDir, args, env)
@@ -609,14 +604,14 @@ func (a *codexAgent) Exec(p codeagent.ExecuteParams) (*codeagent.ExecuteResult, 
 	binPath := a.binPath
 	workDir := a.workDir
 	model := a.model
-	sbx := a.sbx
-	rt := a.sbxRuntime
+	// sbx := a.sbx   // sandbox disabled
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
-	args := buildExecArgs(p.Prompt, model, p.OutputFormat, p.MaxTurns, sbx)
+	args := buildExecArgs(p.Prompt, model, p.OutputFormat, p.MaxTurns, nil)
 	logger.Debug("Exec", "workDir", workDir, "args", args)
 
-	out, err := execOutput(workDir, rt, binPath, args...)
+	out, err := execOutput(workDir, nil, binPath, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -640,45 +635,16 @@ func (a *codexAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult, 
 	binPath := a.binPath
 	workDir := a.workDir
 	model := a.model
-	sbx := a.sbx
-	rt := a.sbxRuntime
+	// sbx := a.sbx   // sandbox disabled
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
-	args := buildStreamArgs(p.Prompt, model, p.MaxTurns, sbx)
+	args := buildStreamArgs(p.Prompt, model, p.MaxTurns, nil)
 	logger.Debug("Stream", "workDir", workDir, "args", args)
 
 	ch := make(chan codeagent.StreamEvent, 32)
-	if rt != nil {
-		proc, err := rt.Start(binPath, args)
-		if err != nil {
-			return nil, fmt.Errorf("codex stream: sandbox start: %w", err)
-		}
-		go func() {
-			defer close(ch)
-			res, waitErr := proc.Wait()
-			if waitErr != nil {
-				msg := runtimeErrorf("codex stream", res, waitErr).Error()
-				logger.Error("Stream: sandbox process exited with error", "err", msg)
-				ch <- codeagent.StreamEvent{Type: "stop", Done: true, Content: msg}
-				return
-			}
-			scanner := bufio.NewScanner(strings.NewReader(res.Stdout))
-			for scanner.Scan() {
-				line := scanner.Text()
-				if line == "" {
-					continue
-				}
-				ev := parseCodexLine(line)
-				ch <- ev
-				if ev.Done {
-					return
-				}
-			}
-			ch <- codeagent.StreamEvent{Type: "stop", Done: true}
-			logger.Debug("Stream completed via sandbox runtime")
-		}()
-		return &codeagent.StreamResult{Events: ch}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil { proc, err := rt.Start(binPath, args); ... return &StreamResult{...} }
 
 	cmd := exec.Command(binPath, args...)
 	cmd.Dir = workDir

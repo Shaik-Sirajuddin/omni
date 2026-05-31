@@ -107,6 +107,7 @@ func New(workDir, model string, c codeagent.PTYClient) (codeagent.CodeAgent, err
 		ptyClient:    c,
 		info:         codeagent.CodeAgentInfo{Provider: Agy, Name: "agy", Version: ver},
 	}
+	codeagent.GlobalMCPRegistry.Register(Agy, a)
 	return a, nil
 }
 

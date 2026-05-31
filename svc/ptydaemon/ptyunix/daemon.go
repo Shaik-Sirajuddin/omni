@@ -187,7 +187,9 @@ func (d *Daemon) handleStart(conn *net.UnixConn, req Request) {
 	}()
 
 	ptylog.Info("in-memory session started", "session_id", req.SessionID, "pid", cmd.Process.Pid)
-	respond(conn, Response{OK: true, SessionID: req.SessionID})
+	respond(conn, Response{OK: true, SessionID: req.SessionID, Sessions: []SessionEntry{
+		{SessionID: req.SessionID, Status: "active", PID: cmd.Process.Pid},
+	}})
 }
 
 // handleCreate starts a new store-backed PTY session.
@@ -644,6 +646,7 @@ func recordToEntry(r *internal.PTYSessionRecord) SessionEntry {
 		AgentID:   r.AgentID,
 		SessionID: r.SessionID,
 		Status:    string(r.Status),
+		PID:       r.PID,
 	}
 	s := r.StartedAt.UTC().Format(time.RFC3339)
 	e.StartedAt = &s

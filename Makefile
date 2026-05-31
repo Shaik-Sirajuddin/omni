@@ -35,13 +35,23 @@ uninstall:
 # ── dev preflight ─────────────────────────────────────────────────────────────
 
 dev-preflight:
+	@if [ -e development/local ] && [ "$$(stat -c '%U' development/local 2>/dev/null || echo root)" != "$$(id -un)" ]; then \
+	    echo "==> development/local is root-owned (docker ran before preflight); fixing ownership..."; \
+	    sudo chown -R "$$(id -un)" development/local; \
+	fi
 	@mkdir -p development/local/agents
 	@if [ ! -e development/local/shared ]; then \
 	    main=$$(git worktree list --porcelain | head -1 | awk '{print $$2}'); \
 	    if [ -d "$$main/development/local/shared" ]; then \
-	        ln -s "$$main/development/local/shared" development/local/shared && echo "linked development/local/shared -> $$main/development/local/shared"; \
+	        ln -s "$$main/development/local/shared" development/local/shared \
+	            || { echo "ERROR: cannot create symlink development/local/shared -> $$main/development/local/shared"; \
+	                 echo "       development/local/ may be root-owned; run: sudo chown -R $$(id -un) development/local/"; \
+	                 exit 1; }; \
+	        echo "linked development/local/shared -> $$main/development/local/shared"; \
 	    else \
-	        mkdir -p development/local/shared && echo "created development/local/shared/ (no main worktree shared found)"; \
+	        mkdir -p development/local/shared \
+	            || { echo "ERROR: cannot mkdir development/local/shared"; exit 1; }; \
+	        echo "created development/local/shared/ (no main worktree shared found)"; \
 	    fi \
 	fi
 	@mkdir -p development/local/shared/.codex development/local/shared/.gemini/antigravity-cli 2>/dev/null || true

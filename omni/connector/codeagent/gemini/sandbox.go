@@ -10,32 +10,24 @@ import (
 )
 
 // sandboxFlagValue maps sandbox policy to Gemini settings value.
-func sandboxFlagValue(s *sandbox.Config) string {
-	if s == nil {
-		return ""
-	}
-	if s.AgentPolicy != nil && sandbox.AgentFSPolicy(s.AgentPolicy.FSPolicy) == sandbox.Inherit {
-		return "danger-full-access"
-	}
-	return "read-only"
+// sandbox disabled — always returns "" so no sandbox flag is applied.
+func sandboxFlagValue(_ *sandbox.Config) string {
+	// if s == nil { return "" }
+	// if s.AgentPolicy != nil && sandbox.AgentFSPolicy(s.AgentPolicy.FSPolicy) == sandbox.Inherit { return "danger-full-access" }
+	// return "read-only"
+	return "" // sandbox disabled
 }
 
 func (a *geminiAgent) GetSessionSandbox(_ codeagent.GetSessionSandboxParams) (*codeagent.GetSessionSandboxResult, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	// sandbox disabled
+	// return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	return &codeagent.GetSessionSandboxResult{}, nil
 }
 
-func (a *geminiAgent) UpdateSessionSandbox(p codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
-	a.mu.Lock()
-	a.sbx = p.Sandbox
-	a.mu.Unlock()
-
-	if err := a.syncSandboxConfig(); err != nil {
-		return nil, fmt.Errorf("gemini: update sandbox: sync config: %w", err)
-	}
-
-	return &codeagent.UpdateSessionSandboxResult{Sandbox: p.Sandbox}, nil
+func (a *geminiAgent) UpdateSessionSandbox(_ codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
+	// sandbox disabled
+	// a.mu.Lock(); a.sbx = p.Sandbox; a.mu.Unlock(); syncSandboxConfig
+	return &codeagent.UpdateSessionSandboxResult{}, nil
 }
 
 func syncModelAndModeConfig(workDir, model string, mode codeagent.PermissionMode) error {
@@ -50,17 +42,9 @@ func syncModelAndModeConfig(workDir, model string, mode codeagent.PermissionMode
 }
 
 func (a *geminiAgent) syncSandboxConfig() error {
-	a.mu.RLock()
-	workDir := a.workDir
-	sbx := a.sbx
-	a.mu.RUnlock()
-
-	flag := sandboxFlagValue(sbx)
-	return writeWorkspaceSettings(workDir, func(s *SettingsSchemaJson) {
-		if flag != "" {
-			s.Tools.Sandbox = flag
-		}
-	})
+	// sandbox disabled — no-op
+	// flag := sandboxFlagValue(a.sbx); writeWorkspaceSettings(a.workDir, func(s) { s.Tools.Sandbox = flag })
+	return nil
 }
 
 func writeWorkspaceSettings(workDir string, mutateFn func(*SettingsSchemaJson)) error {
