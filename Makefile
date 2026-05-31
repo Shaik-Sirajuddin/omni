@@ -43,10 +43,9 @@ dev-preflight:
 	        cp -r development/local.example development/local && echo "created development/local/ (no main worktree local found)"; \
 	    fi \
 	fi
-	@[ -d development/local/.codex/auth.json ]                                && rm -rf development/local/.codex/auth.json                                || true
-	@[ -d development/local/.gemini/antigravity-cli/antigravity-oauth-token ] && rm -rf development/local/.gemini/antigravity-cli/antigravity-oauth-token || true
-	@mkdir -p development/local/.codex development/local/.gemini/antigravity-cli
-	@[ -f development/local/.codex/auth.json ]                                || echo '{}' > development/local/.codex/auth.json
+	@[ -d development/local/.codex ]               || mkdir -p development/local/.codex
+	@[ -d development/local/.gemini/antigravity-cli ] || mkdir -p development/local/.gemini/antigravity-cli
+	@[ -f development/local/.codex/auth.json ]     || echo '{}' > development/local/.codex/auth.json
 	@[ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token
 	@[ -f development/local/.env.docker ]                                        || { cp development/.env.docker.example development/local/.env.docker && echo "created development/local/.env.docker"; }
 	@echo "==> preflight done — edit development/local/.env.docker before docker-up"
