@@ -27,21 +27,29 @@ RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:$PATH"
 
-# Node + pnpm
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g pnpm
-
 # Agent CLIs — pinned versions, baked into image (update ARGs to bump)
 ARG CLAUDE_CODE_VERSION=2.1.145
 ARG CODEX_VERSION=0.132.0
 ARG GEMINI_CLI_VERSION=0.42.0
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && npm install -g @openai/codex@${CODEX_VERSION} \
-    && npm install -g @google/gemini-cli@${GEMINI_CLI_VERSION} \
-    && ln -sf /usr/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-linux-x64/claude /usr/bin/claude
+ARG NODE_VERSION=20.18.0
+
+# Claude Code — official binary installer; npm path deprecated by Anthropic
+RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
+    && CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION} bash /tmp/install-claude.sh \
+    && rm /tmp/install-claude.sh
+
+# Codex — Rust binary from GitHub releases; no Node required
+RUN curl -fL "https://github.com/openai/codex/releases/download/v${CODEX_VERSION}/codex-x86_64-unknown-linux-musl.tar.gz" \
+    | tar -xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/codex
+
+# Node.js — minimal official tarball, needed only for Gemini CLI (no nodesource, no pnpm)
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    | tar -xJ --strip-components=1 -C /usr/local
+
+# Gemini CLI — npm-only distribution; no standalone binary available upstream
+RUN npm install -g @google/gemini-cli@${GEMINI_CLI_VERSION} \
+    && npm cache clean --force
 
 # Agy (Antigravity CLI by Google) — installs to ~/.local/bin/agy
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
