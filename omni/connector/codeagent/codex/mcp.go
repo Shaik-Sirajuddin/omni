@@ -14,7 +14,7 @@ import (
 )
 
 // mcpMu guards all read-modify-write operations on config.toml for MCP entries.
-var mcpMu sync.Mutex
+var mcpMu sync.RWMutex
 
 // configPathForMCP returns the config.toml path scoped by global vs workspace.
 func (a *codexAgent) configPathForMCP(global bool) (string, error) {
@@ -201,9 +201,9 @@ func (a *codexAgent) ListMCP(p codeagent.ListMCPParams) (*codeagent.ListMCPResul
 		return nil, err
 	}
 
-	mcpMu.Lock()
+	mcpMu.RLock()
 	raw, err := readConfigTOML(path)
-	mcpMu.Unlock()
+	mcpMu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
