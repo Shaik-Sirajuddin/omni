@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
@@ -97,17 +98,25 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 	if m.AxolinkMCP.Enabled {
 		cfg := runner.DefaultConfig()
 		mcpEndpoint := "http://127.0.0.1" + cfg.Addr + cfg.HTTPPath
+		headers := map[string]string{}
+		if cfg.AuthToken != "" {
+			headers["Authorization"] = "Bearer " + cfg.AuthToken
+		}
 		for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
 			if _, err := mgr.AddMCP(codeagent.AddMCPParams{
 				Server: codeagent.MCPServer{
 					Name:      "tunnel-mcp",
 					Transport: codeagent.MCPTransportHTTP,
 					URL:       mcpEndpoint,
-					Headers:   map[string]string{"Authorization": "Bearer " + cfg.AuthToken},
+					Headers:   headers,
 				},
 				Global: true,
 			}); err != nil {
-				log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
+				if strings.Contains(err.Error(), "not supported") {
+					log.Warn("axolink-mcp: connector does not support MCP", "provider", provider)
+				} else {
+					log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
+				}
 			}
 		}
 		wg.Add(1)
