@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
+	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
 	agysettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/settings"
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
@@ -94,10 +95,25 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	if m.AxolinkMCP.Enabled {
+		cfg := runner.DefaultConfig()
+		mcpEndpoint := "http://127.0.0.1" + cfg.Addr + cfg.HTTPPath
+		for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
+			if _, err := mgr.AddMCP(codeagent.AddMCPParams{
+				Server: codeagent.MCPServer{
+					Name:      "tunnel-mcp",
+					Transport: codeagent.MCPTransportHTTP,
+					URL:       mcpEndpoint,
+					Headers:   map[string]string{"Authorization": "Bearer " + cfg.AuthToken},
+				},
+				Global: true,
+			}); err != nil {
+				log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
+			}
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runner.Run(ctx, runner.DefaultConfig()); err != nil {
+			if err := runner.Run(ctx, cfg); err != nil {
 				ch <- result{fmt.Errorf("axolink-mcp: %w", err)}
 			}
 		}()
