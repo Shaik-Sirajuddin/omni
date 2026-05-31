@@ -354,7 +354,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		a.mu.Unlock()
 		if p.Detached {
 			logger.Info("Resume: leaving PTY daemon session detached", "sessionID", resolvedSessionID)
-			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID}, nil
+			return &codeagent.ResumeSessionResult{ProcessID: resolvedSessionID, SessionID: resolvedSessionID}, nil
 		}
 		done := make(chan error, 1)
 		go func() {
@@ -385,7 +385,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 			logger.Info("Resume: attached to active PTY daemon session", "sessionID", resolvedSessionID)
 		}
 		logger.Info("Resume: attaching PTY daemon session", "sessionID", resolvedSessionID)
-		return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID, Done: done}, nil
+		return &codeagent.ResumeSessionResult{ProcessID: resolvedSessionID, SessionID: resolvedSessionID, Done: done}, nil
 	}
 
 	pid, _ := a.attachAndRun(ctx, binPath, workDir, args, env)
