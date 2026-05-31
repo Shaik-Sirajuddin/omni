@@ -26,6 +26,7 @@ type CLITeamGetFlags struct {
 type CLIConfigSetFlags struct {
 	Memory   string `koanf:"memory" json:"memory"`
 	AutoSync string `koanf:"autosync" json:"autosync"`
+	Theme    string `koanf:"theme" json:"theme"`
 }
 
 // CLIAgentListFlags is a koanf-compatible flag schema for `agent list`.

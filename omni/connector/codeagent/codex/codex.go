@@ -132,6 +132,7 @@ func New(workDir, model string, c codeagent.PTYClient, opts ...Option) (codeagen
 	for _, opt := range opts {
 		opt(a)
 	}
+	codeagent.GlobalMCPRegistry.Register(Codex, a)
 	return a, nil
 }
 
