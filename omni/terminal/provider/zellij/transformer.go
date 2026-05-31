@@ -51,10 +51,86 @@ func (t *ZellijTransformer) ToNativeWithFocus(layout terminal.Layout, focusedTab
 	return []byte(b.String()), nil
 }
 
+// FromNative parses the KDL bytes emitted by ToNativeWithFocus back into a Layout.
+// It handles the exact KDL structure this transformer produces; it is not a general KDL parser.
 func (t *ZellijTransformer) FromNative(data []byte) (terminal.Layout, error) {
-	// Minimal round-trip parser — production use should use a proper KDL parser.
-	// Returns an empty layout; full parsing is out of scope for v1.0.3.
-	return terminal.Layout{}, nil
+	lines := strings.Split(string(data), "\n")
+	var layout terminal.Layout
+
+	const (
+		scopeLayout = "layout"
+		scopeTab    = "tab"
+		scopePane   = "pane"
+	)
+
+	var scopeStack []string
+	tabIdx := -1
+	paneIdx := -1
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+
+		switch {
+		case line == "layout {":
+			scopeStack = append(scopeStack, scopeLayout)
+
+		case strings.HasPrefix(line, "tab"):
+			tab := terminal.TabLayout{Name: extractQuoted(line, "name=")}
+			layout.Tabs = append(layout.Tabs, tab)
+			tabIdx = len(layout.Tabs) - 1
+			paneIdx = -1
+			if strings.HasSuffix(line, "{") {
+				scopeStack = append(scopeStack, scopeTab)
+			}
+
+		case strings.HasPrefix(line, "pane") && tabIdx >= 0:
+			pane := terminal.PaneLayout{
+				Command:        extractQuoted(line, "command="),
+				StartSuspended: strings.Contains(line, "start_suspended=true"),
+			}
+			layout.Tabs[tabIdx].Panes = append(layout.Tabs[tabIdx].Panes, pane)
+			paneIdx = len(layout.Tabs[tabIdx].Panes) - 1
+			if strings.HasSuffix(line, "{") {
+				scopeStack = append(scopeStack, scopePane)
+			}
+
+		case strings.HasPrefix(line, "cwd ") && paneIdx >= 0 && tabIdx >= 0:
+			layout.Tabs[tabIdx].Panes[paneIdx].Dir = extractQuoted(line, "cwd ")
+
+		case line == "}":
+			if len(scopeStack) > 0 {
+				popped := scopeStack[len(scopeStack)-1]
+				scopeStack = scopeStack[:len(scopeStack)-1]
+				switch popped {
+				case scopePane:
+					paneIdx = -1
+				case scopeTab:
+					tabIdx = -1
+					paneIdx = -1
+				}
+			}
+		}
+	}
+
+	return layout, nil
+}
+
+// extractQuoted extracts the double-quoted value immediately following prefix in line.
+// E.g. extractQuoted(`tab name="main" focus=true`, "name=") → "main".
+func extractQuoted(line, prefix string) string {
+	idx := strings.Index(line, prefix+`"`)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(prefix) + 1
+	end := strings.Index(line[start:], `"`)
+	if end == -1 {
+		return ""
+	}
+	return line[start : start+end]
 }
 
 func renderPane(command, dir string, suspended bool, indent int) string {

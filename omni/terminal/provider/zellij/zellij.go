@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/Shaik-Sirajuddin/memory/terminal"
@@ -35,17 +36,43 @@ func (z *ZellijTerminal) CheckInstallation() error {
 }
 
 func (z *ZellijTerminal) Install() error {
+	asset, err := zellijAsset()
+	if err != nil {
+		return err
+	}
 	installDir := os.ExpandEnv("$HOME/.local/bin")
 	if err := os.MkdirAll(installDir, 0755); err != nil {
 		return fmt.Errorf("zellij install: mkdir %s: %w", installDir, err)
 	}
-	// Use the official installer script
+	url := "https://github.com/zellij-org/zellij/releases/latest/download/" + asset
 	cmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz | tar -xz -C %s`, installDir),
+		fmt.Sprintf(`curl -L %s | tar -xz -C %s`, url, installDir),
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func zellijAsset() (string, error) {
+	var osTag string
+	switch runtime.GOOS {
+	case "linux":
+		osTag = "unknown-linux-musl"
+	case "darwin":
+		osTag = "apple-darwin"
+	default:
+		return "", fmt.Errorf("zellij install: unsupported OS %q — install manually from https://github.com/zellij-org/zellij/releases", runtime.GOOS)
+	}
+	var archTag string
+	switch runtime.GOARCH {
+	case "amd64":
+		archTag = "x86_64"
+	case "arm64":
+		archTag = "aarch64"
+	default:
+		return "", fmt.Errorf("zellij install: unsupported arch %q — install manually from https://github.com/zellij-org/zellij/releases", runtime.GOARCH)
+	}
+	return fmt.Sprintf("zellij-%s-%s.tar.gz", archTag, osTag), nil
 }
 
 func (z *ZellijTerminal) Templates() []terminal.Template {
