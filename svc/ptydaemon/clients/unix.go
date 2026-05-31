@@ -472,6 +472,7 @@ const redrawSettle = 40 * time.Millisecond
 func forceRedraw(ptmx *os.File) {
 	size, err := pty.GetsizeFull(os.Stdin)
 	if err != nil {
+		ptylog.Warn("redraw-debug: GetsizeFull failed (not a tty?)", "err", err)
 		return
 	}
 	nudge := *size
@@ -480,7 +481,9 @@ func forceRedraw(ptmx *os.File) {
 	} else {
 		nudge.Rows++
 	}
-	_ = pty.Setsize(ptmx, &nudge)
+	e1 := pty.Setsize(ptmx, &nudge)
+	ptylog.Info("redraw-debug: SIGWINCH nudge sent", "rows", nudge.Rows, "cols", nudge.Cols, "set_err", e1)
 	time.Sleep(redrawSettle)
-	_ = pty.Setsize(ptmx, size)
+	e2 := pty.Setsize(ptmx, size)
+	ptylog.Info("redraw-debug: SIGWINCH restore sent", "rows", size.Rows, "cols", size.Cols, "set_err", e2)
 }

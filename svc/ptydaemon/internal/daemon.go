@@ -125,7 +125,10 @@ func (d *defaultDaemon) Create(p PTYCreateParams) (*PTYTerminalInfo, error) {
 // even when the PTY size is unchanged.
 func (d *defaultDaemon) OnAttach(agentID, sessionID string) {
 	if t := d.get(agentID, sessionID); t != nil {
+		ptylog.Info("redraw-debug: OnAttach (client took master fd)", "session_id", sessionID)
 		t.pauseDrain()
+	} else {
+		ptylog.Warn("redraw-debug: OnAttach but terminal not found", "agent_id", agentID, "session_id", sessionID)
 	}
 }
 
@@ -133,6 +136,7 @@ func (d *defaultDaemon) OnAttach(agentID, sessionID string) {
 // drainer so the kernel buffer keeps draining and the child does not stall.
 func (d *defaultDaemon) OnDetach(agentID, sessionID string) {
 	if t := d.get(agentID, sessionID); t != nil {
+		ptylog.Info("redraw-debug: OnDetach (client released master fd)", "session_id", sessionID)
 		t.resumeDrain()
 	}
 }
