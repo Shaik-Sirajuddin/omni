@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Strict e2e tests for the codex config transformer.
 #
 # TEST S1 — Real hook delivery end-to-end:

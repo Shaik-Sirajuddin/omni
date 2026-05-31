@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # E2E tests: fix/exec-detach-mux-route — Detached flag + forced waitPTYReady
 #
 # Verifies:
