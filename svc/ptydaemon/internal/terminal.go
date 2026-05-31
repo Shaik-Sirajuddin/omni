@@ -190,17 +190,11 @@ func (t *PTYTerminal) drainLoop() {
 		// Bounded deadline so a paused/closed transition is noticed even when
 		// the child is silent.
 		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
-		n, err := m.Read(buf)
-		if err != nil {
+		if _, err := m.Read(buf); err != nil {
 			if os.IsTimeout(err) {
 				continue
 			}
 			return // EOF / EIO / closed — master is gone
-		}
-		if n > 0 {
-			// If this fires AFTER an attach (between OnAttach and "drain parked"),
-			// the drainer is stealing the client's output — the redraw-loss suspect.
-			ptylog.Debug("redraw-debug: drain discarded output", "session_id", t.SessionID, "bytes", n)
 		}
 		// bytes discarded; keep draining
 	}
@@ -216,7 +210,6 @@ func (t *PTYTerminal) pauseDrain() {
 	}
 	t.drainActive = false
 	t.drainMu.Unlock()
-	ptylog.Info("redraw-debug: drain pause begin", "session_id", t.SessionID)
 
 	// Interrupt any in-progress read so the drainer returns promptly and parks
 	// instead of overwriting this deadline with a fresh future one and reading
@@ -230,15 +223,11 @@ func (t *PTYTerminal) pauseDrain() {
 	// Block until the drainer has actually parked (not reading), so the client
 	// is guaranteed to be the sole reader of the master on return. Closing the
 	// terminal mid-pause also releases us.
-	start := time.Now()
 	t.drainMu.Lock()
 	for !t.drainParked && !t.drainClosed {
 		t.drainCond.Wait()
 	}
 	t.drainMu.Unlock()
-	// A long wait here = the drainer was mid-Read; any bytes it read in that
-	// window were stolen from the attaching client.
-	ptylog.Info("redraw-debug: drain parked", "session_id", t.SessionID, "park_wait_ms", time.Since(start).Milliseconds())
 }
 
 // resumeDrain restarts draining after a client detaches. No-op for adopted
@@ -261,7 +250,6 @@ func (t *PTYTerminal) resumeDrain() {
 	t.drainMu.Lock()
 	t.drainCond.Broadcast()
 	t.drainMu.Unlock()
-	ptylog.Info("redraw-debug: drain resumed", "session_id", t.SessionID)
 }
 
 // stopDrain permanently stops the drainer (called from closeMaster). No-op for

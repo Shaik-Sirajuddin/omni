@@ -469,7 +469,7 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 					if i > 0 {
 						_, _ = stdinDst.Write(chunk[:i])
 					}
-					ptylog.Info("redraw-debug: detach key (Ctrl+\\) pressed — detaching")
+					ptylog.Debug("client: detach key (Ctrl+\\) pressed")
 					break
 				}
 				if _, werr := stdinDst.Write(chunk); werr != nil && stdinDst != ptmx {
@@ -485,9 +485,6 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 		done <- struct{}{}
 	}()
 	go func() {
-		// redraw-debug: log when the child first emits output, relative to the
-		// SIGWINCH nudge above. Tells us whether claude painted at all after
-		// attach (and when) vs only after a keypress.
 		buf := make([]byte, 32*1024)
 		first := true
 		for {
@@ -497,7 +494,6 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 					first = false
 					// The child responded with output → it has painted. Stop the
 					// repaint pump.
-					ptylog.Info("redraw-debug: first child output received → stopping repaint pump", "bytes", n)
 					select {
 					case painted <- struct{}{}:
 					default:
@@ -557,13 +553,11 @@ const (
 func forceRedraw(ptmx *os.File) {
 	size, err := pty.GetsizeFull(os.Stdin)
 	if err != nil {
-		ptylog.Warn("redraw-debug: GetsizeFull failed (not a tty?)", "err", err)
-		return
+		return // not a tty; nothing to repaint against
 	}
 	if size.Rows == 0 || size.Cols == 0 {
 		// No real window size (e.g. a harness PTY without stty/winsize). A 0-size
 		// resize is meaningless and would never trigger a repaint — skip it.
-		ptylog.Warn("redraw-debug: skipping forced repaint — terminal has no size", "rows", size.Rows, "cols", size.Cols)
 		return
 	}
 	nudge := *size
@@ -572,9 +566,7 @@ func forceRedraw(ptmx *os.File) {
 	} else {
 		nudge.Rows++
 	}
-	e1 := pty.Setsize(ptmx, &nudge)
-	ptylog.Info("redraw-debug: SIGWINCH nudge sent", "rows", nudge.Rows, "cols", nudge.Cols, "set_err", e1)
+	_ = pty.Setsize(ptmx, &nudge)
 	time.Sleep(redrawSettle)
-	e2 := pty.Setsize(ptmx, size)
-	ptylog.Info("redraw-debug: SIGWINCH restore sent", "rows", size.Rows, "cols", size.Cols, "set_err", e2)
+	_ = pty.Setsize(ptmx, size)
 }
