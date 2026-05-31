@@ -54,23 +54,30 @@ func (z *ZellijTerminal) Install() error {
 }
 
 func zellijAsset() (string, error) {
+	return zellijAssetFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// zellijAssetFor is the testable core of zellijAsset: it maps a GOOS/GOARCH
+// pair to the matching zellij release tarball name. zellijAsset delegates here
+// with the runtime values, so behaviour is unchanged.
+func zellijAssetFor(goos, goarch string) (string, error) {
 	var osTag string
-	switch runtime.GOOS {
+	switch goos {
 	case "linux":
 		osTag = "unknown-linux-musl"
 	case "darwin":
 		osTag = "apple-darwin"
 	default:
-		return "", fmt.Errorf("zellij install: unsupported OS %q — install manually from https://github.com/zellij-org/zellij/releases", runtime.GOOS)
+		return "", fmt.Errorf("zellij install: unsupported OS %q — install manually from https://github.com/zellij-org/zellij/releases", goos)
 	}
 	var archTag string
-	switch runtime.GOARCH {
+	switch goarch {
 	case "amd64":
 		archTag = "x86_64"
 	case "arm64":
 		archTag = "aarch64"
 	default:
-		return "", fmt.Errorf("zellij install: unsupported arch %q — install manually from https://github.com/zellij-org/zellij/releases", runtime.GOARCH)
+		return "", fmt.Errorf("zellij install: unsupported arch %q — install manually from https://github.com/zellij-org/zellij/releases", goarch)
 	}
 	return fmt.Sprintf("zellij-%s-%s.tar.gz", archTag, osTag), nil
 }
