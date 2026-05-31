@@ -405,10 +405,29 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 	}()
 
 	// Sync PTY size so the child lays out at the real terminal size as it boots.
-	// The forced repaint is deferred until the child actually emits output (see
-	// the output loop below) — firing it now would hit the child before its
-	// resize handler is installed, and the SIGWINCH would be lost.
 	inheritSize(ptmx)
+
+	// Repaint pump. A resumed TUI (e.g. claude) can come up SILENT — it paints
+	// nothing until it processes a real SIGWINCH after its resize handler is
+	// installed, and it gives no signal of when that is. Firing once on attach
+	// is too early (handler not up); waiting for first output deadlocks (no
+	// output until poked). So poke it with a forced repaint on a few beats and
+	// stop as soon as it responds with output (painted).
+	painted := make(chan struct{}, 1)
+	go func() {
+		ticker := time.NewTicker(redrawPumpInterval)
+		defer ticker.Stop()
+		for i := 0; i < redrawPumpBeats; i++ {
+			select {
+			case <-painted:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				forceRedraw(ptmx)
+			}
+		}
+	}()
 
 	// Forward SIGWINCH so PTY tracks terminal resizes.
 	winch := make(chan os.Signal, 1)
@@ -476,11 +495,13 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 			if n > 0 {
 				if first {
 					first = false
-					// The child has booted (it just emitted its terminal setup),
-					// so its SIGWINCH handler is up: force one repaint now so a
-					// resumed TUI paints its content without waiting for a keypress.
-					ptylog.Info("redraw-debug: first child output received → forcing repaint", "bytes", n)
-					go forceRedraw(ptmx)
+					// The child responded with output → it has painted. Stop the
+					// repaint pump.
+					ptylog.Info("redraw-debug: first child output received → stopping repaint pump", "bytes", n)
+					select {
+					case painted <- struct{}{}:
+					default:
+					}
 				}
 				if _, werr := os.Stdout.Write(buf[:n]); werr != nil {
 					break
@@ -516,6 +537,13 @@ const redrawSettle = 40 * time.Millisecond
 // detachKey is the byte that detaches the interactive client (Ctrl+\). Ctrl+C
 // is intentionally NOT used — it is forwarded to the agent.
 const detachKey = 0x1c
+
+// Repaint pump cadence: poke a resumed TUI with a forced repaint on these beats
+// until it paints (or the beats run out and the user can press a key).
+const (
+	redrawPumpInterval = 400 * time.Millisecond
+	redrawPumpBeats    = 6
+)
 
 // forceRedraw sets ptmx to the calling terminal's size, guaranteeing a genuine
 // SIGWINCH to the child even when the PTY is already at that size.
