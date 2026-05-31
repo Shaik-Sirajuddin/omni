@@ -2,6 +2,7 @@ package codeagent
 
 import (
 	"context"
+	"sync"
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	confhooks "github.com/Shaik-Sirajuddin/memory/config/hooks"
@@ -138,12 +139,112 @@ type HookTransformer interface {
 	GetHookResult(eventName string, raw any) (confhooks.HookResultSchema, error)
 }
 
+// --- MCP ---
+
+type MCPTransport string
+
+const (
+	MCPTransportStdio MCPTransport = "stdio"
+	MCPTransportSSE   MCPTransport = "sse"
+	MCPTransportHTTP  MCPTransport = "http"
+)
+
+// MCPServer is the canonical representation of an MCP server entry shared
+// across all connectors. Connectors translate to/from their native config shape.
+type MCPServer struct {
+	Name      string            // unique key within the settings scope
+	Transport MCPTransport
+	Command   string            // stdio: executable path
+	Args      []string          // stdio: arguments
+	URL       string            // sse/http: endpoint URL
+	Env       map[string]string // extra environment variables
+	Headers   map[string]string // sse/http: request headers
+	Timeout   int               // milliseconds; 0 = provider default
+}
+
+type AddMCPParams struct {
+	Server MCPServer
+	Global bool // true = write to global settings; false = workspace
+}
+type AddMCPResult struct{}
+
+type ListMCPParams struct {
+	Global bool
+}
+type ListMCPResult struct {
+	Servers []MCPServer
+}
+
+type DeleteMCPParams struct {
+	Name   string
+	Global bool
+}
+type DeleteMCPResult struct{}
+
+// MCPToolPrompt carries an extra prompt injected into a specific tool's description.
+type MCPToolPrompt struct {
+	ServerName string
+	ToolName   string
+	Prompt     string
+}
+
+type SetMCPToolPromptParams struct {
+	Prompt MCPToolPrompt
+	Global bool
+}
+type SetMCPToolPromptResult struct{}
+
+// MCPManager manages MCP server registrations for a connector.
+// Implementations must guard config-file access with an in-memory mutex and
+// an mtime-based optimistic lock (read → check mtime → write atomically).
+type MCPManager interface {
+	AddMCP(AddMCPParams) (*AddMCPResult, error)
+	ListMCP(ListMCPParams) (*ListMCPResult, error)
+	DeleteMCP(DeleteMCPParams) (*DeleteMCPResult, error)
+	SetMCPToolPrompt(SetMCPToolPromptParams) (*SetMCPToolPromptResult, error)
+}
+
+// MCPRegistry is a concurrency-safe map of Provider → MCPManager.
+// Connectors register on construction; the svc daemon reads All() at startup.
+type MCPRegistry struct {
+	mu      sync.RWMutex
+	entries map[Provider]MCPManager
+}
+
+func (r *MCPRegistry) Register(p Provider, m MCPManager) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries[p] = m
+}
+
+func (r *MCPRegistry) Get(p Provider) (MCPManager, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	m, ok := r.entries[p]
+	return m, ok
+}
+
+// All returns a snapshot of all registered managers.
+func (r *MCPRegistry) All() map[Provider]MCPManager {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[Provider]MCPManager, len(r.entries))
+	for k, v := range r.entries {
+		out[k] = v
+	}
+	return out
+}
+
+// GlobalMCPRegistry is the package-level registry consumed by svc/daemon at startup.
+var GlobalMCPRegistry = &MCPRegistry{entries: map[Provider]MCPManager{}}
+
 // CodeAgent implements Model
 // CodeAgent Provides access to sessions
 // All operations of CodeAgent are concurrent safe
 type CodeAgent interface {
 	hooks.HookIOParser
 	hooks.HookManager
+	MCPManager
 	SettingsResolver
 
 	// Create a non-interactive session and return its ID.
