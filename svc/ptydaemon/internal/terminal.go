@@ -104,6 +104,7 @@ type PTYTerminal struct {
 	drainCond   *sync.Cond
 	hasDrain    bool
 	drainActive bool
+	drainParked bool // true while the drainer is parked (provably not reading)
 	drainClosed bool
 }
 
@@ -168,8 +169,13 @@ func (t *PTYTerminal) drainLoop() {
 	for {
 		t.drainMu.Lock()
 		for !t.drainActive && !t.drainClosed {
+			// Announce parked (not reading) and wake any pauseDrain waiter so it
+			// can return only once the client is provably the sole reader.
+			t.drainParked = true
+			t.drainCond.Broadcast()
 			t.drainCond.Wait()
 		}
+		t.drainParked = false
 		closed := t.drainClosed
 		t.drainMu.Unlock()
 		if closed {
@@ -184,8 +190,7 @@ func (t *PTYTerminal) drainLoop() {
 		}
 
 		// Bounded deadline so a paused/closed transition is noticed even when
-		// the child is silent, and so a paused drainer instant-timeouts instead
-		// of stealing the attached client's bytes.
+		// the child is silent.
 		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
 		if _, err := m.Read(buf); err != nil {
 			if os.IsTimeout(err) {
@@ -206,16 +211,25 @@ func (t *PTYTerminal) pauseDrain() {
 		return
 	}
 	t.drainActive = false
-	cond := t.drainCond
 	t.drainMu.Unlock()
-	// Keep a past deadline so any in-progress or subsequent drain read returns
-	// immediately and parks rather than consuming the client's output.
+
+	// Interrupt any in-progress read so the drainer returns promptly and parks
+	// instead of overwriting this deadline with a fresh future one and reading
+	// concurrently with the attaching client.
 	t.mu.Lock()
 	if t.master != nil {
 		_ = t.master.SetReadDeadline(time.Now())
 	}
 	t.mu.Unlock()
-	cond.Signal()
+
+	// Block until the drainer has actually parked (not reading), so the client
+	// is guaranteed to be the sole reader of the master on return. Closing the
+	// terminal mid-pause also releases us.
+	t.drainMu.Lock()
+	for !t.drainParked && !t.drainClosed {
+		t.drainCond.Wait()
+	}
+	t.drainMu.Unlock()
 }
 
 // resumeDrain restarts draining after a client detaches. No-op for adopted
@@ -227,14 +241,17 @@ func (t *PTYTerminal) resumeDrain() {
 		return
 	}
 	t.drainActive = true
-	cond := t.drainCond
 	t.drainMu.Unlock()
 	t.mu.Lock()
 	if t.master != nil {
 		_ = t.master.SetReadDeadline(time.Time{}) // clear deadline
 	}
 	t.mu.Unlock()
-	cond.Signal()
+	// Broadcast: both the drainLoop (waiting for active) and any pauseDrain
+	// (waiting for parked) share this cond, so wake all to re-check predicates.
+	t.drainMu.Lock()
+	t.drainCond.Broadcast()
+	t.drainMu.Unlock()
 }
 
 // stopDrain permanently stops the drainer (called from closeMaster). No-op for
@@ -246,9 +263,8 @@ func (t *PTYTerminal) stopDrain() {
 		return
 	}
 	t.drainClosed = true
-	cond := t.drainCond
+	t.drainCond.Broadcast() // wake the drainLoop and any pauseDrain waiter
 	t.drainMu.Unlock()
-	cond.Signal()
 }
 
 // repaint nudges the PTY window size to force the child to redraw its full
@@ -264,11 +280,11 @@ func (t *PTYTerminal) repaint() {
 	}
 	fd := int(m.Fd())
 	ws, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
-	if err != nil || ws.Row <= 1 || ws.Col == 0 {
-		return // no usable size yet; nothing to force a redraw against
+	if err != nil || ws.Row == 0 || ws.Col == 0 {
+		return // window not initialised yet; nothing to force a redraw against
 	}
 	nudged := *ws
-	nudged.Row = ws.Row - 1
+	nudged.Row = ws.Row + 1 // nudge up then restore — avoids a 0-row transient and works for 1-row terminals
 	_ = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &nudged)
 	_ = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) // restore → SIGWINCH → full redraw
 }

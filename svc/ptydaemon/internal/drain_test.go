@@ -45,6 +45,13 @@ func TestDrainPauseResume(t *testing.T) {
 		t.Fatalf("pty.Start: %v", err)
 	}
 	term := &PTYTerminal{master: m, cmd: cmd}
+	// Ensure the drainer is stopped and the child reaped even if the test fails
+	// early, so nothing leaks into other tests / -race runs.
+	t.Cleanup(func() {
+		term.closeMaster() // stops the drainer and hangs up the child
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
 	term.startDrain()
 
 	for i := 0; i < 20; i++ {
@@ -53,10 +60,6 @@ func TestDrainPauseResume(t *testing.T) {
 		term.resumeDrain()
 		time.Sleep(time.Millisecond)
 	}
-
-	term.closeMaster() // stops the drainer and hangs up the child
-	_ = cmd.Process.Kill()
-	_, _ = cmd.Process.Wait()
 }
 
 // TestDrainAdoptedNoop verifies all drain controls are safe no-ops when the
