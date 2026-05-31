@@ -262,8 +262,9 @@ func writeHooksConfig(path string, hooksByEvent map[string][]codexHookMatcher) e
 }
 
 // extractHooks converts the raw TOML hooks value back to typed matchers.
-// BurntSushi/toml decodes arrays-of-tables into []interface{} (not
-// []map[string]interface{}), so each element must be cast individually.
+// BurntSushi/toml v0.x decodes arrays-of-tables ([[hooks.Event]]) as
+// []map[string]interface{} when the target is map[string]interface{}.
+// Both []interface{} and []map[string]interface{} are handled for robustness.
 func extractHooks(raw map[string]interface{}) map[string][]codexHookMatcher {
 	out := map[string][]codexHookMatcher{}
 	hooksMap, ok := raw["hooks"].(map[string]interface{})
@@ -271,8 +272,17 @@ func extractHooks(raw map[string]interface{}) map[string][]codexHookMatcher {
 		return out
 	}
 	for event, matchersVal := range hooksMap {
-		matchersSlice, ok := matchersVal.([]interface{})
-		if !ok {
+		// Normalise to []interface{} regardless of the concrete slice type.
+		var matchersSlice []interface{}
+		switch v := matchersVal.(type) {
+		case []interface{}:
+			matchersSlice = v
+		case []map[string]interface{}:
+			matchersSlice = make([]interface{}, len(v))
+			for i, m := range v {
+				matchersSlice[i] = m
+			}
+		default:
 			continue
 		}
 		for _, elem := range matchersSlice {
@@ -284,24 +294,33 @@ func extractHooks(raw map[string]interface{}) map[string][]codexHookMatcher {
 			if v, ok := m["matcher"].(string); ok {
 				hm.Matcher = v
 			}
-			if defsRaw, ok := m["hooks"].([]interface{}); ok {
-				for _, dr := range defsRaw {
-					d, ok := dr.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					hd := codexHookDef{Type: "command"}
-					if v, ok := d["type"].(string); ok {
-						hd.Type = v
-					}
-					if v, ok := d["command"].(string); ok {
-						hd.Command = v
-					}
-					if v, ok := d["timeout"].(int64); ok {
-						hd.Timeout = int(v)
-					}
-					hm.Hooks = append(hm.Hooks, hd)
+			// Inner hooks array: same dual-type handling.
+			var defsSlice []interface{}
+			switch dv := m["hooks"].(type) {
+			case []interface{}:
+				defsSlice = dv
+			case []map[string]interface{}:
+				defsSlice = make([]interface{}, len(dv))
+				for i, d := range dv {
+					defsSlice[i] = d
 				}
+			}
+			for _, dr := range defsSlice {
+				d, ok := dr.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				hd := codexHookDef{Type: "command"}
+				if v, ok := d["type"].(string); ok {
+					hd.Type = v
+				}
+				if v, ok := d["command"].(string); ok {
+					hd.Command = v
+				}
+				if v, ok := d["timeout"].(int64); ok {
+					hd.Timeout = int(v)
+				}
+				hm.Hooks = append(hm.Hooks, hd)
 			}
 			out[event] = append(out[event], hm)
 		}
