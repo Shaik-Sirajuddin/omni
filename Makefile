@@ -43,8 +43,6 @@ dev-preflight:
 	        cp -r development/local.example development/local && echo "created development/local/ (no main worktree local found)"; \
 	    fi \
 	fi
-	@[ -d development/local/.codex/auth.json ]                                && rm -rf development/local/.codex/auth.json                                || true
-	@[ -d development/local/.gemini/antigravity-cli/antigravity-oauth-token ] && rm -rf development/local/.gemini/antigravity-cli/antigravity-oauth-token || true
 	@mkdir -p development/local/.codex development/local/.gemini/antigravity-cli
 	@[ -f development/local/.codex/auth.json ]                                || echo '{}' > development/local/.codex/auth.json
 	@[ -f development/local/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/.gemini/antigravity-cli/antigravity-oauth-token
