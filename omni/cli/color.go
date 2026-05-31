@@ -28,7 +28,7 @@ func renderHelp(cmd *cobra.Command, w io.Writer) {
 	}
 
 	subs := cmd.Commands()
-	visible := subs[:0]
+	visible := make([]*cobra.Command, 0, len(subs))
 	for _, s := range subs {
 		if !s.Hidden {
 			visible = append(visible, s)

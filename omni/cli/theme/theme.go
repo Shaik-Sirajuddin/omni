@@ -70,8 +70,11 @@ func (t *Theme) Color(r Role) string {
 const Reset = reset
 
 // Apply wraps text with the theme colour for role r and appends a reset.
-// When the colour string is empty, text is returned unchanged.
+// Returns text unchanged when the colour is empty or output is not a TTY.
 func (t *Theme) Apply(r Role, text string) string {
+	if noColor.Load() {
+		return text
+	}
 	c := t.Color(r)
 	if c == "" {
 		return text
