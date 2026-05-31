@@ -12,7 +12,6 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
-	"github.com/creack/pty"
 )
 
 const (
@@ -147,37 +146,7 @@ func (a *geminiAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 			logger.Info("Resume: PTY daemon session started detached", "sessionID", resolvedSessionID)
 			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID}, nil
 		}
-
-		master, err := pty.Start(cmd)
-		if err != nil {
-			return nil, fmt.Errorf("gemini: resume: pty start: %w", err)
-		}
-		pid := fmt.Sprintf("%d", cmd.Process.Pid)
-		if resolvedSessionID == "" {
-			resolvedSessionID = "latest"
-		}
-
-		a.mu.Lock()
-		a.masterPTY = master
-		a.activeCmd = cmd
-		a.sessionID = resolvedSessionID
-		a.mu.Unlock()
-
-		go func(sessionID string, client PTYClient, master *os.File) {
-			_ = cmd.Wait()
-			_ = master.Close()
-			a.mu.Lock()
-			a.masterPTY = nil
-			a.mu.Unlock()
-			if stopper, ok := client.(interface {
-				Stop(agentID, sessionID string) error
-			}); ok {
-				_ = stopper.Stop(string(Gemini), sessionID)
-			}
-		}(resolvedSessionID, ptyClient, master)
-
-		logger.Info("Resume: interactive PTY session started", "pid", pid, "sessionID", resolvedSessionID)
-		return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resolvedSessionID}, nil
+		return nil, fmt.Errorf("gemini: resume/background exec not supported")
 	}
 
 	cmd.Stdin = interactiveStdin

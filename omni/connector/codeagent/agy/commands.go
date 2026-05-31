@@ -172,6 +172,24 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 	}
 
 	if client != nil {
+		command := append([]string{binPath}, args...)
+		if p.Detached {
+			info, err := client.Get("", resumeID)
+			if err != nil {
+				return nil, fmt.Errorf("agy: resume: pty get %q: %w", resumeID, err)
+			}
+			if info == nil || info.Status != "active" {
+				if err := client.Start(resumeID, command, env, workDir, submitKey); err != nil {
+					return nil, fmt.Errorf("agy: resume: pty start: %w", err)
+				}
+				logger.Info("Resume: PTY daemon detached session started", "sessionID", resumeID)
+			}
+			a.mu.Lock()
+			a.sessionID = resumeID
+			a.mu.Unlock()
+			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID}, nil
+		}
+
 		info, err := client.Get("", resumeID)
 		if err != nil {
 			return nil, fmt.Errorf("agy: resume: pty get %q: %w", resumeID, err)
@@ -184,7 +202,6 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 				return nil, errors.New("agy: resume: PTY session already has an interactive user attached")
 			}
 		}
-		command := append([]string{binPath}, args...)
 		started := false
 		if info == nil || info.Status != "active" {
 			if err := client.Start(resumeID, command, env, workDir, submitKey); err != nil {
@@ -213,6 +230,10 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 			done <- nil
 		}()
 		return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID, Done: done}, nil
+	}
+
+	if p.Detached {
+		return nil, fmt.Errorf("agy: resume: background exec not supported — no PTY client available")
 	}
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
