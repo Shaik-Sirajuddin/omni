@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	"github.com/creack/pty"
@@ -394,8 +395,9 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 		_ = ptmx.Close()
 	}()
 
-	// Sync PTY size to the current terminal immediately.
-	inheritSize(ptmx)
+	// Sync PTY size to the current terminal and force the child to repaint its
+	// current screen, even when the size is unchanged from the previous client.
+	forceRedraw(ptmx)
 
 	// Forward SIGWINCH so PTY tracks terminal resizes.
 	winch := make(chan os.Signal, 1)
@@ -450,5 +452,35 @@ func inheritSize(ptmx *os.File) {
 	if err != nil {
 		return
 	}
+	_ = pty.Setsize(ptmx, size)
+}
+
+// redrawSettle is how long forceRedraw waits between the nudge and the real
+// size so the child's SIGWINCH handler runs for each — standard signals
+// coalesce, so a rapid set/restore would merge into a single no-op event.
+const redrawSettle = 40 * time.Millisecond
+
+// forceRedraw sets ptmx to the calling terminal's size, guaranteeing a genuine
+// SIGWINCH to the child even when the PTY is already at that size.
+//
+// On resume the PTY winsize persists from the previous client, so a plain
+// inheritSize() is frequently a no-op — and the kernel suppresses SIGWINCH on an
+// unchanged TIOCSWINSZ (tty_do_resize early-returns). Full-screen TUIs that only
+// repaint on a real resize (e.g. claude/Ink) then show a blank screen until the
+// next keypress. We force a real delta: briefly set a different size, settle so
+// the child processes that SIGWINCH, then set the true size.
+func forceRedraw(ptmx *os.File) {
+	size, err := pty.GetsizeFull(os.Stdin)
+	if err != nil {
+		return
+	}
+	nudge := *size
+	if nudge.Rows > 1 {
+		nudge.Rows--
+	} else {
+		nudge.Rows++
+	}
+	_ = pty.Setsize(ptmx, &nudge)
+	time.Sleep(redrawSettle)
 	_ = pty.Setsize(ptmx, size)
 }

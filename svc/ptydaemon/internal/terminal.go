@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 type Status string
@@ -265,28 +263,6 @@ func (t *PTYTerminal) stopDrain() {
 	t.drainClosed = true
 	t.drainCond.Broadcast() // wake the drainLoop and any pauseDrain waiter
 	t.drainMu.Unlock()
-}
-
-// repaint nudges the PTY window size to force the child to redraw its full
-// current screen for a freshly-attached client. Full-screen TUIs (claude,
-// codex) repaint on SIGWINCH; line-oriented programs are unaffected. No
-// retained buffer is needed — the child is the source of truth for the screen.
-func (t *PTYTerminal) repaint() {
-	t.mu.Lock()
-	m := t.master
-	t.mu.Unlock()
-	if m == nil {
-		return
-	}
-	fd := int(m.Fd())
-	ws, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
-	if err != nil || ws.Row == 0 || ws.Col == 0 {
-		return // window not initialised yet; nothing to force a redraw against
-	}
-	nudged := *ws
-	nudged.Row = ws.Row + 1 // nudge up then restore — avoids a 0-row transient and works for 1-row terminals
-	_ = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &nudged)
-	_ = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) // restore → SIGWINCH → full redraw
 }
 
 // readLastInput returns a full copy of the active queue top (inputQueue[queueLen]).

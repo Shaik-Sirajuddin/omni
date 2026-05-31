@@ -119,12 +119,13 @@ func (d *defaultDaemon) Create(p PTYCreateParams) (*PTYTerminalInfo, error) {
 }
 
 // OnAttach is called when a client takes over the master fd for a session. It
-// pauses the idle drainer (one reader at a time) and asks the child to repaint
-// so the freshly-attached client sees the current screen.
+// pauses the idle drainer so the client is the sole reader of the master. The
+// redraw of the current screen is driven client-side (forceRedraw in the unix
+// client), which can guarantee a genuine SIGWINCH against the real terminal size
+// even when the PTY size is unchanged.
 func (d *defaultDaemon) OnAttach(agentID, sessionID string) {
 	if t := d.get(agentID, sessionID); t != nil {
 		t.pauseDrain()
-		t.repaint()
 	}
 }
 
