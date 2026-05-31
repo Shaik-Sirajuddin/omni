@@ -216,6 +216,11 @@ func readHooksConfig(path string) (map[string][]codexHookMatcher, error) {
 }
 
 func writeHooksConfig(path string, hooksByEvent map[string][]codexHookMatcher) error {
+	// Hold mcpMu for the full read-modify-write cycle so concurrent AddMCP/
+	// ensureMCPApprovalMode calls cannot race with this write (Bug 1 fix).
+	mcpMu.Lock()
+	defer mcpMu.Unlock()
+
 	raw, err := readConfigTOML(path)
 	if err != nil {
 		return err
@@ -229,8 +234,26 @@ func writeHooksConfig(path string, hooksByEvent map[string][]codexHookMatcher) e
 	features["hooks"] = true
 	raw["features"] = features
 
-	// Convert typed hooks to []map[string]interface{} for TOML array-of-tables.
-	hooksRaw := map[string]interface{}{}
+	// Preserve existing hooks section (e.g. [hooks.state] trusted hashes written
+	// by the Codex CLI itself) — only replace the event-keyed entries (Bug 2 fix).
+	existingHooks, _ := raw["hooks"].(map[string]interface{})
+	if existingHooks == nil {
+		existingHooks = map[string]interface{}{}
+	}
+
+	// Known codex event keys managed by this transformer.
+	knownEvents := map[string]bool{
+		"PreToolUse": true, "PostToolUse": true, "PostToolUseFailure": true,
+		"SessionStart": true, "Stop": true, "UserPromptSubmit": true,
+	}
+	// Remove stale event entries; non-event keys (e.g. "state") are kept as-is.
+	for k := range existingHooks {
+		if knownEvents[k] {
+			delete(existingHooks, k)
+		}
+	}
+
+	// Write new event entries.
 	for event, matchers := range hooksByEvent {
 		var arr []map[string]interface{}
 		for _, m := range matchers {
@@ -249,16 +272,16 @@ func writeHooksConfig(path string, hooksByEvent map[string][]codexHookMatcher) e
 			entry["hooks"] = defs
 			arr = append(arr, entry)
 		}
-		hooksRaw[event] = arr
+		existingHooks[event] = arr
 	}
-	raw["hooks"] = hooksRaw
+	raw["hooks"] = existingHooks
 
 	events := make([]string, 0, len(hooksByEvent))
 	for e := range hooksByEvent {
 		events = append(events, e)
 	}
 	logger.Debug("writeHooksConfig", "path", path, "events", events)
-	return writeConfigTOML(path, raw)
+	return writeConfigTOMLAtomic(path, raw)
 }
 
 // extractHooks converts the raw TOML hooks value back to typed matchers.
@@ -337,44 +360,42 @@ func ensureMCPApprovalMode(serverName string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := readConfigTOML(path)
-	if err != nil {
-		return err
-	}
-	mcpServers, _ := raw["mcp_servers"].(map[string]interface{})
-	if mcpServers == nil {
-		// No mcp_servers section — nothing to patch.
-		return nil
-	}
-	server, _ := mcpServers[serverName].(map[string]interface{})
-	if server == nil {
-		// Server entry absent — skip rather than creating a transport-less stub
-		// that Codex would reject as "invalid transport".
-		return nil
-	}
-
-	// Set server-level default.
-	server["default_tools_approval_mode"] = "auto"
-
-	// Override any per-tool entries that still have "approve" — they would
-	// block auto-approval even with the server-level default set to "auto".
-	if tools, ok := server["tools"].(map[string]interface{}); ok {
-		for toolName, toolVal := range tools {
-			toolCfg, ok := toolVal.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if toolCfg["approval_mode"] == "approve" {
-				toolCfg["approval_mode"] = "auto"
-				tools[toolName] = toolCfg
-			}
+	return withMCPConfig(path, func(raw map[string]interface{}) error {
+		mcpServers, _ := raw["mcp_servers"].(map[string]interface{})
+		if mcpServers == nil {
+			// No mcp_servers section — nothing to patch.
+			return nil
 		}
-		server["tools"] = tools
-	}
+		server, _ := mcpServers[serverName].(map[string]interface{})
+		if server == nil {
+			// Server entry absent — skip rather than creating a transport-less stub
+			// that Codex would reject as "invalid transport".
+			return nil
+		}
 
-	mcpServers[serverName] = server
-	raw["mcp_servers"] = mcpServers
-	return writeConfigTOML(path, raw)
+		// Set server-level default.
+		server["default_tools_approval_mode"] = "auto"
+
+		// Override any per-tool entries that still have "approve" — they would
+		// block auto-approval even with the server-level default set to "auto".
+		if tools, ok := server["tools"].(map[string]interface{}); ok {
+			for toolName, toolVal := range tools {
+				toolCfg, ok := toolVal.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if toolCfg["approval_mode"] == "approve" {
+					toolCfg["approval_mode"] = "auto"
+					tools[toolName] = toolCfg
+				}
+			}
+			server["tools"] = tools
+		}
+
+		mcpServers[serverName] = server
+		raw["mcp_servers"] = mcpServers
+		return nil
+	})
 }
 
 // ============================================================
