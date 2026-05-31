@@ -223,7 +223,6 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
-			RunTime:   nil,
 		})
 		if err != nil {
 			return fmt.Errorf("operator: switch provider: create session for agent %q: %w", agent.ID, err)
@@ -716,7 +715,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	defer cancelResume()
 
 	envs := mcpSessionEnvs(agent)
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: nil})
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
@@ -730,7 +729,6 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
-			RunTime:   nil,
 		})
 		if createErr != nil {
 			logger.Error("ResumeAgent: fallback create failed", "agentID", agent.ID, "err", createErr)
@@ -749,7 +747,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				logger.Warn("ResumeAgent: fallback session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", storeErr)
 			}
 		}
-		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: nil})
+		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
@@ -1324,7 +1322,6 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		WorkDir:   string(agent.WorkspaceDir),
 		SessionID: requestedSessionID,
 		Envs:      envs,
-		RunTime:   nil,
 	})
 	if err != nil {
 		return fmt.Errorf("operator: create session for agent %q: %w", agent.ID, err)
