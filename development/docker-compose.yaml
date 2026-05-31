@@ -28,6 +28,8 @@ services:
       - agent-gemini:/root/.gemini
       - ./local/.gemini/antigravity-cli/antigravity-oauth-token:/root/.gemini/antigravity-cli/antigravity-oauth-token
       - agent-agy:/root/.agy
+    ports:
+      - "18062:18062"                   # tunnel-mcp streamable HTTP (MCP clients connect here)
     env_file:
       - path: ./.env.docker
         required: false
