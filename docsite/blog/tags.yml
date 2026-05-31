@@ -1,19 +1,6 @@
-facebook:
-  label: Facebook
-  permalink: /facebook
-  description: Facebook tag description
-
-hello:
-  label: Hello
-  permalink: /hello
-  description: Hello tag description
-
-docusaurus:
-  label: Docusaurus
-  permalink: /docusaurus
-  description: Docusaurus tag description
-
-hola:
-  label: Hola
-  permalink: /hola
-  description: Hola tag description
+releases:
+  label: Releases
+  description: Updates and release notes for the Omni project.
+announcements:
+  label: Announcements
+  description: Major announcements and community news.
