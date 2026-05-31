@@ -60,9 +60,7 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	} else {
 		a.sessionID = id
 	}
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
 	workDir := a.workDir
 	sessionID := a.sessionID
 	binPath := a.binPath
@@ -98,8 +96,9 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	// session after at least one print-mode exchange.
 	a.mu.RLock()
 	model := a.model
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
+	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
 
 	seedArgs := []string{
 		"-p", "hello",
@@ -122,6 +121,14 @@ type ptyMetaAttached interface {
 	MetaAttached(sessionID string) (int, error)
 }
 
+// ptyPIDGetter is optionally satisfied by PTY clients that can report the OS
+// process ID of a managed session. codexPTYAdapter implements this once the
+// daemon's "get" response includes the pid field (see collab instruction:
+// memory/team/entry/instructions/ptydaemon/pty_session_pid.md).
+type ptyPIDGetter interface {
+	SessionPID(agentID, sessionID string) (int, error)
+}
+
 // Resume launches an interactive claude session via `claude -r <id>`.
 func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSessionResult, error) {
 	ctx := p.Context
@@ -132,10 +139,9 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 	a.mu.Lock()
 	binPath := a.binPath
 	workDir := a.workDir
-	if p.RunTime != nil {
-		a.sbxRuntime = *p.RunTime
-	}
-	rt := a.sbxRuntime
+	// if p.RunTime != nil { a.sbxRuntime = *p.RunTime } // sandbox disabled
+	// rt := a.sbxRuntime // sandbox disabled
+	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
 	client := a.ptyClient
 	currentSessionID := a.sessionID
 	env := mergeEnv(os.Environ(), p.Envs)
@@ -158,14 +164,12 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 		args = append(args, "--fork-session")
 	}
 
-	if rt != nil {
-		if err := rt.Command(binPath, args); err != nil {
-			return nil, fmt.Errorf("claude: resume: sandbox command: %w", err)
-		}
-		pid := runtimePID(rt)
-		logger.Info("Resume: interactive sandbox session completed", "pid", pid, "sessionID", resumeID)
-		return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resumeID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil {
+	//     if err := rt.Command(binPath, args); err != nil { return nil, fmt.Errorf(...) }
+	//     return &codeagent.ResumeSessionResult{ProcessID: runtimePID(rt), SessionID: resumeID}, nil
+	// }
+	_ = rt
 
 	if client != nil {
 		info, err := client.Get("", resumeID)
@@ -188,17 +192,30 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 			}
 			started = true
 		}
+
+		// Capture the session process ID so the operator's registerPTYSession can
+		// call adopt, establishing the agentID→sessionID→PID mapping in the daemon.
+		// Requires codexPTYAdapter to implement ptyPIDGetter — see collab instruction:
+		// memory/team/entry/instructions/ptydaemon/pty_session_pid.md
+		var processID string
+		if pg, ok := client.(ptyPIDGetter); ok {
+			if pid, err := pg.SessionPID("", resumeID); err == nil && pid > 0 {
+				processID = fmt.Sprintf("%d", pid)
+				logger.Debug("Resume: captured session PID", "sessionID", resumeID, "pid", processID)
+			}
+		}
+
 		a.mu.Lock()
 		a.sessionID = resumeID
 		a.mu.Unlock()
 		if started {
-			logger.Info("Resume: PTY daemon session started", "sessionID", resumeID)
+			logger.Info("Resume: PTY daemon session started", "sessionID", resumeID, "pid", processID)
 		} else {
 			logger.Info("Resume: reusing active PTY daemon session", "sessionID", resumeID)
 		}
 		if p.Detached {
 			logger.Info("Resume: leaving PTY daemon session detached", "sessionID", resumeID)
-			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID}, nil
+			return &codeagent.ResumeSessionResult{ProcessID: processID, SessionID: resumeID}, nil
 		}
 		logger.Info("Resume: attaching PTY daemon session", "sessionID", resumeID)
 		done := make(chan error, 1)
@@ -212,7 +229,7 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 			logger.Info("Resume: PTY daemon session detached", "sessionID", resumeID)
 			done <- nil
 		}()
-		return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID, Done: done}, nil
+		return &codeagent.ResumeSessionResult{ProcessID: processID, SessionID: resumeID, Done: done}, nil
 	}
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
@@ -326,13 +343,13 @@ func (a *claudeAgent) Exec(p codeagent.ExecuteParams) (*codeagent.ExecuteResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
 	args := buildExecArgs(p.Prompt, model, permMode, systemPrompt, sessionID, p.OutputFormat, p.MaxTurns)
 	logger.Debug("Exec", "workDir", workDir, "args", args)
 
-	response, err := execOutput(workDir, rt, binPath, args...)
+	response, err := execOutput(workDir, nil, binPath, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,44 +375,15 @@ func (a *claudeAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult,
 	permMode := a.permMode
 	systemPrompt := a.systemPrompt
 	sessionID := a.sessionID
-	rt := a.sbxRuntime
+	// rt := a.sbxRuntime // sandbox disabled
 	a.mu.RUnlock()
 
 	args := buildStreamArgs(p.Prompt, model, permMode, systemPrompt, sessionID, p.MaxTurns)
 	logger.Debug("Stream", "workDir", workDir, "args", args)
 
 	ch := make(chan codeagent.StreamEvent, 32)
-	if rt != nil {
-		proc, err := rt.Start(binPath, args)
-		if err != nil {
-			return nil, fmt.Errorf("claude stream: sandbox start: %w", err)
-		}
-		go func() {
-			defer close(ch)
-			res, waitErr := proc.Wait()
-			if waitErr != nil {
-				msg := runtimeErrorf("claude stream", res, waitErr).Error()
-				logger.Error("Stream: sandbox process exited with error", "err", msg)
-				ch <- codeagent.StreamEvent{Type: "stop", Done: true, Content: msg}
-				return
-			}
-			scanner := bufio.NewScanner(strings.NewReader(res.Stdout))
-			for scanner.Scan() {
-				line := scanner.Text()
-				if line == "" {
-					continue
-				}
-				ev := parseClaudeLine(line)
-				ch <- ev
-				if ev.Done {
-					return
-				}
-			}
-			ch <- codeagent.StreamEvent{Type: "stop", Done: true}
-			logger.Debug("Stream completed via sandbox runtime")
-		}()
-		return &codeagent.StreamResult{Events: ch, SessionID: sessionID}, nil
-	}
+	// sandbox disabled:
+	// if rt != nil { proc, err := rt.Start(binPath, args); ... return &StreamResult{...} }
 
 	cmd := localCommand(workDir, binPath, args...)
 	stdout, err := cmd.StdoutPipe()

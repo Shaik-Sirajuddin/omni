@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
@@ -24,7 +25,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/gemini"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
-	"github.com/Shaik-Sirajuddin/memory/operator/impl/defaults"
+	// "github.com/Shaik-Sirajuddin/memory/operator/impl/defaults" // re-enable with sandbox wiring
 	"github.com/Shaik-Sirajuddin/memory/provision"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
@@ -158,6 +159,21 @@ func (a *codexPTYAdapter) Get(_ string, sessionID string) (*codeagent.PTYTermina
 	}, nil
 }
 
+// SessionPID returns the OS process ID of the PTY session's agent process.
+// Satisfies the ptyPIDGetter interface asserted by connector Resume paths so
+// that registerPTYSession can receive a non-empty ProcessID.
+func (a *codexPTYAdapter) SessionPID(_, sessionID string) (int, error) {
+	if a == nil || a.inner == nil {
+		return 0, nil
+	}
+	info, err := a.inner.Get(a.agentID, sessionID)
+	if err != nil || info == nil {
+		return 0, err
+	}
+	return info.PID, nil
+}
+
+
 // SwitchProvider implements [Operator].
 // SwitchProvider when switching between models , if a non fill session exists matching provider , agent , session is reused , override by CleanStart
 func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) error {
@@ -196,20 +212,20 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			return fmt.Errorf("operator: switch provider: init code agent: %w", err)
 		}
 
-		var sbxRuntime *sandbox.SandboxRuntime
-		if o.provisioner != nil {
-			workDir := string(agent.WorkspaceDir)
-			cfg := defaults.SandboxConfig(params.Provider, workDir)
-			configDir := sandboxConfigDir(workDir, agent.Name)
-			rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
-				ID:        agent.ID,
-				ConfigDir: configDir,
-				Config:    cfg,
-			})
-			if sbxErr == nil {
-				sbxRuntime = &rt
-			}
-		}
+		// var sbxRuntime *sandbox.SandboxRuntime
+		// if o.provisioner != nil {
+		// 	workDir := string(agent.WorkspaceDir)
+		// 	cfg := defaults.SandboxConfig(params.Provider, workDir)
+		// 	configDir := sandboxConfigDir(workDir, agent.Name)
+		// 	rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
+		// 		ID:        agent.ID,
+		// 		ConfigDir: configDir,
+		// 		Config:    cfg,
+		// 	})
+		// 	if sbxErr == nil {
+		// 		sbxRuntime = &rt
+		// 	}
+		// }
 
 		requestedSessionID := strings.TrimSpace(params.SessionID)
 		newID := requestedSessionID
@@ -224,7 +240,6 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
-			RunTime:   sbxRuntime,
 		})
 		if err != nil {
 			return fmt.Errorf("operator: switch provider: create session for agent %q: %w", agent.ID, err)
@@ -279,6 +294,53 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 	return nil
 }
 
+const (
+	// ptyReadinessPollInterval is how often we poll GetSession while waiting for the PTY to become active.
+	ptyReadinessPollInterval = 50 * time.Millisecond
+	// ptyReadinessPollTimeout is the maximum time to wait for the PTY to report status=active.
+	ptyReadinessPollTimeout = 5 * time.Second
+	// ptyReadinessGrace is the extra wait after status=active before firing exec, giving the
+	// agent TUI time to render its prompt and start accepting input.
+	ptyReadinessGrace = 250 * time.Millisecond
+	// ptyRecentStartThreshold: a session started within this window is treated as "just started"
+	// and receives the readiness grace even when the caller did not trigger the resume.
+	ptyRecentStartThreshold = 3 * time.Second
+)
+
+// ptySessionLive checks whether a PTY session is active using a two-step probe:
+//  1. MetaAttached — fast path; returns immediately when the daemon has a registered process.
+//  2. Get fallback — handles the case where registration was skipped (connector did not return
+//     ProcessID), checking the raw daemon status instead.
+//
+// Returns (active, recentlyStarted). recentlyStarted is true when the session started within
+// ptyRecentStartThreshold — the caller should then apply a readiness grace before sending exec.
+func ptySessionLive(d ptyclients.Client, agentID, sessionID string) (active, recentlyStarted bool) {
+	if count, err := d.MetaAttached(sessionID); err == nil && count >= 1 {
+		return true, false
+	}
+	info, err := d.Get(agentID, sessionID)
+	if err != nil || info == nil || info.Status != "active" {
+		return false, false
+	}
+	return true, time.Since(info.StartedAt) < ptyRecentStartThreshold
+}
+
+// waitPTYReady polls until the session reports status=active, then sleeps a short grace period
+// so the agent TUI has time to initialise before the exec payload arrives.
+// A timeout error is non-fatal — the caller should log and proceed.
+func waitPTYReady(d ptyclients.Client, agentID, sessionID string) error {
+	deadline := time.Now().Add(ptyReadinessPollTimeout)
+	for time.Now().Before(deadline) {
+		info, err := d.Get(agentID, sessionID)
+		if err == nil && info != nil && info.Status == "active" {
+			time.Sleep(ptyReadinessGrace)
+			return nil
+		}
+		time.Sleep(ptyReadinessPollInterval)
+	}
+	return fmt.Errorf("PTY session %q did not become active within %v", sessionID, ptyReadinessPollTimeout)
+}
+
 func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*operator.ExecInSessionResult, error) {
 	agent, ca, err := o.codeAgentForAgentID(params.AgentID)
 	if err != nil {
@@ -299,12 +361,14 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		sessionID = strings.TrimSpace(session.Id)
 	}
 
-	// Check whether the session is currently attached via the pty daemon.
+	// Check whether the session is currently active via the pty daemon.
+	// Option C: MetaAttached is the fast path; if it returns 0, fall back to Get so that
+	// sessions which are running but not registered (connector did not return ProcessID)
+	// are not incorrectly auto-resumed a second time.
 	sessionActive := false
+	sessionNeedsGrace := false
 	if o.ptyDaemon != nil {
-		if count, err := o.ptyDaemon.MetaAttached(sessionID); err == nil {
-			sessionActive = count >= 1
-		}
+		sessionActive, sessionNeedsGrace = ptySessionLive(o.ptyDaemon, agent.ID, sessionID)
 	}
 
 	if !sessionActive {
@@ -321,10 +385,20 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		}); err != nil {
 			return nil, fmt.Errorf("operator: exec in session: auto-resume: %w", err)
 		}
+		sessionNeedsGrace = true
 		// Re-init ca after resume since the connector instance may be stale.
 		_, ca, err = o.codeAgentForAgentID(params.AgentID)
 		if err != nil {
 			return nil, fmt.Errorf("operator: exec in session: re-init after resume: %w", err)
+		}
+	}
+
+	// Option B: when a resume just happened or the session was started very recently by an
+	// external caller (e.g. CLI --resume), poll until the PTY process is confirmed active then
+	// wait a grace period so the agent TUI finishes initialising before exec input arrives.
+	if sessionNeedsGrace && o.ptyDaemon != nil {
+		if err := waitPTYReady(o.ptyDaemon, agent.ID, sessionID); err != nil {
+			logger.Warn("ExecInSession: PTY readiness wait timed out", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 		}
 	}
 
@@ -635,30 +709,30 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
 	}
 
-	// Provision a sandbox runtime for this resume session.
-	var sbxRuntime *sandbox.SandboxRuntime
-	if o.provisioner != nil {
-		workDir := string(agent.WorkspaceDir)
-		cfg := defaults.SandboxConfig(provider, workDir)
-		configDir := sandboxConfigDir(workDir, agent.Name)
-		rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
-			ID:        agent.ID,
-			ConfigDir: configDir,
-			Config:    cfg,
-		})
-		if sbxErr != nil {
-			logger.Warn("ResumeAgent: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
-		} else {
-			sbxRuntime = &rt
-			logger.Debug("ResumeAgent: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
-		}
-	}
+	// Sandbox runtime provisioning disabled — uncomment to re-enable.
+	// var sbxRuntime *sandbox.SandboxRuntime
+	// if o.provisioner != nil {
+	// 	workDir := string(agent.WorkspaceDir)
+	// 	cfg := defaults.SandboxConfig(provider, workDir)
+	// 	configDir := sandboxConfigDir(workDir, agent.Name)
+	// 	rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
+	// 		ID:        agent.ID,
+	// 		ConfigDir: configDir,
+	// 		Config:    cfg,
+	// 	})
+	// 	if sbxErr != nil {
+	// 		logger.Warn("ResumeAgent: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
+	// 	} else {
+	// 		sbxRuntime = &rt
+	// 		logger.Debug("ResumeAgent: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
+	// 	}
+	// }
 
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 
 	envs := mcpSessionEnvs(agent)
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: sbxRuntime})
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
@@ -672,7 +746,6 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
-			RunTime:   sbxRuntime,
 		})
 		if createErr != nil {
 			logger.Error("ResumeAgent: fallback create failed", "agentID", agent.ID, "err", createErr)
@@ -691,10 +764,32 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				logger.Warn("ResumeAgent: fallback session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", storeErr)
 			}
 		}
-		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: sbxRuntime})
+		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
+		}
+	}
+	// Sync the active session to store so ExecInSession can resolve sessionID by agentID
+	// when params.SessionID is empty (e.g. `omni agent exec --resume --prompt`).
+	// The normal ca.Resume path does not write to sessionStore; only the fallback
+	// ca.Create path does — causing ExecInSession to fail with "active session not found"
+	// for agents that were resumed (not newly created) in the same call.
+	if o.sessionStore != nil {
+		finalSessionID := sessionID
+		if resumeResult != nil && resumeResult.SessionID != "" {
+			finalSessionID = resumeResult.SessionID
+		}
+		syncSession := &omniagent.CodeSession{
+			Id:       finalSessionID,
+			Model:    &codeagent.Model{Provider: provider, Model: resolvedSessionModel(ca, model)},
+			IsActive: true,
+		}
+		if createErr := o.sessionStore.CreateSession(agent.ID, syncSession); createErr != nil {
+			// Session already exists in store (agent was previously resumed) — update it.
+			if updateErr := o.sessionStore.UpdateSession(agent.ID, syncSession); updateErr != nil {
+				logger.Warn("ResumeAgent: session store sync failed", "agentID", agent.ID, "sessionID", finalSessionID, "err", updateErr)
+			}
 		}
 	}
 	o.registerPTYSession(agent.ID, sessionID, resumeResult)
@@ -725,17 +820,17 @@ func New() (operator.Operator, error) {
 		logger.Error("New: session store initialisation failed", "err", err)
 		return nil, fmt.Errorf("operator: init session store: %w", err)
 	}
-	// Initialise a sandbox provisioner when a supported kind is available on the host.
+	// Sandbox provisioner disabled — uncomment to re-enable.
 	var provisioner sandbox.SandboxProvisioner
-	if kinds := sandbox.HostSupportedProvisioners(); len(kinds) > 0 {
-		p, perr := sandbox.NewProvisioner(kinds[0], nil, sandbox.ProvisionerOptions{})
-		if perr != nil {
-			logger.Warn("New: sandbox provisioner init failed", "kind", kinds[0], "err", perr)
-		} else {
-			provisioner = p
-			logger.Info("New: sandbox provisioner ready", "kind", kinds[0])
-		}
-	}
+	// if kinds := sandbox.HostSupportedProvisioners(); len(kinds) > 0 {
+	// 	p, perr := sandbox.NewProvisioner(kinds[0], nil, sandbox.ProvisionerOptions{})
+	// 	if perr != nil {
+	// 		logger.Warn("New: sandbox provisioner init failed", "kind", kinds[0], "err", perr)
+	// 	} else {
+	// 		provisioner = p
+	// 		logger.Info("New: sandbox provisioner ready", "kind", kinds[0])
+	// 	}
+	// }
 
 	ptySocketPath := ptydaemon.DefaultSocketPath()
 	ptyDaemon := ptyclients.NewUnixSocketClient(ptySocketPath)
@@ -1321,24 +1416,24 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		return fmt.Errorf("operator: init code agent: %w", err)
 	}
 
-	// Provision a sandbox runtime for this session when the provisioner is available.
-	var sbxRuntime *sandbox.SandboxRuntime
-	if o.provisioner != nil {
-		workDir := string(agent.WorkspaceDir)
-		cfg := defaults.SandboxConfig(provider, workDir)
-		configDir := sandboxConfigDir(workDir, agent.Name)
-		rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
-			ID:        agent.ID,
-			ConfigDir: configDir,
-			Config:    cfg,
-		})
-		if sbxErr != nil {
-			logger.Warn("startAgentSession: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
-		} else {
-			sbxRuntime = &rt
-			logger.Debug("startAgentSession: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
-		}
-	}
+	// Sandbox runtime provisioning disabled — uncomment to re-enable.
+	// var sbxRuntime *sandbox.SandboxRuntime
+	// if o.provisioner != nil {
+	// 	workDir := string(agent.WorkspaceDir)
+	// 	cfg := defaults.SandboxConfig(provider, workDir)
+	// 	configDir := sandboxConfigDir(workDir, agent.Name)
+	// 	rt, sbxErr := o.provisioner.Create(sandbox.CreateSandboxParams{
+	// 		ID:        agent.ID,
+	// 		ConfigDir: configDir,
+	// 		Config:    cfg,
+	// 	})
+	// 	if sbxErr != nil {
+	// 		logger.Warn("startAgentSession: sandbox provision failed", "agentID", agent.ID, "err", sbxErr)
+	// 	} else {
+	// 		sbxRuntime = &rt
+	// 		logger.Debug("startAgentSession: sandbox runtime provisioned", "agentID", agent.ID, "provider", provider, "configDir", configDir)
+	// 	}
+	// }
 
 	requestedSessionID = strings.TrimSpace(requestedSessionID)
 	createID := agent.ID
@@ -1353,7 +1448,6 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		WorkDir:   string(agent.WorkspaceDir),
 		SessionID: requestedSessionID,
 		Envs:      envs,
-		RunTime:   sbxRuntime,
 	})
 	if err != nil {
 		return fmt.Errorf("operator: create session for agent %q: %w", agent.ID, err)

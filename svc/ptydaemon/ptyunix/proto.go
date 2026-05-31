@@ -41,6 +41,7 @@ type SessionEntry struct {
 	Status    string  `json:"status"`
 	StartedAt *string `json:"started_at,omitempty"`
 	StoppedAt *string `json:"stopped_at,omitempty"`
+	PID       int     `json:"pid,omitempty"`
 }
 
 // AttachedProcess describes a OS process that currently holds the PTY master fd.

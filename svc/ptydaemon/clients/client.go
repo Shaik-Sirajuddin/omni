@@ -53,6 +53,7 @@ type PTYTerminalInfo struct {
 	Status    string     `json:"status"`
 	StartedAt time.Time  `json:"started_at"`
 	StoppedAt *time.Time `json:"stopped_at,omitempty"`
+	PID       int        `json:"pid,omitempty"`
 }
 
 // New returns a Client selected by the OMNI_PTY_CLIENT environment variable.

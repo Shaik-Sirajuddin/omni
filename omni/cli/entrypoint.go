@@ -323,8 +323,8 @@ func (c *DefaultCli) newDoctorCommand() *cobra.Command {
 	}
 
 	doctorCmd.AddCommand(c.newDoctorHooksCommand())
-	doctorCmd.AddCommand(c.newDoctorCheckCommand())
-	doctorCmd.AddCommand(c.newDoctorInstallCommand())
+	// doctorCmd.AddCommand(c.newDoctorCheckCommand())
+	// doctorCmd.AddCommand(c.newDoctorInstallCommand())
 	doctorCmd.AddCommand(c.newDoctorTerminalCommand())
 	return doctorCmd
 }

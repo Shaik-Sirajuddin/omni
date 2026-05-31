@@ -19,14 +19,13 @@ services:
       - omni-persist:/var/lib/omni-root
       - omni-auth:/root/.config
       - omni-data:/root/.local/share/memory
-      - ./local/.bash_history:/root/.bash_history
       - ./local/agents/test-claude-1:/build/memory/agents/test-claude-1  # e2e test agent workspace
       - ./local/agents/tests-claude-2:/build/memory/agents/tests-claude-2 # e2e test agent workspace
       - agent-claude:/root/.claude
       - agent-codex:/root/.codex
-      - ./local/.codex/auth.json:/root/.codex/auth.json:ro
+      - ./local/shared/.codex/auth.json:/root/.codex/auth.json:ro
       - agent-gemini:/root/.gemini
-      - ./local/.gemini/antigravity-cli/antigravity-oauth-token:/root/.gemini/antigravity-cli/antigravity-oauth-token
+      - ./local/shared/.gemini/antigravity-cli/antigravity-oauth-token:/root/.gemini/antigravity-cli/antigravity-oauth-token
       - agent-agy:/root/.agy
     environment:
       # self-MCP wiring: codex reads these at request time for tunnel-mcp HTTP headers
@@ -34,7 +33,7 @@ services:
       AXO_LINK_MCP_SENDER_ID: ${AXO_LINK_MCP_SENDER_ID:-}
       AXO_LINK_MCP_AGENT_WORKSPACE: ${AXO_LINK_MCP_AGENT_WORKSPACE:-/build}
     env_file:
-      - path: ./local/.env.docker
+      - path: ./local/shared/.env.docker
         required: false
     stop_signal: SIGRTMIN+3          # clean systemd shutdown
     stop_grace_period: 15s
