@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
@@ -277,6 +278,53 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 	return nil
 }
 
+const (
+	// ptyReadinessPollInterval is how often we poll GetSession while waiting for the PTY to become active.
+	ptyReadinessPollInterval = 50 * time.Millisecond
+	// ptyReadinessPollTimeout is the maximum time to wait for the PTY to report status=active.
+	ptyReadinessPollTimeout = 5 * time.Second
+	// ptyReadinessGrace is the extra wait after status=active before firing exec, giving the
+	// agent TUI time to render its prompt and start accepting input.
+	ptyReadinessGrace = 250 * time.Millisecond
+	// ptyRecentStartThreshold: a session started within this window is treated as "just started"
+	// and receives the readiness grace even when the caller did not trigger the resume.
+	ptyRecentStartThreshold = 3 * time.Second
+)
+
+// ptySessionLive checks whether a PTY session is active using a two-step probe:
+//  1. MetaAttached — fast path; returns immediately when the daemon has a registered process.
+//  2. Get fallback — handles the case where registration was skipped (connector did not return
+//     ProcessID), checking the raw daemon status instead.
+//
+// Returns (active, recentlyStarted). recentlyStarted is true when the session started within
+// ptyRecentStartThreshold — the caller should then apply a readiness grace before sending exec.
+func ptySessionLive(d ptyclients.Client, agentID, sessionID string) (active, recentlyStarted bool) {
+	if count, err := d.MetaAttached(sessionID); err == nil && count >= 1 {
+		return true, false
+	}
+	info, err := d.Get(agentID, sessionID)
+	if err != nil || info == nil || info.Status != "active" {
+		return false, false
+	}
+	return true, time.Since(info.StartedAt) < ptyRecentStartThreshold
+}
+
+// waitPTYReady polls until the session reports status=active, then sleeps a short grace period
+// so the agent TUI has time to initialise before the exec payload arrives.
+// A timeout error is non-fatal — the caller should log and proceed.
+func waitPTYReady(d ptyclients.Client, agentID, sessionID string) error {
+	deadline := time.Now().Add(ptyReadinessPollTimeout)
+	for time.Now().Before(deadline) {
+		info, err := d.Get(agentID, sessionID)
+		if err == nil && info != nil && info.Status == "active" {
+			time.Sleep(ptyReadinessGrace)
+			return nil
+		}
+		time.Sleep(ptyReadinessPollInterval)
+	}
+	return fmt.Errorf("PTY session %q did not become active within %v", sessionID, ptyReadinessPollTimeout)
+}
+
 func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*operator.ExecInSessionResult, error) {
 	agent, ca, err := o.codeAgentForAgentID(params.AgentID)
 	if err != nil {
@@ -297,12 +345,14 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		sessionID = strings.TrimSpace(session.Id)
 	}
 
-	// Check whether the session is currently attached via the pty daemon.
+	// Check whether the session is currently active via the pty daemon.
+	// Option C: MetaAttached is the fast path; if it returns 0, fall back to Get so that
+	// sessions which are running but not registered (connector did not return ProcessID)
+	// are not incorrectly auto-resumed a second time.
 	sessionActive := false
+	sessionNeedsGrace := false
 	if o.ptyDaemon != nil {
-		if count, err := o.ptyDaemon.MetaAttached(sessionID); err == nil {
-			sessionActive = count >= 1
-		}
+		sessionActive, sessionNeedsGrace = ptySessionLive(o.ptyDaemon, agent.ID, sessionID)
 	}
 
 	if !sessionActive {
@@ -319,10 +369,20 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		}); err != nil {
 			return nil, fmt.Errorf("operator: exec in session: auto-resume: %w", err)
 		}
+		sessionNeedsGrace = true
 		// Re-init ca after resume since the connector instance may be stale.
 		_, ca, err = o.codeAgentForAgentID(params.AgentID)
 		if err != nil {
 			return nil, fmt.Errorf("operator: exec in session: re-init after resume: %w", err)
+		}
+	}
+
+	// Option B: when a resume just happened or the session was started very recently by an
+	// external caller (e.g. CLI --resume), poll until the PTY process is confirmed active then
+	// wait a grace period so the agent TUI finishes initialising before exec input arrives.
+	if sessionNeedsGrace && o.ptyDaemon != nil {
+		if err := waitPTYReady(o.ptyDaemon, agent.ID, sessionID); err != nil {
+			logger.Warn("ExecInSession: PTY readiness wait timed out", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 		}
 	}
 
