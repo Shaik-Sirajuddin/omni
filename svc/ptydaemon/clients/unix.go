@@ -532,6 +532,12 @@ func forceRedraw(ptmx *os.File) {
 		ptylog.Warn("redraw-debug: GetsizeFull failed (not a tty?)", "err", err)
 		return
 	}
+	if size.Rows == 0 || size.Cols == 0 {
+		// No real window size (e.g. a harness PTY without stty/winsize). A 0-size
+		// resize is meaningless and would never trigger a repaint — skip it.
+		ptylog.Warn("redraw-debug: skipping forced repaint — terminal has no size", "rows", size.Rows, "cols", size.Cols)
+		return
+	}
 	nudge := *size
 	if nudge.Rows > 1 {
 		nudge.Rows--
