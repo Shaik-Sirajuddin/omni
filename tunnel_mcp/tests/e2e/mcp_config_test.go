@@ -32,6 +32,8 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 	_, logBuf := captureLog(t, cfg)
 	time.Sleep(300 * time.Millisecond)
 
+	// This path assumes execution inside the CI docker container which runs as root.
+	// For local development testing outside the container, this would need to point to ~/.claude.json
 	const claudeGlobalCfg = "/root/.claude.json"
 	const testServerName = "e2e-mcp-roundtrip-test"
 

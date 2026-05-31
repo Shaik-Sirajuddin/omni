@@ -11,6 +11,9 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 )
 
+// These mutexes are package-level because they protect global filesystem resources
+// (~/.mcp.json and ~/.agy/settings.json). Multiple agyAgent instances within the same
+// process must synchronize writes to these shared files to prevent data corruption.
 var (
 	mcpJsonMu     sync.RWMutex
 	agySettingsMu sync.RWMutex
