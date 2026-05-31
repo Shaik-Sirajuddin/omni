@@ -438,7 +438,29 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 		}
 		done <- struct{}{}
 	}()
-	go func() { _, _ = io.Copy(os.Stdout, ptmx); done <- struct{}{} }()
+	go func() {
+		// redraw-debug: log when the child first emits output, relative to the
+		// SIGWINCH nudge above. Tells us whether claude painted at all after
+		// attach (and when) vs only after a keypress.
+		buf := make([]byte, 32*1024)
+		first := true
+		for {
+			n, rerr := ptmx.Read(buf)
+			if n > 0 {
+				if first {
+					ptylog.Info("redraw-debug: first child output received", "bytes", n)
+					first = false
+				}
+				if _, werr := os.Stdout.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		done <- struct{}{}
+	}()
 	select {
 	case <-ctx.Done():
 	case <-done:
