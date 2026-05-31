@@ -38,11 +38,18 @@ func GetDefaultDB() (*sql.DB, error) {
 // GetDB returns the singleton SQLite message-store connection, applying schema on first call.
 func GetDB(path string) (*sql.DB, error) {
 	once.Do(func() {
-		conn, err := sql.Open("sqlite", path)
+		// _busy_timeout=5000: retry for up to 5 s before returning SQLITE_BUSY.
+		// _journal_mode=WAL: allows concurrent readers while a writer holds the lock.
+		dsn := path + "?_busy_timeout=5000&_journal_mode=WAL"
+		conn, err := sql.Open("sqlite", dsn)
 		if err != nil {
 			dbErr = err
 			return
 		}
+		// Single writer connection prevents go/database/sql from opening a
+		// second connection that would bypass the in-process mutex and contend
+		// on the file lock.
+		conn.SetMaxOpenConns(1)
 		if err := applySchema(conn); err != nil {
 			dbErr = err
 			conn.Close()

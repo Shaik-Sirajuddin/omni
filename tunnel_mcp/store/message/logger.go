@@ -1,5 +1,9 @@
 package message
 
-import pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+import (
+	"log/slog"
 
-var logger = pkglog.NewLogger("component", "store-message")
+	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+)
+
+var logger = pkglog.NewLoggerWithLevel("component", "store-message", slog.LevelError)

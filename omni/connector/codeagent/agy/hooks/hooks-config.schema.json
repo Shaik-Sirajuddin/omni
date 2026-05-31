@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "agy-code-hooks-config",
+  "description": "Schema for hooks in Agy Code hooks.json. Config paths: global=~/.gemini/config/hooks.json, project=.agents/hooks.json",
+  "type": "object",
+  "properties": {
+    "hooks": {
+      "type": "object",
+      "description": "Map of hook event names to arrays of hook matchers",
+      "properties": {
+        "SessionStart": { "$ref": "#/definitions/HookMatcherList" },
+        "InstructionsLoaded": { "$ref": "#/definitions/HookMatcherList" },
+        "UserPromptSubmit": { "$ref": "#/definitions/HookMatcherList" },
+        "PreToolUse": { "$ref": "#/definitions/HookMatcherList" },
+        "PermissionRequest": { "$ref": "#/definitions/HookMatcherList" },
+        "PermissionDenied": { "$ref": "#/definitions/HookMatcherList" },
+        "PostToolUse": { "$ref": "#/definitions/HookMatcherList" },
+        "PostToolUseFailure": { "$ref": "#/definitions/HookMatcherList" },
+        "Notification": { "$ref": "#/definitions/HookMatcherList" },
+        "SubagentStart": { "$ref": "#/definitions/HookMatcherList" },
+        "SubagentStop": { "$ref": "#/definitions/HookMatcherList" },
+        "TaskCreated": { "$ref": "#/definitions/HookMatcherList" },
+        "TaskCompleted": { "$ref": "#/definitions/HookMatcherList" },
+        "Stop": { "$ref": "#/definitions/HookMatcherList" },
+        "StopFailure": { "$ref": "#/definitions/HookMatcherList" },
+        "PreCompact": { "$ref": "#/definitions/HookMatcherList" },
+        "PostCompact": { "$ref": "#/definitions/HookMatcherList" },
+        "FileChanged": { "$ref": "#/definitions/HookMatcherList" },
+        "CwdChanged": { "$ref": "#/definitions/HookMatcherList" },
+        "WorktreeCreate": { "$ref": "#/definitions/HookMatcherList" },
+        "WorktreeRemove": { "$ref": "#/definitions/HookMatcherList" },
+        "Elicitation": { "$ref": "#/definitions/HookMatcherList" },
+        "ElicitationResult": { "$ref": "#/definitions/HookMatcherList" },
+        "SessionEnd": { "$ref": "#/definitions/HookMatcherList" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "HookMatcherList": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/HookMatcher" }
+    },
+    "HookMatcher": {
+      "type": "object",
+      "properties": {
+        "matcher": {
+          "type": "string",
+          "description": "Regex pattern to match tool_name, file path, or other event-specific field"
+        },
+        "hooks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/HookDefinition" }
+        }
+      },
+      "required": ["hooks"]
+    },
+    "HookDefinition": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": ["command", "http"],
+          "type": "string"
+        },
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute (type=command)"
+        },
+        "url": {
+          "type": "string",
+          "description": "HTTP endpoint URL (type=http)"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in seconds"
+        }
+      },
+      "required": ["type"]
+    }
+  }
+}

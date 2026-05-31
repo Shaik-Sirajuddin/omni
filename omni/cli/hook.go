@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	codexconnector "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
 	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
 	"github.com/spf13/cobra"
@@ -44,7 +44,12 @@ func (c *DefaultCli) newHookCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			payload, err := json.Marshal(result)
+			payload, err := codexconnector.MarshalHookOutput(codexconnector.HookOutput{
+				Continue:       result.Continue,
+				StopReason:     result.StopReason,
+				SuppressOutput: result.SuppressOutput,
+				SystemMessage:  result.SystemMessage,
+			})
 			if err != nil {
 				return fmt.Errorf("marshal hook result: %w", err)
 			}

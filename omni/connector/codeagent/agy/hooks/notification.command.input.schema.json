@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "notification.command.input",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": { "type": ["string", "null"] },
+    "PermissionMode": {
+      "enum": ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "session_id": { "type": "string" },
+    "transcript_path": { "$ref": "#/definitions/NullableString" },
+    "cwd": { "type": "string" },
+    "hook_event_name": { "const": "Notification", "type": "string" },
+    "permission_mode": { "$ref": "#/definitions/PermissionMode" },
+    "model": { "type": "string" },
+    "message": { "type": "string", "description": "Notification message text" },
+    "title": { "type": "string", "description": "Notification title" }
+  },
+  "required": ["session_id", "transcript_path", "cwd", "hook_event_name", "permission_mode", "model", "message"]
+}

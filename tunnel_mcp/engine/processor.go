@@ -7,6 +7,7 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/mcp/engine/hook"
 	omnicli "github.com/Shaik-Sirajuddin/memory/mcp/engine/impl/cli"
+	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/session"
 	"gopkg.in/yaml.v3"
@@ -29,7 +30,7 @@ const statusQueued = message.Status("queued")
 // ReplyService manages the full reply lifecycle for a delivered message.
 // The concrete implementation lives in the server layer and is wired via SetReplyService.
 type ReplyService interface {
-	SendReply(ctx context.Context, msg *message.Message, fromAgentID string) error
+	SendReply(ctx context.Context, msg *message.Message, fromAgentID, fromAgentName string) error
 }
 
 // AgentWorkspace exposes the engine's current workspace for a sender agent.
@@ -59,6 +60,7 @@ type MessageRef struct {
 type ProcessingEngine struct {
 	state          *EngineState
 	msgStore       message.MessageStore
+	agentStore     agents.AgentStore
 	omni           OmniCLI
 	mcp            *MCPClientRegistry
 	syncServer     *SyncServer
@@ -99,9 +101,14 @@ func WithDeliveryWindow(d time.Duration) Option {
 
 // New creates a ProcessingEngine backed by msgStore.
 func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
+	agentStore, err := agents.GetStore()
+	if err != nil {
+		logger.Error("engine: failed to init agent store", "err", err)
+	}
 	e := &ProcessingEngine{
 		state:          newEngineState(),
 		msgStore:       msgStore,
+		agentStore:     agentStore,
 		omni:           omnicli.New("omni"),
 		mcp:            newMCPClientRegistry(),
 		socketPath:     DefaultSyncSocketPath,
@@ -238,9 +245,19 @@ func (e *ProcessingEngine) hydrateState(ctx context.Context) {
 			logger.Warn("hydrate state: workspace not found", "agent_id", agentID, "err", err)
 		}
 
+		agentName := ""
+		if e.agentStore != nil {
+			if data, err := e.agentStore.GetAgent(agentID); err == nil && data.Info != nil {
+				agentName = data.Info.Name
+			} else if err != nil {
+				logger.Warn("hydrate state: agent name lookup failed", "agent_id", agentID, "err", err)
+			}
+		}
+
 		state := AgentState{
 			Agent: Agent{
 				AgentID:   agentID,
+				Name:      agentName,
 				Workspace: workspace,
 			},
 			Status: AgentStatusReady,
@@ -310,11 +327,53 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 	}
 }
 
+// bootstrapAgent loads an unknown agent into EngineState from the omni agent store.
+// Returns true if the agent is now known and ready to execute.
+func (e *ProcessingEngine) bootstrapAgent(agentID string) bool {
+	ctx := e.ctx
+	if e.agentStore == nil {
+		logger.Error("bootstrap agent: agent store not available", "agent_id", agentID)
+		return false
+	}
+	data, err := e.agentStore.GetAgent(agentID)
+	if err != nil || data.Info == nil {
+		logger.Error("bootstrap agent: agent not found in omni store", "agent_id", agentID, "err", err)
+		return false
+	}
+	workspace, err := e.msgStore.GetWorkspaceForAgent(ctx, agentID)
+	if err != nil {
+		logger.Warn("bootstrap agent: workspace not found, will use message workspace", "agent_id", agentID, "err", err)
+	}
+	e.state.SetAgent(agentID, AgentState{
+		Agent: Agent{
+			AgentID:   agentID,
+			Name:      data.Info.Name,
+			Workspace: workspace,
+		},
+		Status: AgentStatusReady,
+	})
+	e.state.SetPending(agentID, true)
+	logger.Info("bootstrap agent: loaded into state", "agent_id", agentID, "name", data.Info.Name)
+	return true
+}
+
 // executeLoop is the lifecycle-aware dispatch loop: checks interruption and running
 // state, then pick → mark queued → build prompt → exec.
 func (e *ProcessingEngine) executeLoop(agentID string) {
+	if agentID == "" {
+		logger.Error("execute loop: empty agent_id, skipping")
+		return
+	}
 	ctx := e.ctx
-	agentState, _ := e.state.GetAgent(agentID)
+	agentState, ok := e.state.GetAgent(agentID)
+
+	if !ok || agentState.Agent.Name == "" {
+		if !e.bootstrapAgent(agentID) {
+			logger.Error("execute loop: agent unknown and bootstrap failed, cannot exec", "agent_id", agentID)
+			return
+		}
+		agentState, _ = e.state.GetAgent(agentID)
+	}
 
 	if agentState.CodeSession.IsInterrupted {
 		logger.Info("execute loop: agent interrupted, holding delivery", "agent_id", agentID)
@@ -607,7 +666,8 @@ func (e *ProcessingEngine) routeReply(msg *message.Message, req AgentCallbackReq
 		logger.Warn("route reply: no reply service, reply dropped", "message_id", msg.ID)
 		return
 	}
-	if err := e.reply.SendReply(e.ctx, msg, req.AgentID); err != nil {
+	agentState, _ := e.state.GetAgent(req.AgentID)
+	if err := e.reply.SendReply(e.ctx, msg, req.AgentID, agentState.Agent.Name); err != nil {
 		logger.Error("route reply: send reply failed", "message_id", msg.ID, "err", err)
 	}
 }
@@ -757,7 +817,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 				}
 				// Query type: agent replies via tool call — skip SendReply.
 				if msg.RequestType != reqTypeQuery && e.reply != nil {
-					if err := e.reply.SendReply(ctx, msg, agentID); err != nil {
+					if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
 						logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
 					}
 				}

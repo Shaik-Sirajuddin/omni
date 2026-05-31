@@ -117,7 +117,7 @@ func New(workDir, model string, c codeagent.PTYClient, opts ...Option) (codeagen
 	// 	model = DefaultModel
 	// }
 
-	ver, _ := captureOutput(workDir, binPath, "--version")
+	ver, _ := captureOutput(workDir, nil, binPath, "--version")
 	ver = trimSpace(ver)
 	logger.Info("codex agent initialised", "workDir", workDir, "model", model, "version", ver)
 
@@ -179,7 +179,7 @@ func (a *codexAgent) Capabilities() (*codeagent.Capabilities, error) {
 	return &codeagent.Capabilities{
 		Hooks: &hooks.Capabilities{
 			PreToolUse: true, PostToolUse: true, PostToolUseFailure: true,
-			PreSessionStart: true, PostSessionStart: false,
+			SessionStart: true, SessionEnd: false,
 			PrePrompt: true, PostPrompt: false,
 		},
 		Streaming: true, MCPSupport: false, Worktrees: false, Subagents: false,
@@ -396,7 +396,7 @@ func looksLikeModelID(token string) bool {
 func (a *codexAgent) SupportedHooks() (*hooks.Capabilities, error) {
 	return &hooks.Capabilities{
 		PreToolUse: true, PostToolUse: true, PostToolUseFailure: true,
-		PreSessionStart: true, PostSessionStart: false,
+		SessionStart: true, SessionEnd: false,
 		PrePrompt: true, PostPrompt: false,
 	}, nil
 }

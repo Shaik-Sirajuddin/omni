@@ -10,83 +10,112 @@ import (
 )
 
 func runMigrations(db *sql.DB) error {
-	if err := ensureVersionTable(db); err != nil {
+	if err := ensureMigrationTable(db); err != nil {
 		return err
 	}
 
-	entries, err := fs.ReadDir(schemaFS, "schema/migrations")
+	files, err := fs.ReadDir(schemaFS, "schema/migrations")
 	if err != nil {
 		return nil
 	}
 
-	var versions []int
-	for _, e := range entries {
-		if !e.IsDir() {
+	var indexes []int
+	for _, f := range files {
+		if f.IsDir() {
 			continue
 		}
-		v, err := strconv.Atoi(e.Name())
+		name := strings.TrimSuffix(f.Name(), ".sql")
+		n, err := strconv.Atoi(name)
 		if err != nil {
 			continue
 		}
-		versions = append(versions, v)
+		indexes = append(indexes, n)
 	}
-	sort.Ints(versions)
+	sort.Ints(indexes)
 
-	for _, v := range versions {
-		dirPath := fmt.Sprintf("schema/migrations/%d", v)
-		files, err := fs.ReadDir(schemaFS, dirPath)
+	if len(indexes) == 0 {
+		return nil
+	}
+
+	initialized, err := isInitialized(db)
+	if err != nil {
+		return err
+	}
+
+	// Fresh install: base schema already has the final shape — stamp to max and skip.
+	if !initialized {
+		return stampAndInit(db, indexes[len(indexes)-1])
+	}
+
+	// Existing install: run each migration file beyond the current pointer.
+	pointer, err := getPointer(db)
+	if err != nil {
+		return err
+	}
+
+	for _, n := range indexes {
+		if n <= pointer {
+			continue
+		}
+		path := fmt.Sprintf("schema/migrations/%d.sql", n)
+		data, err := schemaFS.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		for _, f := range files {
-			if f.IsDir() || !strings.HasSuffix(f.Name(), ".sql") {
+		for _, stmt := range strings.Split(string(data), ";") {
+			stmt = strings.TrimSpace(stmt)
+			if stmt == "" {
 				continue
 			}
-			tableName := strings.TrimSuffix(f.Name(), ".sql")
-			current, err := getTableVersion(db, tableName)
-			if err != nil {
-				return err
+			if _, err := db.Exec(stmt); err != nil {
+				if isDuplicateColumnError(err) {
+					continue
+				}
+				return fmt.Errorf("migration %d: %w", n, err)
 			}
-			if current >= v {
-				continue
-			}
-			data, err := schemaFS.ReadFile(dirPath + "/" + f.Name())
-			if err != nil {
-				return err
-			}
-			if _, err := db.Exec(string(data)); err != nil {
-				return fmt.Errorf("migration v%d %s: %w", v, tableName, err)
-			}
-			if err := setTableVersion(db, tableName, v); err != nil {
-				return err
-			}
+		}
+		if err := setPointer(db, n); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func ensureVersionTable(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_versions (
-		table_name TEXT PRIMARY KEY,
-		version    INTEGER NOT NULL DEFAULT 0
+func isDuplicateColumnError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
+}
+
+func ensureMigrationTable(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migration (
+		pointer_value  INTEGER NOT NULL DEFAULT 0,
+		is_initialized INTEGER NOT NULL DEFAULT 0
 	)`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO schema_migration (pointer_value, is_initialized)
+		SELECT 0, 0 WHERE NOT EXISTS (SELECT 1 FROM schema_migration)`)
 	return err
 }
 
-func getTableVersion(db *sql.DB, tableName string) (int, error) {
+func isInitialized(db *sql.DB) (bool, error) {
 	var v int
-	err := db.QueryRow(`SELECT version FROM schema_versions WHERE table_name = ?`, tableName).Scan(&v)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
+	err := db.QueryRow(`SELECT is_initialized FROM schema_migration`).Scan(&v)
+	return v == 1, err
+}
+
+func getPointer(db *sql.DB) (int, error) {
+	var v int
+	err := db.QueryRow(`SELECT pointer_value FROM schema_migration`).Scan(&v)
 	return v, err
 }
 
-func setTableVersion(db *sql.DB, tableName string, version int) error {
-	_, err := db.Exec(
-		`INSERT INTO schema_versions (table_name, version) VALUES (?, ?)
-		 ON CONFLICT(table_name) DO UPDATE SET version = excluded.version`,
-		tableName, version,
-	)
+func setPointer(db *sql.DB, n int) error {
+	_, err := db.Exec(`UPDATE schema_migration SET pointer_value = ?`, n)
+	return err
+}
+
+func stampAndInit(db *sql.DB, max int) error {
+	_, err := db.Exec(`UPDATE schema_migration SET pointer_value = ?, is_initialized = 1`, max)
 	return err
 }

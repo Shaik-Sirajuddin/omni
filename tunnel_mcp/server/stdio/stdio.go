@@ -67,7 +67,7 @@ func (s *StdioServer) Serve(ctx context.Context, in io.Reader, out io.Writer) er
 		default:
 		}
 		payload := scanner.Bytes()
-		logger.Debug("stdio bridge frame received", "bytes", len(payload), "endpoint", s.endpoint, "socket_path", s.socketPath)
+		logger.Debug("stdio bridge frame received", "bytes", len(payload), "endpoint", s.endpoint, "socket_path", s.socketPath, "payload", string(payload))
 		resp, err := s.Forward(ctx, payload)
 		if err != nil {
 			logger.Error("stdio bridge forward failed", "err", err, "bytes", len(payload), "endpoint", s.endpoint, "socket_path", s.socketPath)
@@ -159,7 +159,7 @@ func encodeBridgeError(err error) []byte {
 }
 
 func defaultUnixSocketPath() string {
-	return filepath.Join("/run", "omni-"+currentUsername(), "mcp.sock")
+	return filepath.Join("/run", "omni-"+currentUsername(), "service.sock")
 }
 
 func currentUsername() string {

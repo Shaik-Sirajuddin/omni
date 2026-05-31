@@ -58,7 +58,7 @@ func (s *requestStore) all() map[string]requestRecord {
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	host := envOr("HOOK_OPERATOR_TEST_CLIENT_HOST", "127.0.0.1")
-	port := envOr("HOOK_OPERATOR_TEST_CLIENT_PORT", "18080")
+	port := envOr("HOOK_OPERATOR_TEST_CLIENT_PORT", "18081")
 	addr := net.JoinHostPort(host, port)
 
 	store := newRequestStore()

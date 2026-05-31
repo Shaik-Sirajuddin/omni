@@ -59,6 +59,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/list-agents", h.handleListAgents)
 	mux.HandleFunc("/list-teams", h.handleListTeams)
 	mux.HandleFunc("/message", h.handleMessage)
+	mux.HandleFunc("/query-result", h.handleQueryResult)
+	mux.HandleFunc("/query-result-batch", h.handleQueryResultBatch)
 	mux.HandleFunc("/agent-interrupt", h.handleAgentInterrupt)
 	mux.HandleFunc("/agent-resume", h.handleAgentResume)
 	mux.HandleFunc("/check-status", h.handleCheckStatus)
@@ -230,6 +232,50 @@ func (h *Handler) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) handleQueryResult(w http.ResponseWriter, r *http.Request) {
+	sender, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req service.QueryResultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	resp, err := h.service.QueryResult(r.Context(), sender, req.Item)
+	if err != nil {
+		writeError(w, service.StatusFromError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+func (h *Handler) handleQueryResultBatch(w http.ResponseWriter, r *http.Request) {
+	sender, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req service.QueryResultBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	resp, err := h.service.QueryResultBatch(r.Context(), sender, req.Items)
+	if err != nil {
+		writeError(w, service.StatusFromError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (h *Handler) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {

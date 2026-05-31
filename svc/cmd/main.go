@@ -10,15 +10,17 @@ import (
 	"syscall"
 
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
 var Version = "dev"
 
 func main() {
-	disablePTY := flag.Bool("disable-ptydaemon", false, "Disable the PTY daemon service")
-	disableHook := flag.Bool("disable-hook-operator", false, "Disable the hook operator service")
-	disableMCP := flag.Bool("disable-axolink-mcp", false, "Disable the Axolink MCP service")
-	printVersion := flag.Bool("version", false, "Print version and exit")
+	disablePTY        := flag.Bool("disable-ptydaemon", false, "Disable the PTY daemon service")
+	disableHook       := flag.Bool("disable-hook-operator", false, "Disable the hook operator service")
+	disableMCP        := flag.Bool("disable-axolink-mcp", false, "Disable the Axolink MCP service")
+	disableConfigSync := flag.Bool("disable-config-sync", false, "Disable the config sync service")
+	printVersion      := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
 	if *printVersion {
@@ -33,15 +35,20 @@ func main() {
 	mux := &ServiceMux{
 		PTYDaemon: PTYDaemonConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disablePTY},
-			SocketPath:    envOr("OMNI_PTY_SOCKET", "/run/omni-"+username+"/omni-pty.sock"),
+			SocketPath:    sockpath.PTY(),
 			DBPath:        envOr("PTYDAEMON_DB", "/var/lib/omni-"+username+"/ptydaemon.db"),
 		},
 		HookOperator: HookOperatorConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disableHook},
-			SocketPath:    envOr("HOOK_OPERATOR_SOCKET", "/run/omni-"+username+"/hook-operator.sock"),
+			SocketPath:    sockpath.HookOperator(),
 		},
 		AxolinkMCP: AxolinkMCPConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disableMCP},
+		},
+		ConfigSync: ConfigSyncConfig{
+			ServiceConfig: ServiceConfig{Enabled: !*disableConfigSync},
+			WorkspaceDir:  envOr("CONFIG_SYNC_AGY_WORKSPACE_DIR", ""),
+			WatchSettings: true,
 		},
 	}
 

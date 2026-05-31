@@ -18,13 +18,8 @@ const (
 	Claude codeagent.Provider = "claude"
 )
 
-// PTY bracketed-paste and submit constants for ExecInSession.
-const (
-	submitKey  = "\x1b[13;2u" // CSI-u Shift+Enter
-	ctrlU      = "\x15"
-	pasteStart = "\x1b[200~"
-	pasteEnd   = "\x1b[201~"
-)
+// submitKey is sent by ExecInSession after the prompt to trigger submission.
+const submitKey = "\r"
 
 // interactiveStdin/Stdout/Stderr are the I/O streams used by Resume.
 // They are package-level vars so tests can substitute non-TTY writers.
@@ -188,7 +183,7 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 		command := append([]string{binPath}, args...)
 		started := false
 		if info == nil || info.Status != "active" {
-			if err := client.Start(resumeID, command, env, workDir); err != nil {
+			if err := client.Start(resumeID, command, env, workDir, submitKey); err != nil {
 				return nil, fmt.Errorf("claude: resume: pty start: %w", err)
 			}
 			started = true
@@ -199,7 +194,11 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 		if started {
 			logger.Info("Resume: PTY daemon session started", "sessionID", resumeID)
 		} else {
-			logger.Info("Resume: attached to active PTY daemon session", "sessionID", resumeID)
+			logger.Info("Resume: reusing active PTY daemon session", "sessionID", resumeID)
+		}
+		if p.Detached {
+			logger.Info("Resume: leaving PTY daemon session detached", "sessionID", resumeID)
+			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resumeID}, nil
 		}
 		logger.Info("Resume: attaching PTY daemon session", "sessionID", resumeID)
 		done := make(chan error, 1)
@@ -283,7 +282,6 @@ func (a *claudeAgent) ExecInSession(p codeagent.ExecInSessionParams) (*codeagent
 	sessionID := a.sessionID
 	a.mu.RUnlock()
 
-	payload := buildExecPayload(p.Prompt)
 	if p.SessionID != "" {
 		sessionID = p.SessionID
 	}
@@ -293,7 +291,7 @@ func (a *claudeAgent) ExecInSession(p codeagent.ExecInSessionParams) (*codeagent
 	if client == nil {
 		return nil, fmt.Errorf("claude: ExecInSession: no active PTY session")
 	}
-	if err := client.Exec(sessionID, string(payload)); err != nil {
+	if err := client.Exec(sessionID, p.Prompt); err != nil {
 		return nil, fmt.Errorf("claude: ExecInSession: session not live: %w", err)
 	}
 
@@ -437,12 +435,6 @@ func (a *claudeAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult,
 // ============================================================
 // PTY helpers
 // ============================================================
-
-// buildExecPayload constructs the bracketed-paste sequence used by ExecInSession
-// to inject a prompt into a live PTY without triggering mid-paste interpretation.
-func buildExecPayload(prompt string) []byte {
-	return []byte(ctrlU + pasteStart + prompt + pasteEnd + submitKey)
-}
 
 // ============================================================
 // Arg builders

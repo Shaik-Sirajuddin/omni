@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 
+	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/operator"
 )
@@ -44,6 +45,14 @@ type SendGroupMessageResponse struct {
 type QueryResultItem struct {
 	MessageID string `json:"message_id"`
 	Response  string `json:"response"`
+}
+
+type QueryResultRequest struct {
+	Item QueryResultItem `json:"item"`
+}
+
+type QueryResultBatchRequest struct {
+	Items []QueryResultItem `json:"results"`
 }
 
 type QueryResultResponse struct {
@@ -106,4 +115,11 @@ type AgentStatusResponse struct {
 type ListTeamsResponse struct {
 	Teams []*operator.TeamInfo `json:"teams"`
 	Count int                  `json:"count"`
+}
+
+type MessageResponse = message.Message
+
+type ListAgentsResponse struct {
+	Agents []*agents.AgentInfo `json:"agents"`
+	Count  int                 `json:"count"`
 }

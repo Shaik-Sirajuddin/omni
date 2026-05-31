@@ -1,14 +1,17 @@
 package hookoperator
 
 import (
+	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	agy "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
+	agyhooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/hooks"
 	claude "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
 	claudehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude/hooks"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	codex "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 )
 
 // agentRegistry owns one HookTransformer per provider, initialized at startup.
 // Only providers that have an in-process HookTransformer implementation are held here.
-// File-based providers (codex, gemini) write hooks directly to disk and are not tracked.
+// File-based providers (gemini) write hooks directly to disk and are not tracked.
 type agentRegistry struct {
 	transformers map[codeagent.Provider]codeagent.HookTransformer
 	reg          *registrar
@@ -27,9 +30,15 @@ func newAgentRegistry(reg *registrar) *agentRegistry {
 func (ar *agentRegistry) init() {
 	providers := map[codeagent.Provider]codeagent.HookTransformer{
 		claude.Claude: claudehooks.New(),
+		agy.Agy:       agyhooks.New(),
+		codex.Codex:   codex.NewHookTransformer(),
 	}
 	for provider, transformer := range providers {
-		_ = ar.reg.apply(transformer)
+		if err := ar.reg.apply(transformer); err != nil {
+			logger.Error("hook-operator: agent registry: apply failed", "provider", provider, "err", err)
+			continue
+		}
+		logger.Info("hook-operator: agent registry: hooks registered", "provider", provider)
 		ar.transformers[provider] = transformer
 	}
 }

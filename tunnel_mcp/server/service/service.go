@@ -12,9 +12,12 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/operator"
+	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
 	"github.com/google/uuid"
 )
+
+var logger = pkglog.NewLogger("component", "service")
 
 type messageArriver interface {
 	MessageArrived(context.Context, string, string)
@@ -72,18 +75,23 @@ func New(msgStore message.MessageStore, delivery messageArriver, agentStore agen
 }
 
 func (s *Service) SendMessage(ctx context.Context, sender SenderSpec, payload PayloadMessage) (SendMessageResponse, error) {
+	logger.Debug("send_message called", "sender_id", sender.ID, "sender_type", sender.Kind, "sender_workspace", sender.Workspace, "to_id", payload.To.ID, "to_name", payload.To.Name, "to_type", payload.To.Type, "to_workspace", payload.To.Workspace, "workspace", payload.Workspace, "request_type", payload.RequestType, "prompt_bytes", len(payload.Prompt))
 	msg, err := s.buildMessage(ctx, sender, payload, "")
 	if err != nil {
+		logger.Debug("send_message build failed", "sender_id", sender.ID, "err", err)
 		return SendMessageResponse{}, err
 	}
 	if err := s.msgStore.InsertMessage(ctx, msg); err != nil {
+		logger.Debug("send_message insert failed", "sender_id", sender.ID, "err", err)
 		return SendMessageResponse{}, InternalError(err)
 	}
 	s.notifyArrived(ctx, msg.From, msg.To)
+	logger.Debug("send_message succeeded", "sender_id", sender.ID, "message_id", msg.ID, "from", msg.From, "to", msg.To, "workspace", msg.Workspace)
 	return SendMessageResponse{MessageID: msg.ID}, nil
 }
 
 func (s *Service) SendGroupMessage(ctx context.Context, sender SenderSpec, payloads []PayloadMessage) (SendGroupMessageResponse, error) {
+	logger.Debug("send_group_message called", "sender_id", sender.ID, "sender_type", sender.Kind, "sender_workspace", sender.Workspace, "count", len(payloads))
 	if len(payloads) == 0 {
 		return SendGroupMessageResponse{}, BadRequest("messages is required")
 	}
@@ -93,36 +101,44 @@ func (s *Service) SendGroupMessage(ctx context.Context, sender SenderSpec, paylo
 	for _, payload := range payloads {
 		msg, err := s.buildMessage(ctx, sender, payload, groupID)
 		if err != nil {
+			logger.Debug("send_group_message build failed", "sender_id", sender.ID, "err", err)
 			return SendGroupMessageResponse{}, err
 		}
 		msgs = append(msgs, msg)
 		ids = append(ids, msg.ID)
 	}
 	if err := s.msgStore.InsertMessagesGroup(ctx, groupID, msgs); err != nil {
+		logger.Debug("send_group_message insert failed", "sender_id", sender.ID, "group_id", groupID, "err", err)
 		return SendGroupMessageResponse{}, InternalError(err)
 	}
 	for _, msg := range msgs {
 		s.notifyArrived(ctx, msg.From, msg.To)
 	}
+	logger.Debug("send_group_message succeeded", "sender_id", sender.ID, "group_id", groupID, "count", len(ids))
 	return SendGroupMessageResponse{GroupID: groupID, MessageIDs: ids}, nil
 }
 
 func (s *Service) QueryResult(ctx context.Context, sender SenderSpec, item QueryResultItem) (QueryResultResponse, error) {
+	logger.Debug("query_result called", "sender_id", sender.ID, "sender_type", sender.Kind, "message_id", item.MessageID, "response_bytes", len(item.Response))
 	msg, original, resp, err := s.buildQueryResultMessage(ctx, sender, item, "")
 	if err != nil {
+		logger.Debug("query_result build failed", "sender_id", sender.ID, "message_id", item.MessageID, "err", err)
 		return QueryResultResponse{}, err
 	}
 	if err := s.msgStore.InsertMessage(ctx, msg); err != nil {
+		logger.Debug("query_result insert failed", "sender_id", sender.ID, "message_id", item.MessageID, "err", err)
 		return QueryResultResponse{}, InternalError(err)
 	}
 	if err := s.markQueryReplyReceived(ctx, original); err != nil {
 		return QueryResultResponse{}, err
 	}
 	s.notifyArrived(ctx, msg.From, msg.To)
+	logger.Debug("query_result succeeded", "sender_id", sender.ID, "reply_id", resp.MessageID, "responded_to", resp.RespondedTo)
 	return resp, nil
 }
 
 func (s *Service) QueryResultBatch(ctx context.Context, sender SenderSpec, items []QueryResultItem) (QueryResultBatchResponse, error) {
+	logger.Debug("query_result_batch called", "sender_id", sender.ID, "sender_type", sender.Kind, "count", len(items))
 	if len(items) == 0 {
 		return QueryResultBatchResponse{}, BadRequest("results is required")
 	}
@@ -367,6 +383,9 @@ func (s *Service) buildMessage(ctx context.Context, sender SenderSpec, payload P
 	to, workspace, err := s.resolveMessageTarget(ctx, sender, payload, targetType)
 	if err != nil {
 		return nil, BadRequest(err.Error())
+	}
+	if to == sender.ID {
+		return nil, BadRequest("cannot send message to self")
 	}
 	if strings.TrimSpace(payload.Prompt) == "" {
 		return nil, BadRequest("prompt is required")
@@ -705,6 +724,10 @@ func (s *Service) notifyArrived(ctx context.Context, from, to string) {
 		return
 	}
 	go s.delivery.MessageArrived(ctx, from, to)
+}
+
+func HTTPError(status int, msg string) error {
+	return ServiceError{status: status, err: fmt.Errorf("%s", msg)}
 }
 
 func BadRequest(msg string) error {

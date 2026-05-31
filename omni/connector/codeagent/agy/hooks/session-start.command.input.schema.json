@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "session-start.command.input",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": { "type": ["string", "null"] },
+    "PermissionMode": {
+      "enum": ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "session_id": { "type": "string" },
+    "transcript_path": { "$ref": "#/definitions/NullableString" },
+    "cwd": { "type": "string" },
+    "hook_event_name": { "const": "SessionStart", "type": "string" },
+    "permission_mode": { "$ref": "#/definitions/PermissionMode" },
+    "model": { "type": "string" },
+    "source": {
+      "enum": ["startup", "resume", "clear", "compact"],
+      "type": "string",
+      "description": "Reason the session started"
+    }
+  },
+  "required": ["session_id", "transcript_path", "cwd", "hook_event_name", "permission_mode", "model", "source"]
+}

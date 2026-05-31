@@ -4,13 +4,16 @@ go 1.26.1
 
 require (
 	github.com/Shaik-Sirajuddin/memory v1.1.0
-	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0-00010101000000-000000000000
+	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
+	github.com/Shaik-Sirajuddin/memory/svc/config_sync v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -26,7 +29,7 @@ require (
 	github.com/knadh/koanf/parsers/json v1.0.0 // indirect
 	github.com/knadh/koanf/providers/rawbytes v1.0.0 // indirect
 	github.com/knadh/koanf/v2 v2.3.4 // indirect
-	github.com/mark3labs/mcp-go v0.54.0 // indirect
+	github.com/mark3labs/mcp-go v0.54.1 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
@@ -63,6 +66,8 @@ replace (
 	github.com/Shaik-Sirajuddin/memory => ../../omni
 	github.com/Shaik-Sirajuddin/memory/mcp => ../../tunnel_mcp
 	github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
+	github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
+	github.com/Shaik-Sirajuddin/memory/svc/config_sync => ../config_sync
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator => ../hook-operator
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../ptydaemon
 )

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/mcp/server"
+	mcpapi "github.com/Shaik-Sirajuddin/memory/mcp/server/mcp"
+	"github.com/Shaik-Sirajuddin/memory/mcp/server/proxy"
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 )
 
@@ -78,8 +80,17 @@ func DefaultConfig() Config {
 func Run(ctx context.Context, cfg Config) error {
 	cfg = normalize(cfg)
 	if cfg.Transport == TransportStdio {
-		logger.Info("mcp stdio bridge starting", "interval", cfg.Interval.String(), "delivery_mode", cfg.DeliveryMode, "daemon_required", true, "addr", cfg.Addr, "path", cfg.HTTPPath)
-		return server.NewStdioBridge(mcpHTTPEndpoint(cfg.Addr, cfg.HTTPPath), "", bridgeHeaders(cfg)).Serve(ctx, cfg.Stdin, cfg.Stdout)
+		logger.Info("mcp stdio server starting", "sender_id", cfg.SenderID, "sender_type", cfg.SenderType, "service_bind", cfg.ServiceHTTPBind)
+		ps := proxy.New(cfg.ServiceAddr, cfg.ServiceUnixSocket, cfg.ServiceHTTPBind,
+			proxy.WithAuthToken(cfg.AuthToken),
+		)
+		return mcpapi.NewStdioHandler(ps,
+			mcpapi.WithStdioSenderInfo(mcpapi.SenderInfo{
+				ID:        cfg.SenderID,
+				Kind:      cfg.SenderType,
+				Workspace: cfg.AgentWorkspace,
+			}),
+		).StdioServer().Listen(ctx, cfg.Stdin, cfg.Stdout)
 	}
 	if cfg.Transport != TransportStreamableHTTP {
 		return fmt.Errorf("unsupported MCP transport %q", cfg.Transport)

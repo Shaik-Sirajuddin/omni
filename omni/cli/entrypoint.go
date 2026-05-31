@@ -24,6 +24,7 @@ import (
 	omnisandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
+	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
 	"github.com/knadh/koanf/providers/posflag"
 	"github.com/knadh/koanf/v2"
 	"github.com/spf13/cobra"
@@ -69,6 +70,7 @@ func EntrypointWithVersion(op operator.Operator, resolver config.OmniConfigResol
 	root.AddCommand(c.newTeamInitCommand())
 	root.AddCommand(c.newDoctorCommand())
 	root.AddCommand(c.newServerCommand())
+	root.AddCommand(c.newAxoLinkCommand())
 
 	c.root = root
 	return c
@@ -205,12 +207,16 @@ func (c *DefaultCli) newAgentCommand() *cobra.Command {
 	agentCmd.AddCommand(c.newAgentSandboxCommand())
 	agentCmd.AddCommand(c.newAgentPipeCommand())
 	agentCmd.AddCommand(c.newAgentExecCommand())
+	agentCmd.AddCommand(c.newAgentStopCommand())
+	agentCmd.AddCommand(c.newAgentDetachCommand())
 
 	return agentCmd
 }
 
 func (c *DefaultCli) newTeamInitCommand() *cobra.Command {
 	flags := config.ProvisionTeamInitFlags()
+	var teamName string
+	var remote string
 
 	cmd := &cobra.Command{
 		Use:   "team-init",
@@ -235,6 +241,8 @@ func (c *DefaultCli) newTeamInitCommand() *cobra.Command {
 			if err := c.operator.TeamInit(operator.TeamInitParams{
 				Workspace:      sandbox.WorkspaceDir(wd),
 				RepoURL:        resolved.RepoURL,
+				Name:           teamName,
+				Remote:         remote,
 				Layout:         resolved.Layout,
 				TerminalLayout: resolved.TerminalLayout,
 				Terminal:       resolved.Terminal,
@@ -254,6 +262,8 @@ func (c *DefaultCli) newTeamInitCommand() *cobra.Command {
 	cmd.Flags().String("layout", flags.Layout, "Path to provision YAML layout file")
 	cmd.Flags().String("t-layout", flags.TerminalLayout, "Path to terminal layout file (e.g. KDL for zellij)")
 	cmd.Flags().String("terminal", flags.Terminal, "Terminal multiplexer to launch (e.g. zellij)")
+	cmd.Flags().StringVar(&teamName, "name", "", "Team name (defaults to workspace folder basename)")
+	cmd.Flags().StringVar(&remote, "remote", "localhost", "Remote address this workspace belongs to")
 	return cmd
 }
 
@@ -533,6 +543,8 @@ func (c *DefaultCli) newTeamListCommand() *cobra.Command {
 
 func (c *DefaultCli) newTeamInitSubcommand() *cobra.Command {
 	flags := config.ProvisionTeamInitFlags()
+	var teamName string
+	var remote string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -557,6 +569,8 @@ func (c *DefaultCli) newTeamInitSubcommand() *cobra.Command {
 			if err := c.operator.TeamInit(operator.TeamInitParams{
 				Workspace:      sandbox.WorkspaceDir(wd),
 				RepoURL:        resolved.RepoURL,
+				Name:           teamName,
+				Remote:         remote,
 				Layout:         resolved.Layout,
 				TerminalLayout: resolved.TerminalLayout,
 				Terminal:       resolved.Terminal,
@@ -576,6 +590,8 @@ func (c *DefaultCli) newTeamInitSubcommand() *cobra.Command {
 	cmd.Flags().String("layout", flags.Layout, "Path to provision YAML layout file")
 	cmd.Flags().String("t-layout", flags.TerminalLayout, "Path to terminal layout file (e.g. KDL for zellij)")
 	cmd.Flags().String("terminal", flags.Terminal, "Terminal multiplexer to launch (e.g. zellij)")
+	cmd.Flags().StringVar(&teamName, "name", "", "Team name (defaults to workspace folder basename)")
+	cmd.Flags().StringVar(&remote, "remote", "localhost", "Remote address this workspace belongs to")
 	return cmd
 }
 
@@ -727,6 +743,7 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 	flags := config.ProvisionAgentResumeFlags()
 	var sessionID string
+	var detach bool
 
 	cmd := &cobra.Command{
 		Use:   "resume <name>",
@@ -747,6 +764,7 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 				Provider:      codeagent.Provider(resolved.Provider),
 				Model:         resolved.Model,
 				SessionID:     sessionID,
+				Detached:      detach,
 			})
 		},
 	}
@@ -756,6 +774,7 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 	cmd.Flags().StringP("provider", "p", flags.Provider, "Provider used only when --init_if_missing creates a new agent")
 	cmd.Flags().String("model", flags.Model, "Model used only when --init_if_missing creates a new agent")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start PTY daemon session and return immediately without attaching")
 	return cmd
 }
 
@@ -816,6 +835,10 @@ func (c *DefaultCli) newAgentDeleteCommand() *cobra.Command {
 				}
 				resolved.ID = id
 			}
+			_, _ = c.operator.StopSession(operator.StopSessionParams{
+				AgentID: resolved.ID,
+				Force:   true,
+			})
 			return c.operator.DeleteAgent(operator.DeleteAgentParams{ID: resolved.ID})
 		},
 	}
@@ -910,6 +933,7 @@ func (c *DefaultCli) newAgentPipeCommand() *cobra.Command {
 func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 	var prompt string
 	var sessionID string
+	var agentID string
 	var resume bool
 
 	cmd := &cobra.Command{
@@ -924,16 +948,25 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 				return errors.New("prompt is required")
 			}
 			name := args[0]
+			resolvedID := agentID
+			if resolvedID == "" {
+				id, err := c.resolveAgentIDByName("", name)
+				if err != nil {
+					return err
+				}
+				resolvedID = id
+			}
 			if resume {
 				if err := c.operator.ResumeAgent(operator.ResumeAgentParams{
 					Name:      name,
 					SessionID: sessionID,
+					Detached:  true,
 				}); err != nil {
 					return err
 				}
 			}
 			if _, err := c.operator.ExecInSession(operator.ExecInSessionParams{
-				AgentID:   name,
+				AgentID:   resolvedID,
 				SessionID: sessionID,
 				Prompt:    prompt,
 			}); err != nil {
@@ -946,8 +979,66 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to send")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
+	cmd.Flags().StringVar(&agentID, "id", "", "Agent UUID (bypasses name resolution)")
 	cmd.Flags().BoolVarP(&resume, "resume", "r", false, "Resume agent before sending prompt")
 	_ = cmd.MarkFlagRequired("prompt")
+	return cmd
+}
+
+func (c *DefaultCli) newAgentStopCommand() *cobra.Command {
+	var sessionID string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "stop <name>",
+		Short: "Stop an agent PTY session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c.operator == nil {
+				return errors.New("operator is required")
+			}
+			result, err := c.operator.StopSession(operator.StopSessionParams{
+				AgentID:   args[0],
+				SessionID: sessionID,
+				Force:     force,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "session stopped: %s\n", result.SessionID)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
+	cmd.Flags().BoolVar(&force, "force", false, "Stop even when a client is attached")
+	return cmd
+}
+
+func (c *DefaultCli) newAgentDetachCommand() *cobra.Command {
+	var sessionID string
+
+	cmd := &cobra.Command{
+		Use:   "detach <name>",
+		Short: "Detach an agent PTY session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c.operator == nil {
+				return errors.New("operator is required")
+			}
+			result, err := c.operator.DetachSession(operator.DetachSessionParams{
+				AgentID:   args[0],
+				SessionID: sessionID,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "session detached: %s\n", result.SessionID)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 	return cmd
 }
 
@@ -1052,6 +1143,18 @@ func (c *DefaultCli) newAgentSandboxSyncCommand() *cobra.Command {
 	cmd.Flags().StringP("provider", "p", flags.Provider, "Provider used to resolve sandbox defaults")
 	cmd.Flags().StringP("output", "o", flags.Output, "Output format: table|yaml|json")
 	return cmd
+}
+
+func (c *DefaultCli) newAxoLinkCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "axo-link",
+		Short: "Start the axo-link MCP service (stdio transport)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := runner.DefaultConfig()
+			cfg.Transport = runner.TransportStdio
+			return runner.Run(cmd.Context(), cfg)
+		},
+	}
 }
 
 func (c *DefaultCli) resolveAgentIDByName(workspace, name string) (string, error) {

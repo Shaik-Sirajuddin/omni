@@ -24,6 +24,13 @@ func NewLogger(key, component string) *slog.Logger {
 	return slog.New(multiHandler{handlers}).With(key, component)
 }
 
+// NewLoggerWithLevel is like NewLogger but forces a minimum log level regardless of env/config.
+func NewLoggerWithLevel(key, component string, level slog.Level) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: level, AddSource: level == slog.LevelDebug}
+	handlers := append([]slog.Handler{slog.NewTextHandler(os.Stderr, opts)}, activeHandlers()...)
+	return slog.New(multiHandler{handlers}).With(key, component)
+}
+
 func resolveLevel() slog.Level {
 	if os.Getenv("DEV") != "" {
 		return slog.LevelDebug

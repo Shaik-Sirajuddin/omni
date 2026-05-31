@@ -43,6 +43,10 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g @google/gemini-cli@${GEMINI_CLI_VERSION} \
     && ln -sf /usr/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-linux-x64/claude /usr/bin/claude
 
+# Agy (Antigravity CLI by Google) — installs to ~/.local/bin/agy
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+    && ln -sf /root/.local/bin/agy /usr/local/bin/agy
+
 # ── build omni binaries into image ────────────────────────────────────────────
 WORKDIR /build
 

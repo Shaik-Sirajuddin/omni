@@ -40,6 +40,7 @@ type ResumeSessionParams struct {
 	ID          string
 	ForkSession bool
 	SessionID   string
+	Detached    bool
 	Envs        []string
 	RunTime     *sandbox.SandboxRuntime
 }

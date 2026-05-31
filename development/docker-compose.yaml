@@ -4,26 +4,33 @@ services:
       context: ..
       dockerfile: development/docker/Dockerfile
     image: omni-dev:latest
-    container_name: omni-dev
     privileged: true                  # required for systemd PID 1
     tmpfs:
       - /run
       - /run/lock
       - /tmp
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/omni-root/omni-pty.sock"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+      start_period: 30s
     volumes:
       - omni-persist:/var/lib/omni-root
       - omni-auth:/root/.config
       - omni-data:/root/.local/share/memory
       - ./local/.bash_history:/root/.bash_history
+      - ./local/agents/test-claude-1:/build/memory/agents/test-claude-1  # e2e test agent workspace
+      - ./local/agents/tests-claude-2:/build/memory/agents/tests-claude-2 # e2e test agent workspace
       - agent-claude:/root/.claude
       - agent-codex:/root/.codex
+      - ./local/.codex/auth.json:/root/.codex/auth.json:ro
       - agent-gemini:/root/.gemini
+      - ./local/.gemini/antigravity-cli/antigravity-oauth-token:/root/.gemini/antigravity-cli/antigravity-oauth-token
+      - agent-agy:/root/.agy
     env_file:
       - path: ./.env.docker
         required: false
-    ports:
-      - "18062:18062"               # MCP streamable HTTP (agent clients)
-      - "18061:18061"               # pure HTTP service (optional TCP exposure)
     stop_signal: SIGRTMIN+3          # clean systemd shutdown
     stop_grace_period: 15s
 
@@ -34,3 +41,4 @@ volumes:
   agent-claude:
   agent-codex:
   agent-gemini:
+  agent-agy:

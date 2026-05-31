@@ -60,10 +60,11 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	}
 	workDir := a.workDir
 	model := a.model
+	env := mergeEnv(os.Environ(), p.Envs)
 	a.mu.Unlock()
 
 	// Verify the codex binary is reachable by running `codex --version`.
-	out, err := captureOutput(workDir, binPath, "--version")
+	out, err := captureOutput(workDir, env, binPath, "--version")
 	if err != nil {
 		return nil, fmt.Errorf("codex: create: binary unreachable: %w", err)
 	}
@@ -72,6 +73,7 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	// Verify authentication via `codex login status` (exit 0 = authenticated).
 	authCmd := exec.Command(binPath, "login", "status")
 	authCmd.Dir = workDir
+	authCmd.Env = env
 	if err := authCmd.Run(); err != nil {
 		logger.Warn("Create: user not authenticated", "err", err)
 		return nil, fmt.Errorf("codex: create: not authenticated — run 'codex login' first")
@@ -80,6 +82,11 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	// Persist model into .codex/config.toml so interactive sessions inherit it.
 	if syncErr := syncModelConfig(workDir, model); syncErr != nil {
 		logger.Warn("Create: could not sync model to config", "err", syncErr)
+	}
+
+	// Auto-approve tunnel_mcp tool calls so Codex never pauses for MCP approval.
+	if mcpErr := ensureMCPApprovalMode("tunnel_mcp"); mcpErr != nil {
+		logger.Warn("Create: could not set MCP approval mode", "err", mcpErr)
 	}
 
 	// If the caller supplies a prior session ID, attach to it by verifying codex
@@ -102,7 +109,7 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 		// Bootstrap a real codex session to obtain the actual codex session ID.
 		// Runs `codex exec . --json` and parses the thread_id from the first JSON line.
 		var bootstrapErr error
-		sessionID, bootstrapErr = bootstrapSession(workDir, binPath, model)
+		sessionID, bootstrapErr = bootstrapSession(workDir, binPath, model, env)
 		if bootstrapErr != nil || sessionID == "" {
 			// Non-fatal: fall back to the caller-supplied ID (or a generated one).
 			if p.ID != "" {
@@ -166,44 +173,50 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 //
 // The process is killed as soon as the thread_id is found so we don't wait
 // for the full exec to finish.
-func bootstrapSession(workDir, binPath, model string) (string, error) {
+func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	// No -m flag here: we only need the thread_id, and some models (e.g. o4-mini)
-	// are unsupported for certain account types and would cause codex to exit
-	// before emitting the thread.started line.
-	args := []string{"exec", ".", "--json", "-C", workDir}
-
+	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "-C", workDir}
 	logger.Info("bootstrapSession: running command", "bin", binPath, "args", args)
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
 	cmd.Dir = workDir
+	cmd.Env = env
+	cmd.Stderr = io.Discard
 
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("bootstrap: stdout pipe: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Poll output until we see the thread.started line or timeout.
-	id := ""
-	deadline := time.Now().Add(6 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
-		id = parseBootstrapSessionID(buf.String())
-		if id != "" {
-			break
+	// Read lines as they arrive — no polling, no buffering delay.
+	// Stop as soon as thread_id is found.
+	found := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if id := parseBootstrapSessionID(scanner.Text()); id != "" {
+				found <- id
+				return
+			}
 		}
+		close(found)
+	}()
+
+	var id string
+	select {
+	case id = <-found:
+	case <-ctx.Done():
 	}
 
-	// Kill the exec process — we have the ID, no need to wait for full execution.
 	cancel()
 	_ = cmd.Wait()
 
-	logger.Debug("bootstrapSession: completed", "sessionID", id, "outputLen", buf.Len())
+	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil
 }
 
@@ -258,6 +271,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 	if p.RunTime != nil {
 		rt = *p.RunTime
 	}
+	env := mergeEnv(os.Environ(), p.Envs)
 
 	resolvedSessionID := strings.TrimSpace(p.ID)
 	if p.SessionID != "" {
@@ -328,7 +342,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		command := append([]string{binPath}, args...)
 		started := false
 		if info == nil || info.Status != "active" {
-			if err := ptyClient.Start(resolvedSessionID, command, os.Environ(), workDir); err != nil {
+			if err := ptyClient.Start(resolvedSessionID, command, env, workDir, submitKey); err != nil {
 				return nil, fmt.Errorf("codex: resume: pty start: %w", err)
 			}
 			started = true
@@ -338,6 +352,10 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		a.writeCh = make(chan []byte, 1)
 		a.activeCmd = nil
 		a.mu.Unlock()
+		if p.Detached {
+			logger.Info("Resume: leaving PTY daemon session detached", "sessionID", resolvedSessionID)
+			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID}, nil
+		}
 		done := make(chan error, 1)
 		go func() {
 			defer close(done)
@@ -370,7 +388,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID, Done: done}, nil
 	}
 
-	pid, _ := a.attachAndRun(ctx, binPath, workDir, args)
+	pid, _ := a.attachAndRun(ctx, binPath, workDir, args, env)
 	// TODO: re-enable new-session fallback once bootstrap reliably returns a real session ID
 	// if runErr != nil {
 	// 	logger.Warn("Resume: session not found, falling back to new session", "sessionID", resolvedSessionID, "err", runErr)
@@ -385,9 +403,10 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 
 // attachAndRun starts binPath with args attached to the terminal and blocks
 // until the process exits. Returns the pid string and the exit error (nil = clean exit).
-func (a *codexAgent) attachAndRun(ctx context.Context, binPath, workDir string, args []string) (pid string, err error) {
+func (a *codexAgent) attachAndRun(ctx context.Context, binPath, workDir string, args []string, env []string) (pid string, err error) {
 	cmd := exec.CommandContext(ctx, binPath, args...)
 	cmd.Dir = workDir
+	cmd.Env = env
 
 	// Prefer injectable streams (set by tests). In production, open /dev/tty
 	// directly so the child gets a proper controlling terminal for raw mode.
@@ -746,11 +765,44 @@ func wrapExitError(op string, err error) error {
 	return fmt.Errorf("%s: %w", op, err)
 }
 
-func captureOutput(dir, name string, args ...string) (string, error) {
+// captureOutput runs name with args from dir. env overrides the process
+// environment when non-nil; pass nil to inherit the current process env.
+func captureOutput(dir string, env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+	}
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+func mergeEnv(base, overrides []string) []string {
+	if len(overrides) == 0 {
+		return append([]string(nil), base...)
+	}
+	merged := append([]string(nil), base...)
+	index := make(map[string]int, len(merged))
+	for i, entry := range merged {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			index[key] = i
+		}
+	}
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			merged = append(merged, entry)
+			continue
+		}
+		if i, exists := index[key]; exists {
+			merged[i] = entry
+			continue
+		}
+		index[key] = len(merged)
+		merged = append(merged, entry)
+	}
+	return merged
 }
 
 func execOutput(workDir string, rt sandbox.SandboxRuntime, name string, args ...string) (string, error) {

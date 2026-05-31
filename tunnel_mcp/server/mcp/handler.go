@@ -18,6 +18,12 @@ import (
 
 var logger = pkglog.NewLogger("component", "mcp-handler")
 
+type SenderInfo struct {
+	ID        string
+	Kind      string
+	Workspace string
+}
+
 type Handler struct {
 	service        *service.Service
 	serviceVersion string
@@ -38,6 +44,7 @@ type Option func(*Handler)
 func WithServiceVersion(version string) Option {
 	return func(h *Handler) { h.serviceVersion = version }
 }
+
 
 func New(svc *service.Service, opts ...Option) *Handler {
 	h := &Handler{service: svc, serviceVersion: "0.0.2"}
@@ -84,19 +91,24 @@ func senderFromContext(ctx context.Context) (service.SenderSpec, error) {
 	return sender, nil
 }
 
-func (h *Handler) MCPHandler() http.Handler {
-	logger.Info("mcp streamable handler initializing", "service", "tunnel-mcp", "version", h.serviceVersion)
-	mcpServer := mcpserver.NewMCPServer(
+func (h *Handler) buildMCPServer() *mcpserver.MCPServer {
+	s := mcpserver.NewMCPServer(
 		"tunnel-mcp",
 		h.serviceVersion,
 		mcpserver.WithToolCapabilities(true),
 	)
-	h.registerMCPTools(mcpServer)
+	h.registerMCPTools(s)
+	return s
+}
+
+func (h *Handler) MCPHandler() http.Handler {
+	logger.Info("mcp streamable handler initializing", "service", "tunnel-mcp", "version", h.serviceVersion)
 	return mcpserver.NewStreamableHTTPServer(
-		mcpServer,
+		h.buildMCPServer(),
 		mcpserver.WithHTTPContextFunc(senderContextFromRequest),
 	)
 }
+
 
 func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 	logger.Debug("mcp tools registering")

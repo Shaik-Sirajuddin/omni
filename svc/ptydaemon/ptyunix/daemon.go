@@ -1,10 +1,12 @@
 package ptyunix
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -38,6 +40,10 @@ type Daemon struct {
 	// /proc inode scanning, which is broken for PTY masters: all ptmx fds
 	// share the same inode on Linux.
 	attachedPIDs sync.Map // sessionID (string) → client PID (int)
+
+	// serveCtx is set by ListenAndServe and used by handleStdinRelay to
+	// interrupt blocked reads when the daemon shuts down.
+	serveCtx context.Context
 }
 
 // NewDaemon returns an in-memory daemon with no persistent store.
@@ -54,6 +60,7 @@ func NewDaemonWithInner(inner internal.PTYDaemon) *Daemon {
 
 // ListenAndServe listens on socketPath and serves connections until ctx is cancelled.
 func (d *Daemon) ListenAndServe(ctx context.Context, socketPath string) error {
+	d.serveCtx = ctx
 	_ = os.Remove(socketPath)
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -88,8 +95,12 @@ func (d *Daemon) ListenAndServe(ctx context.Context, socketPath string) error {
 func (d *Daemon) handleConn(conn *net.UnixConn) {
 	defer conn.Close()
 
+	// Use a bufio.Reader so we can pass any pre-buffered bytes to the stdin
+	// relay without losing them (json.Decoder reads ahead internally).
+	br := bufio.NewReader(conn)
+
 	var req Request
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+	if err := json.NewDecoder(br).Decode(&req); err != nil {
 		ptylog.Debug("failed to decode request", "err", err)
 		return
 	}
@@ -105,6 +116,11 @@ func (d *Daemon) handleConn(conn *net.UnixConn) {
 		d.handleAdopt(conn, req)
 	case "attach":
 		d.handleAttach(conn, req)
+	case "detach":
+		d.handleDetach(conn, req)
+	case "stdin-relay":
+		// Pass the bufio.Reader so pre-buffered bytes are not lost.
+		d.handleStdinRelay(conn, br, req)
 	case "pipe":
 		d.handlePipe(conn, req)
 	case "exec":
@@ -273,6 +289,52 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 	ptylog.Info("fd granted to client", "session_id", req.SessionID, "client_pid", clientPID)
 }
 
+// handleStdinRelay acknowledges the request then enters a raw streaming loop,
+// forwarding every chunk from the client to the PTY master via
+// inner.StdinRelay — which calls trackHumanInput before each write so that
+// ExecInSession can serialise around human-typed input.
+//
+// br must be the bufio.Reader wrapping conn from handleConn; it carries any
+// bytes the JSON decoder pre-buffered after reading the request envelope.
+func (d *Daemon) handleStdinRelay(conn *net.UnixConn, br *bufio.Reader, req Request) {
+	if d.inner == nil {
+		respond(conn, Response{Error: "stdin-relay requires a store-backed daemon"})
+		return
+	}
+	respond(conn, Response{OK: true})
+
+	ctx := d.serveCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// When the daemon shuts down, set a past deadline on conn to unblock any
+	// pending r.Read — preventing goroutine leak on dirty client disconnect.
+	go func() {
+		<-ctx.Done()
+		_ = conn.SetReadDeadline(time.Now())
+	}()
+
+	// io.MultiReader drains any bytes the json.Decoder pre-buffered, then
+	// continues reading from the raw connection.
+	r := io.MultiReader(br, conn)
+	if err := d.inner.StdinRelay(ctx, req.AgentID, req.SessionID, r); err != nil {
+		ptylog.Debug("stdin-relay ended", "session_id", req.SessionID, "err", err)
+	}
+}
+
+// handleDetach clears the attachment record for a session so the next caller
+// can attach without waiting for the previous client's process to be reaped.
+// Idempotent: succeeds even when the session was never attached.
+func (d *Daemon) handleDetach(conn *net.UnixConn, req Request) {
+	if _, loaded := d.attachedPIDs.LoadAndDelete(req.SessionID); loaded {
+		ptylog.Debug("detach: cleared attachment record", "session_id", req.SessionID)
+	} else {
+		ptylog.Warn("detach: session had no attachment record (idempotent)", "session_id", req.SessionID)
+	}
+	respond(conn, Response{OK: true})
+}
+
 // handlePipe writes raw bytes to the PTY master.
 func (d *Daemon) handlePipe(conn *net.UnixConn, req Request) {
 	if d.inner == nil {
@@ -290,17 +352,20 @@ func (d *Daemon) handlePipe(conn *net.UnixConn, req Request) {
 	respond(conn, Response{OK: true})
 }
 
-// handleExec writes raw input to the PTY master (backward-compatible exec op).
+// handleExec pipes the pre-formatted payload from the connector and then retries
+// the submit key (100ms, 200ms) to handle timing races in the terminal.
+// The connector already wraps the prompt in bracketed paste + submit key, so we
+// must not re-wrap — we only add the retry safety net on top.
 func (d *Daemon) handleExec(conn *net.UnixConn, req Request) {
 	ptylog.Debug("exec", "agent_id", req.AgentID, "session_id", req.SessionID)
 
 	if d.inner != nil {
-		if err := d.inner.Pipe(req.AgentID, req.SessionID, []byte(req.Input)); err != nil {
+		if err := d.inner.Exec(req.AgentID, req.SessionID, req.Input); err != nil {
 			if errors.Is(err, internal.ErrNotFound) {
 				respond(conn, Response{Error: "session not found"})
 				return
 			}
-			ptylog.Error("exec pipe failed", "err", err, "session_id", req.SessionID)
+			ptylog.Error("exec failed", "err", err, "session_id", req.SessionID)
 			respond(conn, Response{Error: err.Error()})
 			return
 		}
@@ -362,7 +427,23 @@ func (d *Daemon) handleKeybind(conn *net.UnixConn, req Request) {
 }
 
 func (d *Daemon) handleStop(conn *net.UnixConn, req Request) {
-	ptylog.Debug("stop", "agent_id", req.AgentID, "session_id", req.SessionID)
+	ptylog.Debug("stop", "agent_id", req.AgentID, "session_id", req.SessionID, "safe", req.Safe, "force", req.Force)
+
+	// Attachment check: only when the caller opts in via Safe=true.
+	// Omitting Safe preserves the original unconditional-kill behaviour.
+	if req.Safe {
+		if pid, ok := d.attachedPIDs.Load(req.SessionID); ok {
+			p := pid.(int)
+			if processExists(p) {
+				if !req.Force {
+					respond(conn, Response{Error: fmt.Sprintf("session is attached (pid %d); use force to override", p)})
+					return
+				}
+				ptylog.Info("force-stopping attached session", "session_id", req.SessionID, "attached_pid", p)
+			}
+			d.attachedPIDs.Delete(req.SessionID)
+		}
+	}
 
 	if d.inner != nil {
 		if err := d.inner.Stop(req.AgentID, req.SessionID); err != nil {

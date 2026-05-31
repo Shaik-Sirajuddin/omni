@@ -130,8 +130,8 @@ func (a *geminiAgent) Capabilities() (*codeagent.Capabilities, error) {
 			PreToolUse:         true,
 			PostToolUse:        true,
 			PostToolUseFailure: true,
-			PreSessionStart:    true,
-			PostSessionStart:   true,
+			SessionStart:    true,
+			SessionEnd:      true,
 			PrePrompt:          true,
 			PostPrompt:         true,
 		},
@@ -292,7 +292,7 @@ func (a *geminiAgent) Discover() (codeagent.DiscoverResult, error) {
 func (a *geminiAgent) SupportedHooks() (*hooks.Capabilities, error) {
 	return &hooks.Capabilities{
 		PreToolUse: true, PostToolUse: true, PostToolUseFailure: true,
-		PreSessionStart: true, PostSessionStart: true,
+		SessionStart:    true, SessionEnd:      true,
 		PrePrompt: true, PostPrompt: true,
 	}, nil
 }

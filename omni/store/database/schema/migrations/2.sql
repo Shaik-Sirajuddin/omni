@@ -1,0 +1,1 @@
+ALTER TABLE code_sessions ADD COLUMN is_interrupted INTEGER NOT NULL DEFAULT 0;

@@ -30,7 +30,7 @@ func TestReplyService(t *testing.T) {
 			arrivals = append(arrivals, arrival{from: from, to: to})
 		})
 
-		err := reply.SendReply(ctx, msg, "agent-1")
+		err := reply.SendReply(ctx, msg, "agent-1", "agent-one")
 
 		require.NoError(t, err, "MCP reply should insert response without error")
 		msgs, listErr := msgStore.GetConversationMessages(ctx, "agent-1", "mcp-client", message.Page{Limit: 10})
@@ -44,9 +44,8 @@ func TestReplyService(t *testing.T) {
 		assert.True(t, got.IsResponse, "Inserted MCP reply should be marked as response")
 		assert.False(t, got.ShouldReply, "Inserted MCP reply should not request another reply")
 		assert.Equal(t, "msg-mcp", got.RespondedTo, "Inserted MCP reply should reference source message")
-		assert.Contains(t, got.Prompt, "This is a reply to an earlier message.", "Inserted MCP reply prompt should explain response context")
-		assert.Contains(t, got.Prompt, "Original message id: msg-mcp", "Inserted MCP reply prompt should include source message id")
-		assert.JSONEq(t, `{"author":"tunnel-mcp","author_agent_name":"agent-1","reply_to_message_id":"msg-mcp","original_sender":"mcp-client"}`, got.Refs, "Inserted MCP reply refs should include reply metadata")
+		assert.Equal(t, msg.Prompt, got.Prompt, "Inserted MCP reply prompt should forward original message content")
+		assert.JSONEq(t, `{"author":"tunnel-mcp","author_agent_id":"agent-1","author_agent_name":"agent-one","reply_to_message_id":"msg-mcp","original_sender":"mcp-client"}`, got.Refs, "Inserted MCP reply refs should include reply metadata with resolved agent name")
 		assert.Equal(t, []arrival{{from: "agent-1", to: "mcp-client"}}, arrivals, "Inserted MCP reply should notify engine")
 	})
 
@@ -54,7 +53,7 @@ func TestReplyService(t *testing.T) {
 		msgStore := message.WithTestDB(t)
 		reply := newReplyService(msgStore, nil)
 
-		err := reply.SendReply(ctx, &message.Message{ID: "msg-noop", FromSpec: message.SpecOmni}, "agent-1")
+		err := reply.SendReply(ctx, &message.Message{ID: "msg-noop", FromSpec: message.SpecOmni}, "agent-1", "agent-one")
 
 		require.NoError(t, err, "Non-reply message should not fail")
 		msgs, listErr := msgStore.GetConversationMessages(ctx, "agent-1", "mcp-client", message.Page{Limit: 10})
@@ -78,7 +77,7 @@ func TestReplyService(t *testing.T) {
 			ShouldReply: true,
 		}
 
-		err := reply.SendReply(ctx, msg, "reply-agent")
+		err := reply.SendReply(ctx, msg, "reply-agent", "reply-agent-name")
 
 		require.NoError(t, err, "Agent reply should insert response without error")
 		msgs, listErr := msgStore.GetConversationMessages(ctx, "reply-agent", "requesting-agent", message.Page{Limit: 10})
@@ -92,7 +91,7 @@ func TestReplyService(t *testing.T) {
 		assert.True(t, got.IsResponse, "Inserted reply should be marked as response")
 		assert.False(t, got.ShouldReply, "Inserted reply should not request another reply")
 		assert.Equal(t, "msg-agent", got.RespondedTo, "Inserted reply should reference source message")
-		assert.Contains(t, got.Prompt, "Original message id: msg-agent", "Inserted reply prompt should include source message id")
+		assert.Equal(t, msg.Prompt, got.Prompt, "Inserted reply prompt should forward original message content")
 		assert.Equal(t, message.StatusInQueue, got.Status, "Inserted reply should be queued")
 		assert.Equal(t, []arrival{{from: "reply-agent", to: "requesting-agent"}}, arrivals, "Inserted reply should notify engine")
 	})

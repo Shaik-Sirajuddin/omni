@@ -53,6 +53,13 @@ func (h *HookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	agentID := base.Omni.Agent.ID
 	agentName := base.Omni.Agent.Name
 
+	if agentID == "" {
+		logger.Warn("hook: agent_id is empty, dropping event", "session_id", base.SessionID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(hooks.HookOuput{Continue: true})
+		return
+	}
+
 	// Prefer X-Hook-Event header (set by hook-operator) over body's hook_event_name,
 	// which may carry a stale or provider-specific name.
 	eventName := hooks.HookID(r.Header.Get("X-Hook-Event"))
@@ -63,7 +70,7 @@ func (h *HookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger.Debug("hook received", "event", eventName, "session_id", base.SessionID, "agent_id", agentID)
 
 	switch eventName {
-	case hooks.PreSessionStart:
+	case hooks.SessionStart:
 		h.eng.OnPreSessionStart(agentID, agentName, base.SessionID, base.Cwd)
 
 	case hooks.PreToolUse:

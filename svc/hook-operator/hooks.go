@@ -31,8 +31,8 @@ func DefaultHooks(binaryPath string) []DefaultHook {
 		{Name: "hookop.PreToolUse", Event: hooks.PreToolUse, Entry: entry(hooks.PreToolUse)},
 		{Name: "hookop.PostToolUse", Event: hooks.PostToolUse, Entry: entry(hooks.PostToolUse)},
 		{Name: "hookop.PostToolUseFailure", Event: hooks.PostToolUseFailure, Entry: entry(hooks.PostToolUseFailure)},
-		{Name: "hookop.PreSessionStart", Event: hooks.PreSessionStart, Entry: entry(hooks.PreSessionStart)},
-		{Name: "hookop.PostSessionStart", Event: hooks.PostSessionStart, Entry: entry(hooks.PostSessionStart)},
+		{Name: "hookop.SessionStart", Event: hooks.SessionStart, Entry: entry(hooks.SessionStart)},
+		{Name: "hookop.SessionEnd", Event: hooks.SessionEnd, Entry: entry(hooks.SessionEnd)},
 		{Name: "hookop.UserPromptSubmit", Event: hooks.PrePrompt, Entry: entry(hooks.PrePrompt)},
 		{Name: "hookop.Stop", Event: hooks.PostPrompt, Entry: entry(hooks.PostPrompt)},
 	}

@@ -13,8 +13,6 @@ import (
 	"golang.org/x/term"
 )
 
-const DefaultSocket = "/tmp/omni-pty.sock"
-
 type request struct {
 	Op        string   `json:"op"`
 	SessionID string   `json:"session_id"`

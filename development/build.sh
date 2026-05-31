@@ -15,6 +15,10 @@ build() {
 
   mkdir -p "$out_dir"
 
+  # sync go.mod/go.sum so Docker cache misses from local replace directives don't break the build
+  go mod tidy -C "$OMNI_DIR"    2>/dev/null || true
+  go mod tidy -C "$SVC_CMD_DIR" 2>/dev/null || true
+
   echo "==> building omni ${goos:+$goos/}${goarch}${goos:+} ($version)..."
   GOOS="$goos" GOARCH="$goarch" go build \
     -C "$OMNI_DIR" \

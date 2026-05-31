@@ -102,6 +102,6 @@ type OmniAgentEntrypoint interface {
 	PrePrompt()
 	PostPrompt()
 	PostToolUse()
-	PreSessionStart()
-	PostSessionStart()
+	SessionStart()
+	SessionEnd()
 }

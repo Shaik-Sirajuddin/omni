@@ -135,7 +135,7 @@ func TestStartRegistersActiveAgentsAndWatches(t *testing.T) {
 	if !resolver.watching {
 		t.Fatalf("expected resolver to be watching")
 	}
-	if _, ok := transformer.hooks["omni.pre_tool_use"]; !ok {
+	if _, ok := transformer.hooks["omni.PreToolUse"]; !ok {
 		t.Fatalf("missing default hook")
 	}
 }

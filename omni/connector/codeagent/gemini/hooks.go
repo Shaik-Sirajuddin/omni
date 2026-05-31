@@ -15,8 +15,8 @@ var eventNameByHookID = map[hooks.HookID]string{
 	hooks.PreToolUse:         "BeforeTool",
 	hooks.PostToolUse:        "AfterTool",
 	hooks.PostToolUseFailure: "AfterTool",
-	hooks.PreSessionStart:    "SessionStart",
-	hooks.PostSessionStart:   "SessionStart",
+	hooks.SessionStart:    "SessionStart",
+	hooks.SessionEnd:   "SessionStart",
 	hooks.PrePrompt:          "BeforeAgent",
 	hooks.PostPrompt:         "AfterAgent",
 }
@@ -24,7 +24,7 @@ var eventNameByHookID = map[hooks.HookID]string{
 var hookIDByEventName = map[string]hooks.HookID{
 	"BeforeTool":   hooks.PreToolUse,
 	"AfterTool":    hooks.PostToolUse,
-	"SessionStart": hooks.PreSessionStart,
+	"SessionStart": hooks.SessionStart,
 	"BeforeAgent":  hooks.PrePrompt,
 	"AfterAgent":   hooks.PostPrompt,
 }

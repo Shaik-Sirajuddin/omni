@@ -46,7 +46,11 @@ func (r *registrar) apply(transformer codeagent.HookTransformer) error {
 		return errors.New("hook-operator: apply: transformer required")
 	}
 	for _, dh := range DefaultHooks(r.binaryPath) {
-		transformer.Add(dh.Name, dh.Entry)
+		if !transformer.Add(dh.Name, dh.Entry) {
+			logger.Warn("hook-operator: register: hook not added", "name", dh.Name)
+		} else {
+			logger.Debug("hook-operator: register: hook added", "name", dh.Name)
+		}
 	}
 	return nil
 }

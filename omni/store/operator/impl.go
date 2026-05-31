@@ -90,9 +90,13 @@ func NewWithDB(db *sql.DB) OperatorStore {
 
 func (s *sqlStore) CreateWorkspace(ws *operator.TeamInfo) error {
 	logger.Debug("CreateWorkspace: insert", "workspaceID", ws.ID, "workspaceDir", ws.WorkspaceDir)
+	remote := ws.Remote
+	if remote == "" {
+		remote = "localhost"
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO workspaces (id, name, workspace_dir) VALUES (?, ?, ?)`,
-		ws.ID, ws.Name, ws.WorkspaceDir,
+		`INSERT INTO workspaces (id, name, remote, workspace_dir) VALUES (?, ?, ?, ?)`,
+		ws.ID, ws.Name, remote, ws.WorkspaceDir,
 	)
 	if err != nil {
 		logger.Error("CreateWorkspace: insert failed", "workspaceID", ws.ID, "workspaceDir", ws.WorkspaceDir, "err", err)
@@ -105,7 +109,7 @@ func (s *sqlStore) CreateWorkspace(ws *operator.TeamInfo) error {
 func (s *sqlStore) GetWorkspace(id string) (*operator.TeamInfo, error) {
 	logger.Debug("GetWorkspace(store): query", "workspaceID", id)
 	row := s.db.QueryRow(
-		`SELECT w.id, w.name, w.workspace_dir,
+		`SELECT w.id, w.name, w.remote, w.workspace_dir,
 		        (SELECT COUNT(*) FROM agents a WHERE a.workspace_dir = w.workspace_dir)
 		 FROM workspaces w WHERE w.id = ?`, id,
 	)
@@ -121,7 +125,7 @@ func (s *sqlStore) GetWorkspace(id string) (*operator.TeamInfo, error) {
 func (s *sqlStore) WorkspaceByDir(dir sandbox.WorkspaceDir) (*operator.TeamInfo, error) {
 	logger.Debug("WorkspaceByDir: query", "workspaceDir", dir)
 	row := s.db.QueryRow(
-		`SELECT w.id, w.name, w.workspace_dir,
+		`SELECT w.id, w.name, w.remote, w.workspace_dir,
 		        (SELECT COUNT(*) FROM agents a WHERE a.workspace_dir = w.workspace_dir)
 		 FROM workspaces w WHERE w.workspace_dir = ?`, string(dir),
 	)
@@ -137,7 +141,7 @@ func (s *sqlStore) WorkspaceByDir(dir sandbox.WorkspaceDir) (*operator.TeamInfo,
 func (s *sqlStore) ListWorkspaces() ([]*operator.TeamInfo, error) {
 	logger.Debug("ListWorkspaces(store): query")
 	rows, err := s.db.Query(
-		`SELECT w.id, w.name, w.workspace_dir,
+		`SELECT w.id, w.name, w.remote, w.workspace_dir,
 		        (SELECT COUNT(*) FROM agents a WHERE a.workspace_dir = w.workspace_dir)
 		 FROM workspaces w`,
 	)
@@ -150,7 +154,7 @@ func (s *sqlStore) ListWorkspaces() ([]*operator.TeamInfo, error) {
 	var teams []*operator.TeamInfo
 	for rows.Next() {
 		var t operator.TeamInfo
-		if err := rows.Scan(&t.ID, &t.Name, &t.WorkspaceDir, &t.Agents); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Remote, &t.WorkspaceDir, &t.Agents); err != nil {
 			logger.Error("ListWorkspaces(store): scan failed", "err", err)
 			return nil, err
 		}
@@ -269,7 +273,7 @@ func (s *sqlStore) DeleteAgent(id string) error {
 
 func scanWorkspace(row *sql.Row) (*operator.TeamInfo, error) {
 	var t operator.TeamInfo
-	if err := row.Scan(&t.ID, &t.Name, &t.WorkspaceDir, &t.Agents); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &t.Remote, &t.WorkspaceDir, &t.Agents); err != nil {
 		return nil, err
 	}
 	return &t, nil

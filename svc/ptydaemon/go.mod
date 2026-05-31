@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
 	github.com/creack/pty v1.1.24
 	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
@@ -11,6 +12,8 @@ require (
 )
 
 replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
+
+replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect

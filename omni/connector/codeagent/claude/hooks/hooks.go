@@ -158,14 +158,14 @@ func parseResponse(eventName string, raw any) (confhooks.Response, error) {
 			return confhooks.Response{}, err
 		}
 		return responseFromOutput(result.HookOuput), nil
-	case string(codehooks.PreSessionStart):
-		result, err := claudeconnector.ParseHookInput[codehooks.PreSessionStartResult](raw)
+	case string(codehooks.SessionStart):
+		result, err := claudeconnector.ParseHookInput[codehooks.SessionStartResult](raw)
 		if err != nil {
 			return confhooks.Response{}, err
 		}
 		return responseFromOutput(result.HookOuput), nil
-	case string(codehooks.PostSessionStart):
-		result, err := claudeconnector.ParseHookInput[codehooks.PostSessionStartResult](raw)
+	case string(codehooks.SessionEnd):
+		result, err := claudeconnector.ParseHookInput[codehooks.SessionEndResult](raw)
 		if err != nil {
 			return confhooks.Response{}, err
 		}
@@ -216,8 +216,8 @@ func claudeEventName(eventName string) (string, bool) {
 	case string(codehooks.PreToolUse),
 		string(codehooks.PostToolUse),
 		string(codehooks.PostToolUseFailure),
-		string(codehooks.PreSessionStart),
-		string(codehooks.PostSessionStart),
+		string(codehooks.SessionStart),
+		string(codehooks.SessionEnd),
 		string(codehooks.PrePrompt),
 		string(codehooks.PostPrompt):
 		return eventName, true
@@ -231,8 +231,8 @@ func abstractEventName(claudeEvent string) (string, bool) {
 	case string(codehooks.PreToolUse),
 		string(codehooks.PostToolUse),
 		string(codehooks.PostToolUseFailure),
-		string(codehooks.PreSessionStart),
-		string(codehooks.PostSessionStart),
+		string(codehooks.SessionStart),
+		string(codehooks.SessionEnd),
 		string(codehooks.PrePrompt),
 		string(codehooks.PostPrompt):
 		return claudeEvent, true
@@ -246,8 +246,8 @@ func claudeEventOrder() []string {
 		string(codehooks.PreToolUse),
 		string(codehooks.PostToolUse),
 		string(codehooks.PostToolUseFailure),
-		string(codehooks.PreSessionStart),
-		string(codehooks.PostSessionStart),
+		string(codehooks.SessionStart),
+		string(codehooks.SessionEnd),
 		string(codehooks.PrePrompt),
 		string(codehooks.PostPrompt),
 	}
@@ -351,10 +351,10 @@ func schemaForEvent(eventName string) confhooks.HookSchema {
 		return &confhooks.PostToolUseSchema{}
 	case string(codehooks.PostToolUseFailure):
 		return &confhooks.PostToolUseFailureSchema{}
-	case string(codehooks.PreSessionStart):
-		return &confhooks.PreSessionStartSchema{}
-	case string(codehooks.PostSessionStart):
-		return &confhooks.PostSessionStartSchema{}
+	case string(codehooks.SessionStart):
+		return &confhooks.SessionStartSchema{}
+	case string(codehooks.SessionEnd):
+		return &confhooks.SessionEndSchema{}
 	case string(codehooks.PrePrompt):
 		return &confhooks.PrePromptSchema{}
 	case string(codehooks.PostPrompt):

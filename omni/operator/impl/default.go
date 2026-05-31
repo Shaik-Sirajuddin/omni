@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
+	agysettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
 	claudesettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
@@ -39,6 +42,7 @@ const (
 	providerClaude codeagent.Provider = "claude"
 	providerCodex  codeagent.Provider = "codex"
 	providerGemini codeagent.Provider = "gemini"
+	providerAgy    codeagent.Provider = "agy"
 
 	mcpAuthToken  = "tunnel-mcp-dev-token"
 	mcpSenderType = "omni_agent"
@@ -72,14 +76,14 @@ func (a *codexPTYAdapter) Pipe(_ string, sessionID string, data []byte) error {
 	return a.inner.Pipe(a.agentID, sessionID, data)
 }
 
-func (a *codexPTYAdapter) Start(sessionID string, command []string, env []string, dir string) error {
+func (a *codexPTYAdapter) Start(sessionID string, command []string, env []string, dir, submitKey string) error {
 	if a == nil || a.inner == nil {
 		return fmt.Errorf("operator: pty daemon client is not configured")
 	}
 	if strings.TrimSpace(dir) == "" {
 		dir = a.workDir
 	}
-	return a.inner.Start(sessionID, command, env, dir)
+	return a.inner.Start(sessionID, command, env, dir, submitKey)
 }
 
 func (a *codexPTYAdapter) Attach(ctx context.Context, sessionID string) error {
@@ -101,6 +105,20 @@ func (a *codexPTYAdapter) Stop(sessionID string) error {
 		return fmt.Errorf("operator: pty daemon client is not configured")
 	}
 	return a.inner.Stop(sessionID)
+}
+
+func (a *codexPTYAdapter) StopSafe(sessionID string, force bool) error {
+	if a == nil || a.inner == nil {
+		return fmt.Errorf("operator: pty daemon client is not configured")
+	}
+	return a.inner.StopSafe(sessionID, force)
+}
+
+func (a *codexPTYAdapter) Detach(sessionID string) error {
+	if a == nil || a.inner == nil {
+		return fmt.Errorf("operator: pty daemon client is not configured")
+	}
+	return a.inner.Detach(sessionID)
 }
 
 func (a *codexPTYAdapter) List(_ string) ([]*codeagent.PTYTerminalInfo, error) {
@@ -280,6 +298,36 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		}
 		sessionID = strings.TrimSpace(session.Id)
 	}
+
+	// Check whether the session is currently attached via the pty daemon.
+	sessionActive := false
+	if o.ptyDaemon != nil {
+		if count, err := o.ptyDaemon.MetaAttached(sessionID); err == nil {
+			sessionActive = count >= 1
+		}
+	}
+
+	if !sessionActive {
+		if params.LiveOnly {
+			return nil, fmt.Errorf("operator: exec in session: session %q is not active", sessionID)
+		}
+		// Auto-resume the agent before executing.
+		logger.Info("ExecInSession: session not active, auto-resuming", "agentID", agent.ID, "sessionID", sessionID)
+		if err := o.ResumeAgent(operator.ResumeAgentParams{
+			Workspace: agent.WorkspaceDir,
+			Name:      agent.Name,
+			SessionID: sessionID,
+			Detached:  true,
+		}); err != nil {
+			return nil, fmt.Errorf("operator: exec in session: auto-resume: %w", err)
+		}
+		// Re-init ca after resume since the connector instance may be stale.
+		_, ca, err = o.codeAgentForAgentID(params.AgentID)
+		if err != nil {
+			return nil, fmt.Errorf("operator: exec in session: re-init after resume: %w", err)
+		}
+	}
+
 	result, err := ca.ExecInSession(codeagent.ExecInSessionParams{
 		SessionID: sessionID,
 		Prompt:    params.Prompt,
@@ -291,6 +339,34 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		sessionID = result.SessionID
 	}
 	return &operator.ExecInSessionResult{SessionID: sessionID}, nil
+}
+
+func (o *DefaultOperator) StopSession(params operator.StopSessionParams) (*operator.StopSessionResult, error) {
+	if o.ptyDaemon == nil {
+		return nil, fmt.Errorf("operator: pty daemon client is not configured")
+	}
+	_, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.ptyDaemon.StopSafe(sessionID, params.Force); err != nil {
+		return nil, fmt.Errorf("operator: stop session: %w", err)
+	}
+	return &operator.StopSessionResult{SessionID: sessionID}, nil
+}
+
+func (o *DefaultOperator) DetachSession(params operator.DetachSessionParams) (*operator.DetachSessionResult, error) {
+	if o.ptyDaemon == nil {
+		return nil, fmt.Errorf("operator: pty daemon client is not configured")
+	}
+	_, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.ptyDaemon.Detach(sessionID); err != nil {
+		return nil, fmt.Errorf("operator: detach session: %w", err)
+	}
+	return &operator.DetachSessionResult{SessionID: sessionID}, nil
 }
 
 func (o *DefaultOperator) Pipe(params operator.PipeParams) error {
@@ -319,6 +395,28 @@ func (o *DefaultOperator) Pipe(params operator.PipeParams) error {
 		return fmt.Errorf("operator: pipe session: %w", err)
 	}
 	return nil
+}
+
+func (o *DefaultOperator) resolveAgentSession(agentRef, requestedSessionID string) (*omniagent.AgentInfo, string, error) {
+	agent, err := o.resolveAgentRef(agentRef)
+	if err != nil {
+		return nil, "", fmt.Errorf("operator: load agent %q: %w", agentRef, err)
+	}
+	sessionID := strings.TrimSpace(requestedSessionID)
+	if sessionID != "" {
+		return agent, sessionID, nil
+	}
+	if o.sessionStore == nil {
+		return nil, "", fmt.Errorf("operator: session store is not configured")
+	}
+	session, err := o.sessionStore.GetSession(agent.ID)
+	if err != nil {
+		return nil, "", fmt.Errorf("operator: active session for agent %q: %w", agent.ID, err)
+	}
+	if session == nil || strings.TrimSpace(session.Id) == "" {
+		return nil, "", fmt.Errorf("operator: active session not found for agent %q", agent.ID)
+	}
+	return agent, strings.TrimSpace(session.Id), nil
 }
 
 func (o *DefaultOperator) codeAgentForAgentID(agentID string) (*omniagent.AgentInfo, codeagent.CodeAgent, error) {
@@ -514,6 +612,10 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
 				if info != nil && info.AgentID == agent.ID && info.SessionID == sessionID && info.Status == "active" {
+					if params.Detached {
+						logger.Info("ResumeAgent: PTY terminal already active, leaving detached", "agentID", agent.ID, "sessionID", sessionID)
+						return nil
+					}
 					return fmt.Errorf("operator: session %q already has an active PTY terminal", sessionID)
 				}
 			}
@@ -556,7 +658,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	defer cancelResume()
 
 	envs := mcpSessionEnvs(agent)
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Envs: envs, RunTime: sbxRuntime})
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: sbxRuntime})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
@@ -589,7 +691,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				logger.Warn("ResumeAgent: fallback session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", storeErr)
 			}
 		}
-		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Envs: envs, RunTime: sbxRuntime})
+		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, RunTime: sbxRuntime})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
@@ -656,6 +758,8 @@ func New() (operator.Operator, error) {
 				return codex.New(workDir, model, nil)
 			case providerGemini:
 				return gemini.New(workDir, model, nil)
+			case providerAgy:
+				return agy.New(workDir, model, nil)
 			default:
 				return nil, fmt.Errorf("operator: unknown provider %q", provider)
 			}
@@ -668,6 +772,8 @@ func New() (operator.Operator, error) {
 				return codex.New(workDir, model, &codexPTYAdapter{agentID: agentID, workDir: workDir, inner: ptyDaemon})
 			case providerGemini:
 				return gemini.New(workDir, model, &codexPTYAdapter{agentID: agentID, workDir: workDir, inner: ptyDaemon})
+			case providerAgy:
+				return agy.New(workDir, model, &codexPTYAdapter{agentID: agentID, workDir: workDir, inner: ptyDaemon})
 			default:
 				return nil, fmt.Errorf("operator: unknown provider %q", provider)
 			}
@@ -695,6 +801,7 @@ func (o *DefaultOperator) DisoverCodeAgents() (*operator.DisocveryResult, error)
 	}{
 		{providerClaude, "claude"},
 		{providerCodex, "codex"},
+		{providerAgy, "agy"},
 		// {providerGemini, "gemini"}, // temporarily disabled
 	}
 
@@ -707,13 +814,20 @@ func (o *DefaultOperator) DisoverCodeAgents() (*operator.DisocveryResult, error)
 		if _, err := exec.LookPath(c.binary); err != nil {
 			continue
 		}
-		providers = append(providers, c.provider)
 		logger.Debug("DisoverCodeAgents: provider available", "provider", c.provider, "binary", c.binary)
 
 		// Attempt model discovery via the codeagent interface.
 		if o.newCodeAgent != nil {
 			ca, caErr := o.newCodeAgent(c.provider, cwd, "")
 			if caErr == nil {
+				// Auth check: skip providers that are not authenticated.
+				identity := ca.GetUserIdentity()
+				if !identity.Authenticated {
+					logger.Info("DisoverCodeAgents: provider not authenticated, skipping", "provider", c.provider)
+					continue
+				}
+
+				providers = append(providers, c.provider)
 				if result, discErr := ca.Discover(); discErr == nil {
 					models := make([]string, len(result.Models))
 					for i, m := range result.Models {
@@ -728,7 +842,9 @@ func (o *DefaultOperator) DisoverCodeAgents() (*operator.DisocveryResult, error)
 				}
 			}
 			logger.Debug("DisoverCodeAgents: model discovery unavailable, skipping", "provider", c.provider)
+			continue
 		}
+		providers = append(providers, c.provider)
 	}
 
 	logger.Info("DisoverCodeAgents: completed", "providers", providers, "modelEntries", len(providerModels))
@@ -805,16 +921,12 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	ws, err := o.store.WorkspaceByDir(workspace)
 	if err != nil {
 		logger.Debug("CreateAgent: workspace missing, creating new workspace", "workspace", workspace)
-		ws = &operator.TeamInfo{
-			ID:           uuid.NewString(),
-			Name:         filepath.Base(string(workspace)),
-			WorkspaceDir: string(workspace),
-		}
-		if err := o.store.CreateWorkspace(ws); err != nil {
+		ws, err = o.createWorkspaceWithAutoName(workspace, "", "localhost")
+		if err != nil {
 			logger.Error("CreateAgent: workspace creation failed", "workspace", workspace, "err", err)
 			return fmt.Errorf("operator: create workspace: %w", err)
 		}
-		logger.Info("CreateAgent: workspace created", "workspaceID", ws.ID, "workspace", ws.WorkspaceDir)
+		logger.Info("CreateAgent: workspace created", "workspaceID", ws.ID, "name", ws.Name, "workspace", ws.WorkspaceDir)
 	}
 
 	agentID := uuid.NewString()
@@ -891,7 +1003,7 @@ func (o *DefaultOperator) TeamInit(params operator.TeamInitParams) error {
 		logger.Error("TeamInit: initialisation failed", "workspace", workspace, "err", err)
 		return fmt.Errorf("operator: team-init: %w", err)
 	}
-	if err := o.ensureWorkspaceAndGuideAgent(workspace); err != nil {
+	if err := o.ensureWorkspaceAndGuideAgent(workspace, params.Name, params.Remote); err != nil {
 		logger.Error("TeamInit: guide agent initialisation failed", "workspace", workspace, "err", err)
 		return fmt.Errorf("operator: team-init: ensure guide agent: %w", err)
 	}
@@ -955,9 +1067,12 @@ func (o *DefaultOperator) TeamInit(params operator.TeamInitParams) error {
 
 // loadTerminalLayout reads and parses a terminal layout file via the provider's
 // transformer, falling back to a generated layout from provisioned agents when
-// the file cannot be read.
+// the file is not found.
 func loadTerminalLayout(term terminal.Terminal, layoutFile string, agents []provision.AgentEntry) (terminal.Layout, error) {
 	data, err := os.ReadFile(layoutFile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return terminal.Layout{}, fmt.Errorf("read terminal layout %s: %w", layoutFile, err)
+	}
 	if err == nil {
 		layout, err := term.Transformer().FromNative(data)
 		if err != nil {
@@ -965,7 +1080,7 @@ func loadTerminalLayout(term terminal.Terminal, layoutFile string, agents []prov
 		}
 		return layout, nil
 	}
-	// File not readable — generate a layout: one tab per provisioned agent.
+	// File not found — generate a layout: one tab per provisioned agent.
 	if len(agents) == 0 {
 		return terminal.Layout{}, fmt.Errorf("terminal layout file %s not found and no agents to generate layout from", layoutFile)
 	}
@@ -992,11 +1107,10 @@ func (o *DefaultOperator) ListTemplates() ([]string, error) {
 
 // DoctorTerminals checks whether each registered terminal provider is installed.
 func (o *DefaultOperator) DoctorTerminals() (*operator.DoctorTerminalsResult, error) {
-	reg := terminalRegistry()
 	result := &operator.DoctorTerminalsResult{
-		Terminals: make([]operator.TerminalStatus, 0, len(reg)),
+		Terminals: make([]operator.TerminalStatus, 0, len(terminalRegistry)),
 	}
-	for _, r := range reg {
+	for _, r := range terminalRegistry {
 		status := operator.TerminalStatus{Name: r.name, Installed: true}
 		if err := r.terminal.CheckInstallation(); err != nil {
 			status.Installed = false
@@ -1281,15 +1395,56 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	return nil
 }
 
-func (o *DefaultOperator) ensureWorkspaceAndGuideAgent(workspace sandbox.WorkspaceDir) error {
-	ws, err := o.store.WorkspaceByDir(workspace)
-	if err != nil {
-		ws = &operator.TeamInfo{
-			ID:           uuid.NewString(),
-			Name:         filepath.Base(string(workspace)),
-			WorkspaceDir: string(workspace),
-		}
-		if err := o.store.CreateWorkspace(ws); err != nil {
+var slugWords = []string{
+	"amber", "arctic", "azure", "bold", "bright", "calm", "cedar", "clear",
+	"coral", "dawn", "deep", "dusk", "echo", "ember", "fern", "field",
+	"flame", "fleet", "frost", "grove", "jade", "kind", "leaf", "lunar",
+	"maple", "mesa", "mist", "nova", "oak", "pine", "reef", "river",
+	"sage", "sky", "solar", "stone", "swift", "teal", "tide", "vale",
+	"warm", "wind", "wolf", "zenith",
+}
+
+func wordSlug(n int) string {
+	words := make([]string, n)
+	for i := range words {
+		words[i] = slugWords[rand.Intn(len(slugWords))]
+	}
+	return strings.Join(words, "-")
+}
+
+// createWorkspaceWithAutoName creates a workspace record, defaulting name to the
+// folder basename and remote to "localhost". On a (remote, name) UNIQUE conflict
+// it retries once with a 5-word slug appended to the name.
+func (o *DefaultOperator) createWorkspaceWithAutoName(workspace sandbox.WorkspaceDir, name, remote string) (*operator.TeamInfo, error) {
+	if name == "" {
+		name = filepath.Base(string(workspace))
+	}
+	if remote == "" {
+		remote = "localhost"
+	}
+	ws := &operator.TeamInfo{
+		ID:           uuid.NewString(),
+		Name:         name,
+		Remote:       remote,
+		WorkspaceDir: string(workspace),
+	}
+	if err := o.store.CreateWorkspace(ws); err == nil {
+		return ws, nil
+	} else if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return nil, err
+	}
+	// Name conflict on this remote — retry with a 5-word slug.
+	ws.ID = uuid.NewString()
+	ws.Name = name + "-" + wordSlug(5)
+	if err := o.store.CreateWorkspace(ws); err != nil {
+		return nil, err
+	}
+	return ws, nil
+}
+
+func (o *DefaultOperator) ensureWorkspaceAndGuideAgent(workspace sandbox.WorkspaceDir, name, remote string) error {
+	if _, err := o.store.WorkspaceByDir(workspace); err != nil {
+		if _, err = o.createWorkspaceWithAutoName(workspace, name, remote); err != nil {
 			return err
 		}
 	}
@@ -1346,6 +1501,8 @@ func (o *DefaultOperator) GetCodeAgentResolver(agent codeagent.Provider) (*codea
 		r = claudesettings.New(providerClaude)
 	case providerCodex:
 		r = codexsettings.New(providerCodex)
+	case providerAgy:
+		r = agysettings.New(providerAgy)
 	case providerGemini:
 		logger.Error("GetCodeAgentResolver: resolver unavailable", "provider", providerGemini)
 		return nil, fmt.Errorf("operator: %w: %s", operator.ErrResolverUnavailable, providerGemini)

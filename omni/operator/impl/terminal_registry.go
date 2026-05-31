@@ -13,15 +13,13 @@ type registeredTerminal struct {
 }
 
 // terminalRegistry holds the set of known terminal providers keyed by name.
-var terminalRegistry = func() []registeredTerminal {
-	return []registeredTerminal{
-		{name: "zellij", terminal: zellij.New()},
-	}
+var terminalRegistry = []registeredTerminal{
+	{name: "zellij", terminal: zellij.New()},
 }
 
 // getTerminal returns the terminal.Terminal for the given name, or an error if unknown.
 func getTerminal(name string) (terminal.Terminal, error) {
-	for _, r := range terminalRegistry() {
+	for _, r := range terminalRegistry {
 		if r.name == name {
 			return r.terminal, nil
 		}
@@ -30,9 +28,8 @@ func getTerminal(name string) (terminal.Terminal, error) {
 }
 
 func supportedTerminalNames() []string {
-	reg := terminalRegistry()
-	names := make([]string, len(reg))
-	for i, r := range reg {
+	names := make([]string, len(terminalRegistry))
+	for i, r := range terminalRegistry {
 		names[i] = r.name
 	}
 	return names

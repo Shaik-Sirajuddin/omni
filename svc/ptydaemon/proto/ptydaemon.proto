@@ -37,7 +37,7 @@ message PipeRequest {
 message ExecRequest {
     string agent_id   = 1;
     string session_id = 2;
-    string prompt     = 3;
+    string input      = 3;
 }
 
 message StopRequest {

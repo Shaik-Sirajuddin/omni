@@ -2,17 +2,35 @@
 # setup.sh — bundled inside each release tarball
 set -euo pipefail
 
-OMNI_PREFIX="${OMNI_PREFIX:-/opt/omni}"
-OMNI_BIN="$OMNI_PREFIX/bin"
-SYMLINK_DIR="/usr/local/bin"
-SERVICE_TEMPLATE="omni@"
-SERVICE_FILE="/etc/systemd/system/omni@.service"
-TARGET_USER="${SUDO_USER:-${USER:-$(id -un)}}"
-SERVICE_NAME="omni@${TARGET_USER}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${BIN_DIR:-$SCRIPT_DIR/bin}"
-
 BINARIES=(omni omni-server)
+
+# ── mode detection ─────────────────────────────────────────────────────────────
+# default              → user-local install under ~/.local (no root required)
+# OMNI_GLOBAL_INSTALL=1 → system-wide install under /opt/omni (requires root)
+if [[ "${OMNI_GLOBAL_INSTALL:-0}" == "1" ]]; then
+  USER_INSTALL=0
+else
+  USER_INSTALL=1
+fi
+
+if [[ "$USER_INSTALL" == "1" ]]; then
+  OMNI_PREFIX="${OMNI_PREFIX:-${HOME}/.local/opt/omni}"
+  SYMLINK_DIR="${HOME}/.local/bin"
+  SERVICE_FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user/omni.service"
+  SERVICE_NAME="omni"
+  SYSTEMCTL="systemctl --user"
+else
+  OMNI_PREFIX="${OMNI_PREFIX:-/opt/omni}"
+  SYMLINK_DIR="/usr/local/bin"
+  SERVICE_FILE="/etc/systemd/system/omni@.service"
+  TARGET_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+  SERVICE_NAME="omni@${TARGET_USER}"
+  SYSTEMCTL="systemctl"
+fi
+
+OMNI_BIN="$OMNI_PREFIX/bin"
 
 need_root() {
   if [[ "$EUID" -ne 0 ]]; then
@@ -52,13 +70,43 @@ setup_user() {
 }
 
 write_service() {
-  echo "==> writing systemd service template $SERVICE_FILE"
+  echo "==> writing systemd service $SERVICE_FILE"
+  mkdir -p "$(dirname "$SERVICE_FILE")"
   local debug_env=""
   if [[ "${DEBUG:-0}" == "1" ]]; then
     debug_env=$'\nEnvironment=DEV=1'
     echo "    DEBUG=1: enabling slog debug logging (DEV=1)"
   fi
-  cat > "$SERVICE_FILE" <<EOF
+
+  if [[ "$USER_INSTALL" == "1" ]]; then
+    # user-mode unit: runs as the current user, no template needed
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Omni daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${OMNI_BIN}/omni-server
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=omni
+RuntimeDirectoryMode=0700
+StateDirectory=omni
+StateDirectoryMode=0700
+Environment=OMNI_PTY_SOCKET=%t/omni/omni-pty.sock
+Environment=PTYDAEMON_DB=%S/omni/ptydaemon.db
+Environment=HOOK_OPERATOR_SOCKET=%t/omni/hook-operator.sock
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin${debug_env}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+  else
+    # system-wide template unit (instance per user via omni@<user>.service)
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Omni PTY daemon for %i
 After=network.target
@@ -83,6 +131,7 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
+  fi
 }
 
 check_agent_binaries() {
@@ -105,24 +154,48 @@ check_agent_binaries() {
 }
 
 reload_and_enable() {
-  systemctl daemon-reload
-  if systemctl is-active --quiet "$SERVICE_NAME"; then
+  if [[ "$USER_INSTALL" == "1" ]]; then
+    if [[ -z "${XDG_RUNTIME_DIR:-}" ]] && [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+      echo "error: user-mode systemd requires an active D-Bus session (XDG_RUNTIME_DIR not set)." >&2
+      echo "       Run this script in a login session, or first run:" >&2
+      echo "         loginctl enable-linger $(id -un)" >&2
+      echo "         export XDG_RUNTIME_DIR=/run/user/$(id -u)" >&2
+      exit 1
+    fi
+  fi
+  $SYSTEMCTL daemon-reload
+  if $SYSTEMCTL is-active --quiet "$SERVICE_NAME"; then
     echo "==> restarting $SERVICE_NAME"
-    systemctl restart "$SERVICE_NAME"
+    $SYSTEMCTL restart "$SERVICE_NAME"
   else
     echo "==> enabling and starting $SERVICE_NAME"
-    systemctl enable --now "$SERVICE_NAME"
+    $SYSTEMCTL enable --now "$SERVICE_NAME"
   fi
   echo "==> $SERVICE_NAME status:"
-  systemctl status "$SERVICE_NAME" --no-pager || true
+  $SYSTEMCTL status "$SERVICE_NAME" --no-pager || true
+
+  if [[ "$USER_INSTALL" == "1" ]]; then
+    echo ""
+    echo "    NOTE: to keep omni running after logout, enable linger:"
+    echo "      loginctl enable-linger $(id -un)"
+    echo "    Socket paths: OMNI_PTY_SOCKET=\$XDG_RUNTIME_DIR/omni/omni-pty.sock"
+    echo "                  HOOK_OPERATOR_SOCKET=\$XDG_RUNTIME_DIR/omni/hook-operator.sock"
+  fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  need_root
+  if [[ "$USER_INSTALL" == "1" ]]; then
+    echo "==> user-local install (no root required)"
+  else
+    need_root
+  fi
   install_binaries
   link_binaries
+  if [[ "$USER_INSTALL" != "1" ]]; then
+    setup_user
+  fi
   write_service
   check_agent_binaries
   reload_and_enable
-  echo "==> setup complete — 'omni' is ready for user ${TARGET_USER}"
+  echo "==> setup complete — 'omni' is ready"
 fi

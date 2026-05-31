@@ -344,6 +344,39 @@ func workspaceRootFromAgentDir(memDir string) string {
 	return filepath.Dir(filepath.Dir(memDir))
 }
 
+// ListTemplateVersions returns the version short-name from each embedded agent template.
+func ListTemplateVersions() ([]string, error) {
+	entries, err := templateFS.ReadDir("templates/agents")
+	if err != nil {
+		return nil, fmt.Errorf("operator: list templates: %w", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := templateFS.ReadFile("templates/agents/" + e.Name() + "/" + metadataFile)
+		if err != nil {
+			logger.Warn("ListTemplateVersions: skipping template with unreadable metadata", "template", e.Name(), "err", err)
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "version:") {
+				v := strings.TrimSpace(strings.TrimPrefix(line, "version:"))
+				// strip inline YAML comments
+				if idx := strings.Index(v, "#"); idx >= 0 {
+					v = strings.TrimSpace(v[:idx])
+				}
+				if v != "" {
+					names = append(names, v)
+				}
+			}
+		}
+	}
+	return names, nil
+}
+
 func agentTemplateRoot(version string) string {
 	return filepath.Join("templates", "agents", version)
 }

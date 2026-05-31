@@ -24,7 +24,7 @@ func provisionDefaultHooksWithResolver(cfg Config, resolver hookResolver) error 
 	hookURL := defaultHookURL(cfg)
 	entry := config.HookEntry{Url: &hookURL}
 	added, err := resolver.AddHooks(map[string][]config.HookEntry{
-		string(hooks.PreSessionStart):    {entry},
+		string(hooks.SessionStart):    {entry},
 		string(hooks.PrePrompt):          {entry},
 		string(hooks.PostPrompt):         {entry},
 		string(hooks.PostToolUseFailure): {entry},

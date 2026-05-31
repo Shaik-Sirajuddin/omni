@@ -131,48 +131,48 @@ func (s *PostToolUseFailureSchema) EventName() string { return string(hooks.Post
 
 // ── PreSessionStart ───────────────────────────────────────────────────────────
 
-type PreSessionStartInput struct {
+type SessionStartInput struct {
 	EventBase
 	Source string `json:"source" jsonschema:"title=Source,description=Reason the session is starting — one of: startup | resume | clear | compact"`
 }
 
-// PreSessionStartResponseSchema — response hook.
+// SessionStartResponseSchema — response hook.
 // Continue=false aborts session creation before it starts.
 // SystemMessage is prepended as the first system turn.
-type PreSessionStartResponseSchema struct{ Response }
+type SessionStartResponseSchema struct{ Response }
 
-// PreSessionStartResultSchema — what the hook command writes to stdout.
-type PreSessionStartResultSchema struct{ Response }
+// SessionStartResultSchema — what the hook command writes to stdout.
+type SessionStartResultSchema struct{ Response }
 
-type PreSessionStartSchema struct {
-	Input          PreSessionStartInput
-	ResponseSchema PreSessionStartResponseSchema
-	ResultSchema   PreSessionStartResultSchema
+type SessionStartSchema struct {
+	Input          SessionStartInput
+	ResponseSchema SessionStartResponseSchema
+	ResultSchema   SessionStartResultSchema
 }
 
-func (s *PreSessionStartSchema) EventName() string { return string(hooks.PreSessionStart) }
+func (s *SessionStartSchema) EventName() string { return string(hooks.SessionStart) }
 
 // ── PostSessionStart ──────────────────────────────────────────────────────────
 
-type PostSessionStartInput struct {
+type SessionEndInput struct {
 	EventBase
 	// No extra fields — session is already live.
 }
 
-// PostSessionStartResponseSchema — response hook.
+// SessionEndResponseSchema — response hook.
 // SystemMessage appended after session starts (e.g. inject memory context).
-type PostSessionStartResponseSchema struct{ Response }
+type SessionEndResponseSchema struct{ Response }
 
-// PostSessionStartResultSchema — what the hook command writes to stdout.
-type PostSessionStartResultSchema struct{ Response }
+// SessionEndResultSchema — what the hook command writes to stdout.
+type SessionEndResultSchema struct{ Response }
 
-type PostSessionStartSchema struct {
-	Input          PostSessionStartInput
-	ResponseSchema PostSessionStartResponseSchema
-	ResultSchema   PostSessionStartResultSchema
+type SessionEndSchema struct {
+	Input          SessionEndInput
+	ResponseSchema SessionEndResponseSchema
+	ResultSchema   SessionEndResultSchema
 }
 
-func (s *PostSessionStartSchema) EventName() string { return string(hooks.PostSessionStart) }
+func (s *SessionEndSchema) EventName() string { return string(hooks.SessionEnd) }
 
 // ── PrePrompt ─────────────────────────────────────────────────────────────────
 

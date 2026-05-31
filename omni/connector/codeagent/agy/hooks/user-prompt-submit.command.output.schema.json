@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "user-prompt-submit.command.output",
+  "type": "object",
+  "properties": {
+    "continue": { "type": "boolean", "default": true },
+    "stopReason": { "type": "string", "default": null },
+    "suppressOutput": { "type": "boolean", "default": false },
+    "systemMessage": { "type": "string", "default": null },
+    "decision": {
+      "enum": ["block"],
+      "type": "string",
+      "default": null
+    },
+    "reason": { "type": "string", "default": null },
+    "additionalContext": { "type": "string", "default": null }
+  }
+}

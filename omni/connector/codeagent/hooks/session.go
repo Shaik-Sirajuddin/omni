@@ -1,23 +1,23 @@
 package hooks
 
 const (
-	PreSessionStart  HookID = "PreSessionStart"
-	PostSessionStart HookID = "PostSessionStart"
+	SessionStart HookID = "SessionStart"
+	SessionEnd   HookID = "SessionEnd"
 )
 
-type PreSessionStartParams struct {
+type SessionStartParams struct {
 	HookInput
 	Source string `json:"source"` // startup | resume | clear | compact
 }
 
-type PostSessionStartParams struct {
+type SessionEndParams struct {
 	HookInput
 }
 
-type PreSessionStartResult struct {
+type SessionStartResult struct {
 	HookOuput
 }
 
-type PostSessionStartResult struct {
+type SessionEndResult struct {
 	HookOuput
 }

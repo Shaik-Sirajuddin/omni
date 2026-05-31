@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "notification.command.output",
+  "type": "object",
+  "properties": {
+    "continue": { "type": "boolean", "default": true },
+    "stopReason": { "type": "string", "default": null },
+    "suppressOutput": { "type": "boolean", "default": false },
+    "systemMessage": { "type": "string", "default": null }
+  }
+}

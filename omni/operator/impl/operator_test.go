@@ -220,7 +220,7 @@ func TestCreateAgent(t *testing.T) {
 		assert.Subset(t, runtime.createCalls[0].Envs, []string{
 			"AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token",
 			"AXO_LINK_MCP_SENDER_ID=operator-interactive",
-			"AXO_LINK_MCP_SENDER_TYPE=mcp",
+			"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
 			"AXO_LINK_MCP_AGENT_WORKSPACE=" + string(workspace),
 		}, "CreateAgent should pass MCP environment variables to connector create")
 		require.Len(t, runtime.resumeCalls, 1, "Interactive CreateAgent should resume the created session")
@@ -228,7 +228,7 @@ func TestCreateAgent(t *testing.T) {
 		assert.Subset(t, runtime.resumeCalls[0].Envs, []string{
 			"AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token",
 			"AXO_LINK_MCP_SENDER_ID=operator-interactive",
-			"AXO_LINK_MCP_SENDER_TYPE=mcp",
+			"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
 			"AXO_LINK_MCP_AGENT_WORKSPACE=" + string(workspace),
 		}, "CreateAgent should pass MCP environment variables to connector resume")
 	})
@@ -440,14 +440,14 @@ func TestResumeAgent(t *testing.T) {
 		assert.Subset(t, resumeRuntime.createCalls[0].Envs, []string{
 			"AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token",
 			"AXO_LINK_MCP_SENDER_ID=operator-resume-fallback",
-			"AXO_LINK_MCP_SENDER_TYPE=mcp",
+			"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
 			"AXO_LINK_MCP_AGENT_WORKSPACE=" + string(workspace),
 		}, "ResumeAgent fallback should pass MCP environment variables to connector create")
 		require.Len(t, resumeRuntime.resumeCalls, 2, "ResumeAgent should attempt resume again after fallback create")
 		assert.Subset(t, resumeRuntime.resumeCalls[1].Envs, []string{
 			"AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token",
 			"AXO_LINK_MCP_SENDER_ID=operator-resume-fallback",
-			"AXO_LINK_MCP_SENDER_TYPE=mcp",
+			"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
 			"AXO_LINK_MCP_AGENT_WORKSPACE=" + string(workspace),
 		}, "ResumeAgent fallback should pass MCP environment variables to connector resume")
 	})
@@ -509,13 +509,13 @@ func TestSwitchProvider(t *testing.T) {
 		assert.Subset(t, switchRuntime.createCalls[0].Envs, []string{
 			"AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token",
 			"AXO_LINK_MCP_SENDER_ID=switch-me",
-			"AXO_LINK_MCP_SENDER_TYPE=mcp",
+			"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
 			"AXO_LINK_MCP_AGENT_WORKSPACE=" + string(workspace),
 		}, "SwitchProvider should pass MCP environment variables to connector create")
 		assert.Subset(t, switchRuntime.resumeCalls[0].Envs, []string{
 			"AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token",
 			"AXO_LINK_MCP_SENDER_ID=switch-me",
-			"AXO_LINK_MCP_SENDER_TYPE=mcp",
+			"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
 			"AXO_LINK_MCP_AGENT_WORKSPACE=" + string(workspace),
 		}, "SwitchProvider should pass MCP environment variables to connector resume")
 	})
@@ -567,6 +567,77 @@ func TestSwitchProvider(t *testing.T) {
 		require.NoError(t, err, "Session listing should succeed after second switch")
 		assert.Len(t, sessionsAfter, len(sessionsBefore), "SwitchProvider should reuse existing provider session when clean start is disabled")
 		assert.Empty(t, secondSwitchRuntime.createCalls, "SwitchProvider should not create a new session when reusing existing provider session")
+	})
+}
+
+func TestSessionControls(t *testing.T) {
+	t.Run("StopSessionUsesSafeStopWithResolvedActiveSession", func(t *testing.T) {
+		op := newTestOperator(t, true)
+		pty := &stubPTYDaemonClient{}
+		op.ptyDaemon = pty
+
+		workspace := sandbox.WorkspaceDir(t.TempDir())
+		require.NoError(t, op.CreateAgent(operator.CreateAgentParams{
+			Workspace:   workspace,
+			Name:        "stop-me",
+			Interactive: false,
+		}))
+		result, err := op.ListCodeAgents(operator.GetCodeAgentsParams{Workspace: workspace})
+		require.NoError(t, err)
+		require.Len(t, result.Agents, 1)
+
+		stopped, err := op.StopSession(operator.StopSessionParams{AgentID: result.Agents[0].ID, Force: true})
+		require.NoError(t, err)
+		assert.Equal(t, result.Agents[0].ID, stopped.SessionID)
+		require.Len(t, pty.stopSafeCalls, 1)
+		assert.Equal(t, result.Agents[0].ID, pty.stopSafeCalls[0].sessionID)
+		assert.True(t, pty.stopSafeCalls[0].force)
+	})
+
+	t.Run("DetachSessionUsesResolvedActiveSession", func(t *testing.T) {
+		op := newTestOperator(t, true)
+		pty := &stubPTYDaemonClient{}
+		op.ptyDaemon = pty
+
+		workspace := sandbox.WorkspaceDir(t.TempDir())
+		require.NoError(t, op.CreateAgent(operator.CreateAgentParams{
+			Workspace:   workspace,
+			Name:        "detach-me",
+			Interactive: false,
+		}))
+		result, err := op.ListCodeAgents(operator.GetCodeAgentsParams{Workspace: workspace})
+		require.NoError(t, err)
+		require.Len(t, result.Agents, 1)
+
+		detached, err := op.DetachSession(operator.DetachSessionParams{AgentID: result.Agents[0].ID})
+		require.NoError(t, err)
+		assert.Equal(t, result.Agents[0].ID, detached.SessionID)
+		require.Equal(t, []string{result.Agents[0].ID}, pty.detachCalls)
+	})
+}
+
+func TestExecInSession(t *testing.T) {
+	t.Run("AutoResumeUsesDetachedSession", func(t *testing.T) {
+		runtime := &stubCodeAgent{}
+		op := newTestOperator(t, true)
+		op.ptyDaemon = &stubPTYDaemonClient{}
+		op.newCodeAgent = func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error) {
+			return runtime, nil
+		}
+
+		workspace := sandbox.WorkspaceDir(t.TempDir())
+		require.NoError(t, op.CreateAgent(operator.CreateAgentParams{
+			Workspace:   workspace,
+			Name:        "exec-me",
+			Interactive: false,
+		}))
+
+		_, err := op.ExecInSession(operator.ExecInSessionParams{AgentID: runtime.createResultID, Prompt: "hello"})
+		require.NoError(t, err)
+		require.Len(t, runtime.resumeCalls, 1)
+		assert.True(t, runtime.resumeCalls[0].Detached)
+		require.Len(t, runtime.execInSessionCalls, 1)
+		assert.Equal(t, "hello", runtime.execInSessionCalls[0].Prompt)
 	})
 }
 
@@ -659,10 +730,11 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 }
 
 type stubCodeAgent struct {
-	createResultID string
-	createCalls    []codeagent.CreateSessionParams
-	resumeCalls    []codeagent.ResumeSessionParams
-	resumeErrs     []error
+	createResultID     string
+	createCalls        []codeagent.CreateSessionParams
+	resumeCalls        []codeagent.ResumeSessionParams
+	resumeErrs         []error
+	execInSessionCalls []codeagent.ExecInSessionParams
 }
 
 func (s *stubCodeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateSessionResult, error) {
@@ -734,8 +806,9 @@ func (s *stubCodeAgent) Stop() {}
 
 func (s *stubCodeAgent) SetPTYClient(codeagent.PTYClient) {}
 
-func (s *stubCodeAgent) ExecInSession(codeagent.ExecInSessionParams) (*codeagent.ExecInSessionResult, error) {
-	return nil, nil
+func (s *stubCodeAgent) ExecInSession(p codeagent.ExecInSessionParams) (*codeagent.ExecInSessionResult, error) {
+	s.execInSessionCalls = append(s.execInSessionCalls, p)
+	return &codeagent.ExecInSessionResult{SessionID: p.SessionID}, nil
 }
 
 func (s *stubCodeAgent) Discover() (codeagent.DiscoverResult, error) {
@@ -794,11 +867,11 @@ func (s *stubCodeAgent) PostToolUseFailureParams(any) (*hooks.PostToolUseFailure
 	return nil, nil
 }
 
-func (s *stubCodeAgent) PreSessionStartParams(any) (*hooks.PreSessionStartParams, error) {
+func (s *stubCodeAgent) SessionStartParams(any) (*hooks.SessionStartParams, error) {
 	return nil, nil
 }
 
-func (s *stubCodeAgent) PostSessionStartParams(any) (*hooks.PostSessionStartParams, error) {
+func (s *stubCodeAgent) SessionEndParams(any) (*hooks.SessionEndParams, error) {
 	return nil, nil
 }
 
@@ -822,11 +895,11 @@ func (s *stubCodeAgent) PostToolUseFailureResult(any) (*hooks.PostToolUseFailure
 	return nil, nil
 }
 
-func (s *stubCodeAgent) PreSessionStartResult(any) (*hooks.PreSessionStartResult, error) {
+func (s *stubCodeAgent) SessionStartResult(any) (*hooks.SessionStartResult, error) {
 	return nil, nil
 }
 
-func (s *stubCodeAgent) PostSessionStartResult(any) (*hooks.PostSessionStartResult, error) {
+func (s *stubCodeAgent) SessionEndResult(any) (*hooks.SessionEndResult, error) {
 	return nil, nil
 }
 
@@ -844,6 +917,11 @@ type stubPTYDaemonClient struct {
 		sessionID string
 		data      []byte
 	}
+	stopSafeCalls []struct {
+		sessionID string
+		force     bool
+	}
+	detachCalls []string
 }
 
 func (s *stubPTYDaemonClient) Pipe(agentID, sessionID string, data []byte) error {
@@ -859,7 +937,7 @@ func (s *stubPTYDaemonClient) Pipe(agentID, sessionID string, data []byte) error
 	return nil
 }
 
-func (s *stubPTYDaemonClient) Start(string, []string, []string, string) error {
+func (s *stubPTYDaemonClient) Start(string, []string, []string, string, string) error {
 	return nil
 }
 
@@ -876,6 +954,19 @@ func (s *stubPTYDaemonClient) Stop(string) error {
 }
 
 func (s *stubPTYDaemonClient) Register(string, string, string) error {
+	return nil
+}
+
+func (s *stubPTYDaemonClient) StopSafe(sessionID string, force bool) error {
+	s.stopSafeCalls = append(s.stopSafeCalls, struct {
+		sessionID string
+		force     bool
+	}{sessionID: sessionID, force: force})
+	return nil
+}
+
+func (s *stubPTYDaemonClient) Detach(sessionID string) error {
+	s.detachCalls = append(s.detachCalls, sessionID)
 	return nil
 }
 

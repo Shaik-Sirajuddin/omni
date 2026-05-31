@@ -2,26 +2,16 @@ package ptydaemon
 
 import (
 	"context"
-	"os"
-	"os/user"
-	"strings"
 	"time"
 
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/ptyunix"
 )
 
-// DefaultSocketPath returns the per-user Unix socket path for the PTY daemon,
-// honouring OMNI_PTY_SOCKET when set.
-// Resolves to /run/omni-<username>/omni-pty.sock.
+// DefaultSocketPath returns the per-user Unix socket path for the PTY daemon.
 func DefaultSocketPath() string {
-	if v := strings.TrimSpace(os.Getenv("OMNI_PTY_SOCKET")); v != "" {
-		return v
-	}
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return "/run/omni-" + u.Username + "/omni-pty.sock"
-	}
-	return "/run/omni-pty/omni-pty.sock"
+	return sockpath.PTY()
 }
 
 // Run wires the store, daemon, and unix socket server, then blocks until ctx

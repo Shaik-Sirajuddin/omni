@@ -133,6 +133,21 @@ func (a *geminiAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 	cmd := exec.Command(resumeShell(), "-lc", buildShellExecCommand("gemini", geminiArgs...))
 	cmd.Dir = workDir
 	if ptyClient != nil {
+		if resolvedSessionID == "" {
+			resolvedSessionID = "latest"
+		}
+		if p.Detached {
+			command := []string{resumeShell(), "-lc", buildShellExecCommand("gemini", geminiArgs...)}
+			if err := ptyClient.Start(resolvedSessionID, command, p.Envs, workDir, submitKey); err != nil {
+				return nil, fmt.Errorf("gemini: resume: pty start: %w", err)
+			}
+			a.mu.Lock()
+			a.sessionID = resolvedSessionID
+			a.mu.Unlock()
+			logger.Info("Resume: PTY daemon session started detached", "sessionID", resolvedSessionID)
+			return &codeagent.ResumeSessionResult{ProcessID: "", SessionID: resolvedSessionID}, nil
+		}
+
 		master, err := pty.Start(cmd)
 		if err != nil {
 			return nil, fmt.Errorf("gemini: resume: pty start: %w", err)

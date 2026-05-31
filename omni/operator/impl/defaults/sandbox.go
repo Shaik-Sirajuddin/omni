@@ -1,6 +1,7 @@
 package defaults
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -24,6 +25,14 @@ var geminiBinaries = []string{
 	"/opt/homebrew/bin/gemini",
 }
 
+var agyBinaries = []string{
+	"agy",
+	"/usr/local/bin/agy",
+	"/opt/homebrew/bin/agy",
+	// expanded at call-time via os.ExpandEnv in BinaryDirs
+	"$HOME/.local/bin/agy",
+}
+
 // BinaryDirs returns the unique parent directories that contain the resolved
 // binary for the given provider.  Candidates are resolved via exec.LookPath;
 // absolute hard-coded paths are included directly when look-up fails.
@@ -34,6 +43,8 @@ func BinaryDirs(provider codeagent.Provider) []string {
 		candidates = claudeBinaries
 	case "gemini":
 		candidates = geminiBinaries
+	case "agy":
+		candidates = agyBinaries
 	default:
 		// codex and unknown providers: resolve the provider name from PATH.
 		if p, err := exec.LookPath(string(provider)); err == nil {
@@ -45,6 +56,7 @@ func BinaryDirs(provider codeagent.Provider) []string {
 	seen := map[string]struct{}{}
 	var dirs []string
 	for _, bin := range candidates {
+		bin = os.ExpandEnv(bin)
 		resolved, err := exec.LookPath(bin)
 		if err != nil {
 			// Absolute fallback paths are included even when not present.

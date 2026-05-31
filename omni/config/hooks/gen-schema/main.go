@@ -14,8 +14,8 @@ type hookPayloads struct {
 	PreToolUse         confhooks.PreToolUseInput
 	PostToolUse        confhooks.PostToolUseInput
 	PostToolUseFailure confhooks.PostToolUseFailureInput
-	PreSessionStart    confhooks.PreSessionStartInput
-	PostSessionStart   confhooks.PostSessionStartInput
+	SessionStart    confhooks.SessionStartInput
+	SessionEnd   confhooks.SessionEndInput
 	PrePrompt          confhooks.PrePromptInput
 	PostPrompt         confhooks.PostPromptInput
 	Response           confhooks.Response

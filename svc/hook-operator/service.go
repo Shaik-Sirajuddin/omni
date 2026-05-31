@@ -10,7 +10,7 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
 var (
@@ -178,28 +178,9 @@ func resolveOmniBinaryPath(optPath string) (string, error) {
 	return path, nil
 }
 
-// SocketPath returns the hook-operator unix socket path using the canonical
-// resolution order. Importers (CLI, svc/cmd) should use this instead of
-// duplicating the env var name or default.
-//
-// Priority:
-//  1. HOOK_OPERATOR_SOCKET env var
-//  2. /run/omni-<user>/hook-operator.sock
+// SocketPath returns the hook-operator unix socket path.
 func SocketPath() string {
-	if v := os.Getenv("HOOK_OPERATOR_SOCKET"); v != "" {
-		return v
-	}
-	return "/run/omni-" + currentUser() + "/hook-operator.sock"
-}
-
-func currentUser() string {
-	if v := os.Getenv("USER"); v != "" {
-		return v
-	}
-	if v := os.Getenv("LOGNAME"); v != "" {
-		return v
-	}
-	return "omni"
+	return sockpath.HookOperator()
 }
 
 // resolveUnixPath picks the socket path for the service itself.

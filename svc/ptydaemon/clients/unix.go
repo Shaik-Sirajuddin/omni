@@ -37,6 +37,8 @@ type unixRequest struct {
 	Data      []byte   `json:"data,omitempty"`
 	PID       int      `json:"pid,omitempty"`
 	SubmitKey string   `json:"submit_key,omitempty"`
+	Safe      bool     `json:"safe,omitempty"`
+	Force     bool     `json:"force,omitempty"`
 }
 
 type unixResponse struct {
@@ -144,7 +146,7 @@ func (c *UnixSocketClient) Get(_, sessionID string) (*PTYTerminalInfo, error) {
 // It resolves command[0] to an absolute path via exec.LookPath so the daemon
 // can exec binaries installed in the caller's PATH.
 // dir sets the working directory for the spawned process; empty means inherit daemon cwd.
-func (c *UnixSocketClient) Start(sessionID string, command []string, env []string, dir string) error {
+func (c *UnixSocketClient) Start(sessionID string, command []string, env []string, dir, submitKey string) error {
 	ptylog.Debug("client: start", "session_id", sessionID, "command", command, "dir", dir)
 	if len(command) > 0 {
 		original := command[0]
@@ -155,7 +157,7 @@ func (c *UnixSocketClient) Start(sessionID string, command []string, env []strin
 			ptylog.Debug("client: start LookPath failed, using original", "command", original, "err", err)
 		}
 	}
-	if err := c.do(unixRequest{Op: "start", SessionID: sessionID, Command: command, Env: env, Dir: dir}); err != nil {
+	if err := c.do(unixRequest{Op: "start", SessionID: sessionID, Command: command, Env: env, Dir: dir, SubmitKey: submitKey}); err != nil {
 		ptylog.Error("client: start failed", "err", err, "session_id", sessionID, "command", command)
 		return err
 	}
@@ -215,12 +217,47 @@ func (c *UnixSocketClient) Attach(ctx context.Context, sessionID string) error {
 
 	ptylog.Debug("client: attach received master fd, entering raw terminal", "session_id", sessionID, "fd", fds[0])
 	ptmx := os.NewFile(uintptr(fds[0]), "ptmx")
-	if err := attachToTerminal(ctx, ptmx); err != nil {
+
+	// Open a second connection for stdin relay so the daemon can track human
+	// input and serialise it against ExecInSession writes.
+	var stdinDst io.Writer = ptmx // fallback: write stdin directly to ptmx
+	relayConn, relayErr := c.openStdinRelay(sessionID)
+	if relayErr != nil {
+		ptylog.Warn("client: stdin-relay unavailable, falling back to direct ptmx write", "err", relayErr, "session_id", sessionID)
+	} else {
+		defer relayConn.Close()
+		stdinDst = relayConn
+	}
+
+	if err := attachToTerminal(ctx, ptmx, stdinDst); err != nil {
 		ptylog.Error("client: attach terminal setup failed", "err", err, "session_id", sessionID)
 		return err
 	}
 	ptylog.Debug("client: attach terminal io running", "session_id", sessionID)
 	return nil
+}
+
+// openStdinRelay dials the daemon, sends a stdin-relay handshake, and returns
+// the open connection ready for raw stdin bytes. The caller must close it.
+func (c *UnixSocketClient) openStdinRelay(sessionID string) (net.Conn, error) {
+	conn, err := net.Dial("unix", c.socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.NewEncoder(conn).Encode(unixRequest{Op: "stdin-relay", SessionID: sessionID}); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	var resp unixResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if !resp.OK {
+		conn.Close()
+		return nil, errors.New(resp.Error)
+	}
+	return conn, nil
 }
 
 // ListAttached returns all processes holding the PTY master fd of the session.
@@ -265,7 +302,7 @@ func (c *UnixSocketClient) MetaAttached(sessionID string) (int, error) {
 	return resp.Count, nil
 }
 
-// Exec writes raw input bytes to the PTY master.
+// Exec sends a pre-formatted payload to the PTY master. The daemon pipes it as-is and adds submit-key retries.
 func (c *UnixSocketClient) Exec(sessionID, input string) error {
 	ptylog.Debug("client: exec", "session_id", sessionID, "input_len", len(input))
 	if err := c.do(unixRequest{Op: "exec", SessionID: sessionID, Input: input}); err != nil {
@@ -282,6 +319,32 @@ func (c *UnixSocketClient) Stop(sessionID string) error {
 		return err
 	}
 	ptylog.Debug("client: stop ok", "session_id", sessionID)
+	return nil
+}
+
+// StopSafe stops the session only if no client is currently attached.
+// Pass force=true to kill even when a client holds the PTY master fd.
+// Use Stop for the original unconditional-kill behaviour.
+func (c *UnixSocketClient) StopSafe(sessionID string, force bool) error {
+	ptylog.Debug("client: stop-safe", "session_id", sessionID, "force", force)
+	if err := c.do(unixRequest{Op: "stop", SessionID: sessionID, Safe: true, Force: force}); err != nil {
+		ptylog.Error("client: stop-safe failed", "err", err, "session_id", sessionID)
+		return err
+	}
+	ptylog.Debug("client: stop-safe ok", "session_id", sessionID)
+	return nil
+}
+
+// Detach explicitly clears the attachment record for the session, allowing the
+// next caller to attach immediately without waiting for the daemon to reap the
+// previous client's process entry.
+func (c *UnixSocketClient) Detach(sessionID string) error {
+	ptylog.Debug("client: detach", "session_id", sessionID)
+	if err := c.do(unixRequest{Op: "detach", SessionID: sessionID}); err != nil {
+		ptylog.Error("client: detach failed", "err", err, "session_id", sessionID)
+		return err
+	}
+	ptylog.Debug("client: detach ok", "session_id", sessionID)
 	return nil
 }
 
@@ -317,7 +380,7 @@ func (c *UnixSocketClient) do(req unixRequest) error {
 	return nil
 }
 
-func attachToTerminal(ctx context.Context, ptmx *os.File) error {
+func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) error {
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		_ = ptmx.Close()
@@ -360,7 +423,19 @@ func attachToTerminal(ctx context.Context, ptmx *os.File) error {
 	}()
 
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(ptmx, os.Stdin); done <- struct{}{} }()
+	go func() {
+		n, err := io.Copy(stdinDst, os.Stdin)
+		if err != nil && stdinDst != ptmx {
+			// Relay conn died — fall back to writing stdin directly to ptmx
+			// so the session stays alive and input is not silently lost.
+			// ptmx is safe to write here: deferred ptmx.Close() only runs after
+			// the select below exits, which waits for this goroutine's done signal.
+			ptylog.Warn("stdin-relay write failed, falling back to direct ptmx write",
+				"err", err, "bytes_relayed", n)
+			_, _ = io.Copy(ptmx, os.Stdin)
+		}
+		done <- struct{}{}
+	}()
 	go func() { _, _ = io.Copy(os.Stdout, ptmx); done <- struct{}{} }()
 	select {
 	case <-ctx.Done():

@@ -11,8 +11,8 @@ var Hooks = []HookID{
 	PostToolUseFailure,
 	PrePrompt,
 	PostPrompt,
-	PreSessionStart,
-	PostSessionStart,
+	SessionStart,
+	SessionEnd,
 }
 
 type Capabilities struct {
@@ -21,8 +21,8 @@ type Capabilities struct {
 	PreToolUse         bool
 	PostToolUse        bool
 	PostToolUseFailure bool
-	PreSessionStart    bool
-	PostSessionStart   bool
+	SessionStart       bool
+	SessionEnd         bool
 }
 
 // type Hook struct {

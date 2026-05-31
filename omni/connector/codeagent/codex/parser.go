@@ -112,12 +112,12 @@ func (a *codexAgent) PostToolUseFailureParams(raw any) (*hooks.PostToolUseFailur
 	return parseHookInput[hooks.PostToolUseFailureParams](raw)
 }
 
-func (a *codexAgent) PreSessionStartParams(raw any) (*hooks.PreSessionStartParams, error) {
-	return parseHookInput[hooks.PreSessionStartParams](raw)
+func (a *codexAgent) SessionStartParams(raw any) (*hooks.SessionStartParams, error) {
+	return parseHookInput[hooks.SessionStartParams](raw)
 }
 
-func (a *codexAgent) PostSessionStartParams(raw any) (*hooks.PostSessionStartParams, error) {
-	return parseHookInput[hooks.PostSessionStartParams](raw)
+func (a *codexAgent) SessionEndParams(raw any) (*hooks.SessionEndParams, error) {
+	return parseHookInput[hooks.SessionEndParams](raw)
 }
 
 func (a *codexAgent) PrePromptInputParams(raw any) (*hooks.PrePromptInputParams, error) {
@@ -140,12 +140,12 @@ func (a *codexAgent) PostToolUseFailureResult(raw any) (*hooks.PostToolUseFailur
 	return parseHookInput[hooks.PostToolUseFailureResult](raw)
 }
 
-func (a *codexAgent) PreSessionStartResult(raw any) (*hooks.PreSessionStartResult, error) {
-	return parseHookInput[hooks.PreSessionStartResult](raw)
+func (a *codexAgent) SessionStartResult(raw any) (*hooks.SessionStartResult, error) {
+	return parseHookInput[hooks.SessionStartResult](raw)
 }
 
-func (a *codexAgent) PostSessionStartResult(raw any) (*hooks.PostSessionStartResult, error) {
-	return parseHookInput[hooks.PostSessionStartResult](raw)
+func (a *codexAgent) SessionEndResult(raw any) (*hooks.SessionEndResult, error) {
+	return parseHookInput[hooks.SessionEndResult](raw)
 }
 
 func (a *codexAgent) PrePromptInputResult(raw any) (*hooks.PrePromptInputResult, error) {

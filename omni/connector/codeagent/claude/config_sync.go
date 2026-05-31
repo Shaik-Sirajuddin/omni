@@ -187,8 +187,8 @@ func hooksFromClaudeSettings(cfg *SettingsSchemaJsonHooks) *hooks.HookData {
 		{id: hooks.PreToolUse, matchers: cfg.PreToolUse},
 		{id: hooks.PostToolUse, matchers: cfg.PostToolUse},
 		{id: hooks.PostToolUseFailure, matchers: cfg.PostToolUseFailure},
-		{id: hooks.PreSessionStart, matchers: cfg.SessionStart},
-		{id: hooks.PostSessionStart, matchers: cfg.SessionStart},
+		{id: hooks.SessionStart, matchers: cfg.SessionStart},
+		{id: hooks.SessionEnd, matchers: cfg.SessionStart},
 		{id: hooks.PrePrompt, matchers: cfg.UserPromptSubmit},
 		{id: hooks.PostPrompt, matchers: cfg.Stop},
 	}

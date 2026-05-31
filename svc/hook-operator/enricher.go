@@ -67,7 +67,7 @@ func (e *enricher) buildContext(raw map[string]json.RawMessage) hooks.OmniContex
 	}
 
 	agentID, session, err := e.sessions.GetSessionByID(sessionID)
-	if err != nil || session == nil {
+	if err != nil || session == nil || agentID == "" {
 		return ctx
 	}
 

@@ -1,5 +1,4 @@
 package server
-
 import (
 	"context"
 	"encoding/json"
@@ -10,6 +9,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/google/uuid"
 )
+
 
 type replyService struct {
 	msgStore     message.MessageStore
@@ -23,7 +23,7 @@ func newReplyService(msgStore message.MessageStore, onNewMessage func(context.Co
 	}
 }
 
-func (r *replyService) SendReply(ctx context.Context, msg *message.Message, fromAgentID string) error {
+func (r *replyService) SendReply(ctx context.Context, msg *message.Message, fromAgentID, fromAgentName string) error {
 	if msg == nil || !msg.ShouldReply {
 		return nil
 	}
@@ -40,8 +40,8 @@ func (r *replyService) SendReply(ctx context.Context, msg *message.Message, from
 		IsResponse:  true,
 		ShouldReply: false,
 		RespondedTo: msg.ID,
-		Prompt:      replyPrompt(msg, fromAgentID),
-		Refs:        replyRefs(msg, fromAgentID),
+		Prompt:      msg.Prompt,
+		Refs:        replyRefs(msg, fromAgentID, fromAgentName),
 		Workspace:   msg.Workspace,
 		Status:      message.StatusInQueue,
 		SentTime:    time.Now().UnixMilli(),
@@ -49,17 +49,14 @@ func (r *replyService) SendReply(ctx context.Context, msg *message.Message, from
 	if err := r.msgStore.InsertMessage(ctx, reply); err != nil {
 		return err
 	}
+	logger.Debug("send reply: inserted", "from_agent_id", fromAgentID, "from_agent_name", fromAgentName, "to", msg.From, "reply_id", reply.ID)
 	if r.onNewMessage != nil {
 		r.onNewMessage(ctx, fromAgentID, msg.From)
 	}
 	return nil
 }
 
-func replyPrompt(msg *message.Message, fromAgentID string) string {
-	return fmt.Sprintf("This is a reply to an earlier message.\n\nOriginal message id: %s\nReplying agent: %s\nOriginal sender: %s", msg.ID, fromAgentID, msg.From)
-}
-
-func replyRefs(msg *message.Message, fromAgentID string) string {
+func replyRefs(msg *message.Message, fromAgentID, fromAgentName string) string {
 	fields := map[string]json.RawMessage{}
 	if strings.TrimSpace(msg.Refs) != "" {
 		_ = json.Unmarshal([]byte(msg.Refs), &fields)
@@ -68,7 +65,8 @@ func replyRefs(msg *message.Message, fromAgentID string) string {
 		fields = map[string]json.RawMessage{}
 	}
 	putReplyRef(fields, "author", "tunnel-mcp")
-	putReplyRef(fields, "author_agent_name", fromAgentID)
+	putReplyRef(fields, "author_agent_id", fromAgentID)
+	putReplyRef(fields, "author_agent_name", fromAgentName)
 	putReplyRef(fields, "reply_to_message_id", msg.ID)
 	putReplyRef(fields, "original_sender", msg.From)
 	putReplyRef(fields, "author_workspace", msg.Workspace)

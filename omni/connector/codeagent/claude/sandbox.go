@@ -56,8 +56,8 @@ var hookEventName = map[hooks.HookID]string{
 	hooks.PreToolUse:         "PreToolUse",
 	hooks.PostToolUse:        "PostToolUse",
 	hooks.PostToolUseFailure: "PostToolUseFailure",
-	hooks.PreSessionStart:    "SessionStart",
-	hooks.PostSessionStart:   "SessionStart",
+	hooks.SessionStart:    "SessionStart",
+	hooks.SessionEnd:   "SessionStart",
 	hooks.PrePrompt:          "UserPromptSubmit",
 	hooks.PostPrompt:         "Stop",
 }
@@ -67,8 +67,8 @@ func (a *claudeAgent) SupportedHooks() (*hooks.Capabilities, error) {
 		PreToolUse:         true,
 		PostToolUse:        true,
 		PostToolUseFailure: true,
-		PreSessionStart:    true,
-		PostSessionStart:   true,
+		SessionStart:    true,
+		SessionEnd:      true,
 		PrePrompt:          true,
 		PostPrompt:         false,
 	}, nil

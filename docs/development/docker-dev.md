@@ -15,18 +15,23 @@ make dev-preflight
 
 This creates:
 - `development/.env.docker` — copy of the example, fill in your API keys
-- `development/local/` — agent MCP configs (`.claude.json`, `.codex/`, `.gemini/`)
 
 Then edit `development/.env.docker` with your keys:
 
 | Variable | Agent | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | claude | API key |
+| `CLAUDE_CODE_OAUTH_TOKEN` | claude | OAuth token (Pro/Max subscription, takes precedence over API key) |
 | `OPENAI_API_KEY` | codex | API key |
-| `GEMINI_API_KEY` | gemini | API key |
-| `ANTHROPIC_MODEL` | claude | Default model (e.g. `claude-sonnet-4-6`) |
-| `CODEX_MODEL` | codex | Default model (e.g. `codex-mini-latest`) |
-| `GEMINI_MODEL` | gemini | Default model (e.g. `gemini-2.5-pro`) |
+| `OPENAI_OAUTH_TOKEN` | codex | OAuth token (ChatGPT Plus, mapped to OPENAI_API_KEY if no key set) |
+| `ANTHROPIC_MODEL` | claude | Default model — `claude-haiku-4-5` (default) |
+| `CODEX_MODEL` | codex | Default model — `gpt-5.4-mini` (default) |
+| `GEMINI_API_KEY` | gemini | API key (CI/non-interactive) |
+| `GOOGLE_API_KEY` | gemini | Google Cloud API key (Vertex AI express mode) |
+| `GOOGLE_CLOUD_PROJECT` | gemini | GCP project ID (Vertex AI) |
+| `GEMINI_MODEL` | gemini | Default model (e.g. `gemini-2.5-flash`) |
+| `AGY_MODEL` | agy | Default model for Antigravity CLI |
+| `DEBUG` | omni | Set to `1` to enable slog debug logging |
 
 ## Start
 
@@ -35,17 +40,17 @@ make docker-up
 ```
 
 On first start the container will:
-1. Install binaries from the pre-built image
-2. Write the systemd unit
+1. Link pre-built binaries into `/usr/local/bin`
+2. Write the system unit (`/etc/systemd/system/omni@.service`)
 3. Hand off to systemd — `omni@root.service` starts automatically
 
-## Connect
+After the container is up you are dropped straight into an interactive shell inside it.
+
+To re-attach to a running container:
 
 ```bash
 make docker-connect
 ```
-
-Opens an interactive login shell inside the container.
 
 ## Rebuild Image
 
@@ -55,17 +60,18 @@ Required when Go source or Dockerfile changes:
 make docker-rebuild
 ```
 
-Agent configs and DB persist across rebuilds — they are bind-mounted from `development/local/` and named volumes.
+Agent configs and DB persist across rebuilds — they are bind-mounted from `development/local.example/` and named volumes.
 
 ## Health Checks
 
 ```bash
-# MCP streamable HTTP (agent clients)
-curl -s http://127.0.0.1:18062/mcp
-
-# Pure HTTP service (unix socket)
+# MCP streamable HTTP (agent clients) — exec into container, no host port binding
 docker compose -f development/docker-compose.yaml exec ubuntu \
-  curl -s --unix-socket /run/omni-root/service.sock http://unix/healthz
+  curl -s http://127.0.0.1:18062/mcp
+
+# PTY socket
+docker compose -f development/docker-compose.yaml exec ubuntu \
+  test -S /run/omni-root/omni-pty.sock && echo ok
 
 # systemd service status
 docker compose -f development/docker-compose.yaml exec ubuntu \
@@ -75,16 +81,17 @@ docker compose -f development/docker-compose.yaml exec ubuntu \
 ## Service Logs
 
 ```bash
-# all logs
-docker compose -f development/docker-compose.yaml exec ubuntu journalctl -fu omni@root
+# inside container (make docker-connect)
+journalctl -fu omni@root
 
-# omni only (exclude tunnel_mcp)
-docker compose -f development/docker-compose.yaml exec ubuntu \
-  journalctl -fu omni@root | grep -v 'source=/build/tunnel_mcp'
+# from host — stream live
+docker compose -f development/docker-compose.yaml exec -T ubuntu \
+  journalctl -fu omni@root --no-pager
 
-# tunnel_mcp only
-docker compose -f development/docker-compose.yaml exec ubuntu \
-  journalctl -fu omni@root | grep 'source=/build/tunnel_mcp'
+# from host — pipe to local file (stop with: kill %1)
+docker compose -f development/docker-compose.yaml exec -T ubuntu \
+  journalctl -fu omni@root --no-pager \
+  > development/local/logs-$(date +%s).txt &
 ```
 
 ## Volumes and Persistence
@@ -94,15 +101,33 @@ docker compose -f development/docker-compose.yaml exec ubuntu \
 | `omni-persist` (volume) | `/var/lib/omni-root` | ptydaemon DB, state |
 | `omni-auth` (volume) | `/root/.config` | agent CLI auth tokens, omni config |
 | `omni-data` (volume) | `/root/.local/share/memory` | agent DB, sandbox data |
-| `development/local/.claude.json` | `/root/.claude.json` | claude MCP config |
-| `development/local/.codex/` | `/root/.codex/` | codex MCP config |
-| `development/local/.gemini/` | `/root/.gemini/` | gemini MCP config |
+| `agent-claude` (volume) | `/root/.claude` | claude settings + history |
+| `agent-codex` (volume) | `/root/.codex` | codex config + memories |
+| `development/local/.codex/auth.json` | `/root/.codex/auth.json` | codex OAuth credentials (read-only) |
+| `development/local/.gemini/antigravity-cli/antigravity-oauth-token` | `/root/.gemini/antigravity-cli/antigravity-oauth-token` | gemini/agy OAuth token (read-only) |
+| `agent-agy` (volume) | `/root/.agy` | agy settings + history |
+
+`development/local.example/` is committed to git and bind-mounted directly — edit files there to persist changes across rebuilds.
 
 All data survives `make docker-down docker-up`. To fully reset:
 
 ```bash
 docker compose -f development/docker-compose.yaml down -v   # removes named volumes
-rm -rf development/local && make dev-preflight               # resets agent configs
+```
+
+## Container Naming
+
+The compose file uses no fixed `container_name`, so Docker derives names from the project:
+
+| Context | Command | Container name |
+|---|---|---|
+| Dev | `docker compose up -d` | `development-ubuntu-1` |
+| E2E tests | `docker compose -p omni-e2e up -d` | `omni-e2e-ubuntu-1` |
+
+Each project gets its own prefixed volumes and network — fully isolated. To tear down the e2e environment including volumes:
+
+```bash
+docker compose -p omni-e2e down -v
 ```
 
 ## Stop

@@ -1,0 +1,506 @@
+name: AgyCodeCLI
+type: interactive_and_exec_cli
+source: https://code.agy.com/docs/en/cli-reference
+settings_source: https://code.agy.com/docs/en/settings
+version:
+legend:
+  I: interactive_only   # works inside Agy Code REPL (/ commands)
+  N: non_interactive    # works via CLI / print mode (-p)
+  B: both               # works in both contexts
+
+# ============================================================
+# CLI COMMANDS
+# ============================================================
+cli_commands:
+
+  - name: agy
+    mode: B
+    category: session
+    description: Start interactive session
+    input:
+      args:
+        - prompt: optional string
+      options:
+        - --model / -m: optional string
+        - --name / -n: optional string
+        - --permission-mode: enum [default, acceptEdits, plan, auto, dontAsk, bypassPermissions]
+    output:
+      type: session
+      schema:
+        session_id: string
+        session_started: boolean
+
+  - name: agy -p / --print
+    mode: N
+    category: execution
+    description: Print response without interactive mode (SDK / headless)
+    input:
+      args:
+        - prompt: string
+      options:
+        - --output-format: enum [text, json, stream-json]
+        - --input-format: enum [text, stream-json]
+        - --max-turns: optional integer
+        - --max-budget-usd: optional float
+        - --json-schema: optional json_string
+        - --no-session-persistence: boolean
+        - --include-hook-events: boolean  # requires stream-json
+        - --include-partial-messages: boolean
+        - --fallback-model: optional string
+        - --permission-prompt-tool: optional string
+    output:
+      type: response
+      schema:
+        stdout: string
+        format: text | json | stream-json
+
+  - name: agy -c / --continue
+    mode: B
+    category: session
+    description: Load the most recent conversation in the current directory
+    input:
+      options:
+        - -p: boolean  # continue in print mode
+    output:
+      type: session
+
+  - name: agy -r / --resume
+    aliases: [agy --resume <id|name>]
+    mode: B
+    category: session
+    description: Resume a specific session by ID or name
+    input:
+      args:
+        - session: string  # session ID or name
+      options:
+        - --fork-session: boolean
+    output:
+      type: session
+
+  - name: agy update
+    mode: N
+    category: system
+    description: Update to latest version
+    input: { args: [] }
+    output:
+      type: status
+      schema:
+        upgraded: boolean
+
+  - name: agy auth login
+    mode: N
+    category: auth
+    description: Sign in to Anthropic account
+    input:
+      options:
+        - --email: optional string
+        - --sso: boolean
+        - --console: boolean  # sign in via Anthropic Console for API billing
+    output:
+      type: status
+      schema:
+        authenticated: boolean
+
+  - name: agy auth logout
+    mode: N
+    category: auth
+    description: Log out from Anthropic account
+    input: { args: [] }
+    output:
+      type: status
+
+  - name: agy auth status
+    mode: N
+    category: auth
+    description: Show authentication status
+    input:
+      options:
+        - --text: boolean  # human-readable instead of JSON
+    output:
+      type: json
+      schema:
+        logged_in: boolean
+      exit_codes:
+        0: logged_in
+        1: not_logged_in
+
+  - name: agy agents
+    mode: N
+    category: agents
+    description: List all configured subagents grouped by source
+    input: { args: [] }
+    output:
+      type: list
+
+  - name: agy auto-mode defaults
+    mode: N
+    category: configuration
+    description: Print built-in auto-mode classifier rules as JSON
+    input: { args: [] }
+    output:
+      type: json
+
+  - name: agy auto-mode config
+    mode: N
+    category: configuration
+    description: Show effective auto-mode config with settings applied
+    input: { args: [] }
+    output:
+      type: json
+
+  - name: agy mcp
+    mode: N
+    category: mcp
+    description: Configure Model Context Protocol servers
+    input:
+      subcommands: [add, remove, list, get, enable, disable]
+    output:
+      type: varies
+
+  - name: agy plugin
+    aliases: [agy plugins]
+    mode: N
+    category: plugins
+    description: Manage Agy Code plugins
+    input:
+      subcommands: [install, uninstall, list, update]
+    output:
+      type: varies
+
+  - name: agy remote-control
+    mode: N
+    category: remote
+    description: Start Remote Control server (no local interactive session)
+    input:
+      options:
+        - --name: optional string
+    output:
+      type: status
+
+  - name: agy --version / -v
+    mode: N
+    category: system
+    description: Output the version number
+    input: { args: [] }
+    output:
+      type: string
+
+  - name: agy --help
+    mode: N
+    category: system
+    description: Show commands and flags (not exhaustive)
+    input: { args: [] }
+    output:
+      type: text
+
+# ============================================================
+# CLI FLAGS (session-scoped, not persisted)
+# ============================================================
+cli_flags:
+
+  session:
+    - flag: --model
+      type: string
+      description: Set model for session (alias: sonnet, opus, or full model ID)
+    - flag: --name / -n
+      type: string
+      description: Display name for the session
+    - flag: --session-id
+      type: string (UUID)
+      description: Use a specific session ID
+    - flag: --fork-session
+      type: boolean
+      description: Create new session ID when resuming instead of reusing original
+    - flag: --from-pr
+      type: string (PR number or URL)
+      description: Resume sessions linked to a GitHub PR
+    - flag: --worktree / -w
+      type: string
+      description: Start in isolated git worktree at <repo>/.agy/worktrees/<name>
+    - flag: --tmux
+      type: boolean | enum [classic]
+      description: Create tmux session for worktree (requires --worktree)
+
+  permissions:
+    - flag: --permission-mode
+      type: enum [default, acceptEdits, plan, auto, dontAsk, bypassPermissions]
+      description: Begin in a specified permission mode
+    - flag: --allowedTools
+      type: string[]
+      description: Tools that execute without prompting
+    - flag: --disallowedTools
+      type: string[]
+      description: Tools removed from model context entirely
+    - flag: --tools
+      type: string
+      description: Restrict which built-in tools Agy can use
+    - flag: --dangerously-skip-permissions
+      type: boolean
+      description: Skip permission prompts (equivalent to bypassPermissions mode)
+    - flag: --allow-dangerously-skip-permissions
+      type: boolean
+      description: Add bypassPermissions to Shift+Tab cycle without starting in it
+    - flag: --enable-auto-mode
+      type: boolean
+      description: Unlock auto mode in Shift+Tab cycle (requires Team/Enterprise/API)
+
+  system_prompt:
+    - flag: --system-prompt
+      type: string
+      description: Replace entire system prompt with custom text
+    - flag: --system-prompt-file
+      type: path
+      description: Replace system prompt with file contents
+    - flag: --append-system-prompt
+      type: string
+      description: Append custom text to end of default system prompt
+    - flag: --append-system-prompt-file
+      type: path
+      description: Append file contents to default system prompt
+
+  output:
+    - flag: --output-format
+      type: enum [text, json, stream-json]
+      description: Specify output format for print mode
+    - flag: --input-format
+      type: enum [text, stream-json]
+      description: Specify input format for print mode
+    - flag: --verbose
+      type: boolean
+      description: Enable verbose logging, shows full turn-by-turn output
+    - flag: --debug
+      type: string
+      description: Enable debug mode with optional category filter (e.g. "api,hooks")
+    - flag: --debug-file
+      type: path
+      description: Write debug logs to a file (implicitly enables debug)
+
+  context:
+    - flag: --add-dir
+      type: path[]
+      description: Add additional working directories for file access
+    - flag: --mcp-config
+      type: path | json_string
+      description: Load MCP servers from JSON files or strings
+    - flag: --strict-mcp-config
+      type: boolean
+      description: Only use MCP servers from --mcp-config
+    - flag: --plugin-dir
+      type: path
+      description: Load plugins from a directory for this session only
+    - flag: --settings
+      type: path | json_string
+      description: Load additional settings from file or JSON string
+    - flag: --setting-sources
+      type: enum_list [user, project, local]
+      description: Comma-separated list of setting sources to load
+
+  behavior:
+    - flag: --effort
+      type: enum [low, medium, high, max]
+      description: Set effort level for session (max = Opus 4.6 only)
+    - flag: --bare
+      type: boolean
+      description: Minimal mode — skip hooks, plugins, MCP, CLAUDE.md auto-discovery
+    - flag: --agent
+      type: string
+      description: Specify agent for the current session
+    - flag: --agents
+      type: json_string
+      description: Define custom subagents dynamically via JSON
+    - flag: --teammate-mode
+      type: enum [auto, in-process, tmux]
+      description: Set how agent team teammates display
+    - flag: --chrome
+      type: boolean
+      description: Enable Chrome browser integration
+    - flag: --ide
+      type: boolean
+      description: Auto-connect to IDE on startup
+    - flag: --init
+      type: boolean
+      description: Run initialization hooks and start interactive mode
+    - flag: --init-only
+      type: boolean
+      description: Run initialization hooks and exit
+    - flag: --disable-slash-commands
+      type: boolean
+      description: Disable all skills and commands for this session
+
+  remote:
+    - flag: --remote
+      type: string
+      description: Create a new web session on agy.ai with the provided task
+    - flag: --remote-control / --rc
+      type: boolean | string
+      description: Start interactive session with Remote Control enabled
+    - flag: --teleport
+      type: boolean
+      description: Resume a web session in local terminal
+
+# ============================================================
+# SLASH COMMANDS (INTERACTIVE ONLY)
+# ============================================================
+slash_commands:
+
+  - name: /help
+    mode: I
+    category: system
+    description: Show available slash commands
+    output: { type: list }
+
+  - name: /clear
+    mode: I
+    category: session
+    description: Clear conversation context
+    output: { cleared: boolean }
+
+  - name: /quit
+    aliases: [/exit]
+    mode: I
+    category: session
+    description: Exit session
+
+  - name: /config
+    mode: I
+    category: configuration
+    description: Open tabbed settings interface
+
+  - name: /model
+    mode: I
+    category: configuration
+    description: Switch model mid-session
+    input:
+      args: [model: string]
+    output: { model: string }
+
+  - name: /resume
+    mode: I
+    category: session
+    description: Browse and resume previous sessions
+    input:
+      args: [session_id_or_name: optional string]
+
+  - name: /rename
+    mode: I
+    category: session
+    description: Rename the current session
+    input:
+      args: [name: string]
+
+  - name: /compact
+    mode: I
+    category: context
+    description: Compress context / trigger compaction
+    output: { compacted: boolean }
+
+  - name: /memory
+    mode: I
+    category: context
+    description: View and manage CLAUDE.md memory files
+
+  - name: /plan
+    mode: I
+    category: workflow
+    description: Enter plan mode (read-only, no tool execution)
+
+  - name: /status
+    mode: I
+    category: system
+    description: Show session state (model, permission mode, usage)
+    output:
+      type: object
+      schema:
+        model: string
+        permission_mode: string
+        usage: object
+
+  - name: /diff
+    mode: I
+    category: workspace
+    description: Show changes made in session
+    output: { patch: string }
+
+  - name: /mcp
+    mode: I
+    category: mcp
+    description: Manage MCP servers in-session
+
+  - name: /permissions
+    mode: I
+    category: permissions
+    description: View and manage tool permission rules
+
+  - name: /doctor
+    mode: I
+    category: system
+    description: Diagnose Agy Code installation and configuration
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+configuration:
+  schema: https://json.schemastore.org/agy-code-settings.json
+
+  file_paths:
+    managed_macos: /Library/Application Support/AgyCode/managed-settings.json
+    managed_linux: /etc/agy-code/managed-settings.json
+    managed_windows: C:\Program Files\AgyCode\managed-settings.json
+    user: ~/.agy/settings.json
+    project: .agy/settings.json
+    local: .agy/settings.local.json
+    mcp_user: ~/.agy.json
+    mcp_project: .mcp.json
+    memory: ~/.agy/CLAUDE.md | CLAUDE.md | .agy/CLAUDE.md
+
+  precedence:
+    - managed    # highest — cannot be overridden
+    - cli_flags  # session-scoped
+    - local      # .agy/settings.local.json
+    - project    # .agy/settings.json
+    - user       # ~/.agy/settings.json (lowest)
+
+  key_settings:
+    model: string
+    defaultMode: enum [default, acceptEdits, plan, auto, dontAsk, bypassPermissions]
+    permissions:
+      allow: string[]   # permission rule syntax: Tool(pattern)
+      deny: string[]
+    env: object         # environment variables injected into sessions
+    hooks: object       # hook event -> matcher array
+    apiKeyHelper: string
+    companyAnnouncements: string[]
+    preferredNotifChannel: enum [iterm2, terminal-notifier, desktop, none]
+    autoUpdaterStatus: enum [enabled, disabled]
+
+  environment_variables:
+    ANTHROPIC_API_KEY: Anthropic API key
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: Max output tokens cap
+    CLAUDE_CODE_ENABLE_TELEMETRY: Enable telemetry (1/0)
+    OTEL_METRICS_EXPORTER: OpenTelemetry metrics exporter
+    OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint
+    ANTHROPIC_MODEL: Override default model
+    ANTHROPIC_SMALL_FAST_MODEL: Override small/fast model
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: Disable telemetry/updates (1)
+    CLAUDE_CODE_DEBUG_LOGS_DIR: Directory for debug log files
+    CLAUDE_CODE_SIMPLE: Set by --bare mode
+
+# ============================================================
+# META
+# ============================================================
+meta:
+  execution_modes:
+    interactive:
+      supports: slash_commands
+      persistent_context: true
+      session_persistence: true
+    non_interactive:
+      flag: -p / --print
+      supports: cli_flags
+      persistent_context: false
+      note: Stateless by default; use --no-session-persistence to disable saving
+  key_differences:
+    - interactive mode = stateful REPL with slash commands
+    - print mode = headless, pipeline-friendly, exits after response
+    - bare mode = fastest startup, skips all discovery (hooks, plugins, MCP, CLAUDE.md)
+    - session resume is supported via --continue (-c) or --resume (-r)

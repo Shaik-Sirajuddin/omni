@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
@@ -88,8 +87,8 @@ func (a *codexAgent) syncSandboxConfig() error {
 	return nil
 }
 
-// writeCodexConfig reads .codex/config.toml, applies mutateFn to the simple
-// top-level string key/value map, and writes it back.
+// writeCodexConfig reads .codex/config.toml, applies mutateFn to the top-level
+// string key/value map, and writes it back preserving all other TOML sections.
 func writeCodexConfig(workDir string, mutateFn func(map[string]string)) error {
 	configDir := filepath.Join(workDir, ".codex")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -98,31 +97,33 @@ func writeCodexConfig(workDir string, mutateFn func(map[string]string)) error {
 
 	configPath := filepath.Join(configDir, "config.toml")
 
+	// Full TOML round-trip so all sections ([hooks], [mcp_servers], etc.) survive.
+	raw, err := readConfigTOML(configPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", configPath, err)
+	}
+
+	// Extract current top-level string values for the mutation callback.
 	existing := map[string]string{}
-	if data, err := os.ReadFile(configPath); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
-				continue
-			}
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				key := strings.TrimSpace(parts[0])
-				value := strings.Trim(strings.TrimSpace(parts[1]), "\"")
-				existing[key] = value
-			}
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			existing[k] = s
 		}
 	}
 
 	mutateFn(existing)
 
-	var sb strings.Builder
+	// Merge results back: update/add changed keys, delete removed ones.
 	for k, v := range existing {
-		sb.WriteString(fmt.Sprintf("%s = %q\n", k, v))
+		raw[k] = v
+	}
+	for k, v := range raw {
+		if _, isStr := v.(string); isStr {
+			if _, kept := existing[k]; !kept {
+				delete(raw, k)
+			}
+		}
 	}
 
-	if err := os.WriteFile(configPath, []byte(sb.String()), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
-	}
-	return nil
+	return writeConfigTOML(configPath, raw)
 }

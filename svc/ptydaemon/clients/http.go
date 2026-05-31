@@ -49,7 +49,7 @@ func (c *httpClient) Pipe(agentID, sessionID string, data []byte) error {
 	return c.post("http://ptydaemon/pipe", body)
 }
 
-func (c *httpClient) Start(sessionID string, command []string, _ []string, _ string) error {
+func (c *httpClient) Start(sessionID string, command []string, _ []string, _, _ string) error {
 	return fmt.Errorf("ptydaemon/clients: http client does not support Start (session %q)", sessionID)
 }
 
@@ -63,6 +63,14 @@ func (c *httpClient) Exec(sessionID, input string) error {
 
 func (c *httpClient) Stop(sessionID string) error {
 	return fmt.Errorf("ptydaemon/clients: http client does not support Stop (session %q)", sessionID)
+}
+
+func (c *httpClient) StopSafe(sessionID string, force bool) error {
+	return fmt.Errorf("ptydaemon/clients: http client does not support StopSafe (session %q, force %t)", sessionID, force)
+}
+
+func (c *httpClient) Detach(sessionID string) error {
+	return fmt.Errorf("ptydaemon/clients: http client does not support Detach (session %q)", sessionID)
 }
 
 func (c *httpClient) List(agentID string) ([]*PTYTerminalInfo, error) {

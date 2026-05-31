@@ -73,12 +73,12 @@ func (a *geminiAgent) PostToolUseFailureParams(raw any) (*hooks.PostToolUseFailu
 	return parseHookInput[hooks.PostToolUseFailureParams](raw)
 }
 
-func (a *geminiAgent) PreSessionStartParams(raw any) (*hooks.PreSessionStartParams, error) {
-	return parseHookInput[hooks.PreSessionStartParams](raw)
+func (a *geminiAgent) SessionStartParams(raw any) (*hooks.SessionStartParams, error) {
+	return parseHookInput[hooks.SessionStartParams](raw)
 }
 
-func (a *geminiAgent) PostSessionStartParams(raw any) (*hooks.PostSessionStartParams, error) {
-	return parseHookInput[hooks.PostSessionStartParams](raw)
+func (a *geminiAgent) SessionEndParams(raw any) (*hooks.SessionEndParams, error) {
+	return parseHookInput[hooks.SessionEndParams](raw)
 }
 
 func (a *geminiAgent) PrePromptInputParams(raw any) (*hooks.PrePromptInputParams, error) {
@@ -101,12 +101,12 @@ func (a *geminiAgent) PostToolUseFailureResult(raw any) (*hooks.PostToolUseFailu
 	return parseHookInput[hooks.PostToolUseFailureResult](raw)
 }
 
-func (a *geminiAgent) PreSessionStartResult(raw any) (*hooks.PreSessionStartResult, error) {
-	return parseHookInput[hooks.PreSessionStartResult](raw)
+func (a *geminiAgent) SessionStartResult(raw any) (*hooks.SessionStartResult, error) {
+	return parseHookInput[hooks.SessionStartResult](raw)
 }
 
-func (a *geminiAgent) PostSessionStartResult(raw any) (*hooks.PostSessionStartResult, error) {
-	return parseHookInput[hooks.PostSessionStartResult](raw)
+func (a *geminiAgent) SessionEndResult(raw any) (*hooks.SessionEndResult, error) {
+	return parseHookInput[hooks.SessionEndResult](raw)
 }
 
 func (a *geminiAgent) PrePromptInputResult(raw any) (*hooks.PrePromptInputResult, error) {

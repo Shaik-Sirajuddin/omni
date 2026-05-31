@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "stop.command.input",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": { "type": ["string", "null"] },
+    "PermissionMode": {
+      "enum": ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "session_id": { "type": "string" },
+    "transcript_path": { "$ref": "#/definitions/NullableString" },
+    "cwd": { "type": "string" },
+    "hook_event_name": { "const": "Stop", "type": "string" },
+    "permission_mode": { "$ref": "#/definitions/PermissionMode" },
+    "model": { "type": "string" },
+    "stop_hook_active": { "type": "boolean", "description": "True if a Stop hook is currently executing (prevents infinite loops)" },
+    "last_assistant_message": { "$ref": "#/definitions/NullableString" }
+  },
+  "required": ["session_id", "transcript_path", "cwd", "hook_event_name", "permission_mode", "model", "stop_hook_active", "last_assistant_message"]
+}
