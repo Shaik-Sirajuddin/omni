@@ -112,6 +112,7 @@ seed_mcp_json() {
     "rejected": []
   },
   "hasCompletedOnboarding": true,
+  "hasTrustDialogAccepted": true,
   "hasTrustDialogHooksAccepted": true,
   "shiftEnterKeyBindingInstalled": true,
   "theme": "dark"
