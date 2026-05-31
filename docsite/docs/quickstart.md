@@ -71,3 +71,12 @@ omni agent exec <session-id> -- <command> [args...]
 - **Linux (native)** — fully supported on amd64 and arm64.
 - **WSL (Windows Subsystem for Linux)** — supported; systemd must be enabled in your WSL distribution (`/etc/wsl.conf` → `[boot] systemd=true`).
 - macOS and Windows native are not supported in this release.
+
+## LLM Accessibility
+
+This documentation site is AI-friendly. You can point any Agent or LLM to our `llms.txt` endpoint to feed it the structured documentation context:
+
+- **Primary Docs:** `https://docs.domain.name/llms.txt`
+- **Contributor Docs:** `https://docs.domain.name/contributing/llms.txt`
+
+For full-text concatenated context, use `llms-full.txt` at either root.

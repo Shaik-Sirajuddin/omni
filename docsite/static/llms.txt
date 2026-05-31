@@ -1,0 +1,11 @@
+# Omni Documentation
+
+Welcome to the Omni primary documentation. This file helps AI agents and LLMs discover the capabilities of Omni.
+
+## User Guides
+- [Quickstart](https://docs.domain.name/docs/quickstart)
+- [Advanced Setup](https://docs.domain.name/docs/advanced-setup)
+
+---
+
+For more comprehensive documentation, see [llms-full.txt](https://docs.domain.name/llms-full.txt)
