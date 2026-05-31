@@ -755,6 +755,28 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
 		}
 	}
+	// Sync the active session to store so ExecInSession can resolve sessionID by agentID
+	// when params.SessionID is empty (e.g. `omni agent exec --resume --prompt`).
+	// The normal ca.Resume path does not write to sessionStore; only the fallback
+	// ca.Create path does — causing ExecInSession to fail with "active session not found"
+	// for agents that were resumed (not newly created) in the same call.
+	if o.sessionStore != nil {
+		finalSessionID := sessionID
+		if resumeResult != nil && resumeResult.SessionID != "" {
+			finalSessionID = resumeResult.SessionID
+		}
+		syncSession := &omniagent.CodeSession{
+			Id:       finalSessionID,
+			Model:    &codeagent.Model{Provider: provider, Model: resolvedSessionModel(ca, model)},
+			IsActive: true,
+		}
+		if createErr := o.sessionStore.CreateSession(agent.ID, syncSession); createErr != nil {
+			// Session already exists in store (agent was previously resumed) — update it.
+			if updateErr := o.sessionStore.UpdateSession(agent.ID, syncSession); updateErr != nil {
+				logger.Warn("ResumeAgent: session store sync failed", "agentID", agent.ID, "sessionID", finalSessionID, "err", updateErr)
+			}
+		}
+	}
 	o.registerPTYSession(agent.ID, sessionID, resumeResult)
 	if err := waitResumeLifecycle(resumeCtx, resumeResult); err != nil {
 		logger.Error("ResumeAgent: resume lifecycle ended with error", "agentID", agent.ID, "sessionID", sessionID, "err", err)
