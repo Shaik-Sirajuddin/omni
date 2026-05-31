@@ -251,6 +251,9 @@ if not os.path.exists(id_path):
 PYEOF
 
   # ── codex ────────────────────────────────────────────────────────────────────
+  # self-MCP wiring: codex resolves AXO_LINK_MCP_* from the container environment at request
+  # time and sends them as HTTP headers to tunnel-mcp (X-Sender-ID, X-Sender-Type, X-Agent-Workspace).
+  # AXO_LINK_MCP_SENDER_TYPE defaults to "omni_agent" via docker-compose environment block.
   if [[ ! -f /root/.codex/config.toml ]]; then
     echo "==> seeding /root/.codex/config.toml"
     mkdir -p /root/.codex
