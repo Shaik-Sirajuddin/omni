@@ -1,0 +1,25 @@
+/* Auto-generated from theme.json */
+
+:root {
+  --md-sys-color-primary: #6750A4;
+  --md-sys-color-secondary: #625B71;
+  --md-sys-color-tertiary: #7D5260;
+  --md-sys-color-background: #FFFBFE;
+  --md-sys-color-surface: #FFFBFE;
+}
+
+[data-theme='dark'] {
+  --md-sys-color-primary: #D0BCFF;
+  --md-sys-color-secondary: #CCC2DC;
+  --md-sys-color-tertiary: #EFB8C8;
+  --md-sys-color-background: #1C1B1F;
+  --md-sys-color-surface: #1C1B1F;
+}
+
+@theme {
+  --color-primary: var(--md-sys-color-primary);
+  --color-secondary: var(--md-sys-color-secondary);
+  --color-tertiary: var(--md-sys-color-tertiary);
+  --color-background: var(--md-sys-color-background);
+  --color-surface: var(--md-sys-color-surface);
+}
