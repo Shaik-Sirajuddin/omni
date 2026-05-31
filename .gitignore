@@ -7,7 +7,7 @@
 .antigravitycli
 agent[-_]*.md
 .agents
-development/.env.docker
+development/local/.env.docker
 .goreleaser.yaml
 play/
 website/

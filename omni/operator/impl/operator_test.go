@@ -911,6 +911,22 @@ func (s *stubCodeAgent) PostPromptInputResult(any) (*hooks.PostPromptInputResult
 	return nil, nil
 }
 
+func (s *stubCodeAgent) AddMCP(_ codeagent.AddMCPParams) (*codeagent.AddMCPResult, error) {
+	return &codeagent.AddMCPResult{}, nil
+}
+
+func (s *stubCodeAgent) ListMCP(_ codeagent.ListMCPParams) (*codeagent.ListMCPResult, error) {
+	return &codeagent.ListMCPResult{}, nil
+}
+
+func (s *stubCodeAgent) DeleteMCP(_ codeagent.DeleteMCPParams) (*codeagent.DeleteMCPResult, error) {
+	return &codeagent.DeleteMCPResult{}, nil
+}
+
+func (s *stubCodeAgent) SetMCPToolPrompt(_ codeagent.SetMCPToolPromptParams) (*codeagent.SetMCPToolPromptResult, error) {
+	return &codeagent.SetMCPToolPromptResult{}, nil
+}
+
 type stubPTYDaemonClient struct {
 	pipeCalls []struct {
 		agentID   string
