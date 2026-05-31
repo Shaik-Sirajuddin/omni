@@ -2,6 +2,7 @@ package codeagent
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/Shaik-Sirajuddin/memory/config"
@@ -193,6 +194,9 @@ type SetMCPToolPromptParams struct {
 	Global bool
 }
 type SetMCPToolPromptResult struct{}
+
+// ErrMCPNotSupported is returned by connectors that do not implement MCP.
+var ErrMCPNotSupported = errors.New("MCP not supported")
 
 // MCPManager manages MCP server registrations for a connector.
 // Implementations must guard config-file access with an in-memory mutex and
