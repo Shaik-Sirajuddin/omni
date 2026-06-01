@@ -99,7 +99,7 @@ type codexAgent struct {
 }
 
 func init() {
-	codeagent.GlobalMCPRegistry.Register(Codex, &codexAgent{})
+	codeagent.GlobalMCPRegistry.Register(Codex, &codexAgent{locker: filelock.New()})
 }
 
 // New returns a CodeAgent backed by the local codex CLI binary.
