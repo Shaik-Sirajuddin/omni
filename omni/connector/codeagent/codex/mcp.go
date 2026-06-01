@@ -79,6 +79,9 @@ func mcpServerToRaw(s codeagent.MCPServer) (map[string]interface{}, error) {
 	if len(s.Headers) > 0 {
 		cfg.HttpHeaders = RawMcpServerConfigHttpHeaders(s.Headers)
 	}
+	if len(s.EnvHeaders) > 0 {
+		cfg.EnvHttpHeaders = RawMcpServerConfigEnvHttpHeaders(s.EnvHeaders)
+	}
 	if s.Timeout > 0 {
 		ms := s.Timeout
 		cfg.StartupTimeoutMs = &ms
@@ -120,6 +123,9 @@ func rawToMCPServer(name string, v interface{}) (codeagent.MCPServer, error) {
 	}
 	if len(cfg.HttpHeaders) > 0 {
 		s.Headers = map[string]string(cfg.HttpHeaders)
+	}
+	if len(cfg.EnvHttpHeaders) > 0 {
+		s.EnvHeaders = map[string]string(cfg.EnvHttpHeaders)
 	}
 	if cfg.StartupTimeoutMs != nil {
 		s.Timeout = *cfg.StartupTimeoutMs
