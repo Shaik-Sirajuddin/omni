@@ -9,17 +9,20 @@ import (
 	confhooks "github.com/Shaik-Sirajuddin/memory/config/hooks"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	codehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
 )
 
 type codexHookTransformer struct {
-	mu    sync.RWMutex
-	index map[string]omniconfig.HookEntry
-	order []string
+	mu     sync.RWMutex
+	index  map[string]omniconfig.HookEntry
+	order  []string
+	locker filelock.Locker
 }
 
-func NewHookTransformer() codeagent.HookTransformer {
+func NewHookTransformer(locker filelock.Locker) codeagent.HookTransformer {
 	return &codexHookTransformer{
-		index: map[string]omniconfig.HookEntry{},
+		index:  map[string]omniconfig.HookEntry{},
+		locker: locker,
 	}
 }
 
@@ -65,7 +68,7 @@ func (t *codexHookTransformer) Add(name string, entry omniconfig.HookEntry) bool
 		Hooks: []codexHookDef{*def},
 	})
 
-	if err := writeHooksConfig(configPath, hooksByEvent); err != nil {
+	if err := writeHooksConfig(t.locker, configPath, hooksByEvent); err != nil {
 		logger.Debug("HookTransformer.Add: write failed", "name", name, "codexEvent", codexEvent, "path", configPath, "err", err)
 		return false
 	}
