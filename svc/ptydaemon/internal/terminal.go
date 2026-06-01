@@ -296,6 +296,14 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	t.execMu.Lock()
 	defer t.execMu.Unlock()
 
+	// Step-level trace so a "prompt visible in TUI but not submitted / shown as
+	// literal escape codes" report can be pinned to a specific stage. The prompt
+	// must arrive raw here (no caller-side bracketed-paste/submit framing): this
+	// method is the single owner of framing — see handleExec.
+	ptylog.Debug("ptydaemon: execPrompt begin", "session_id", t.SessionID,
+		"submit_key", t.submitKey, "prompt_len", len(prompt),
+		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "human_carry", len(human))
+
 	// 1. Clear the human's partial line, then let the TUI apply it before we
 	//    paste — otherwise the clear races behind the paste/submit.
 	if err := t.write([]byte(ctrlU)); err != nil {
