@@ -1,3 +1,5 @@
+//go:build linux
+
 package ptyunix
 
 import (
@@ -14,8 +16,8 @@ import (
 	"sync"
 	"time"
 
+	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal"
-	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
 
@@ -165,12 +167,13 @@ func (d *Daemon) handleStart(conn *net.UnixConn, req Request) {
 	ptylog.Debug("starting in-memory session", "session_id", req.SessionID, "command", req.Command)
 
 	cmd := exec.Command(req.Command[0], req.Command[1:]...)
-	ptmx, err := pty.Start(cmd)
+	ptm, err := pkgpty.StartCmd(cmd)
 	if err != nil {
 		ptylog.Error("pty start failed", "err", err, "session_id", req.SessionID)
 		respond(conn, Response{Error: err.Error()})
 		return
 	}
+	ptmx := ptm.Master()
 
 	s := &session{ptmx: ptmx, cmd: cmd}
 	d.mu.Lock()

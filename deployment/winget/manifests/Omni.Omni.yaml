@@ -1,0 +1,20 @@
+PackageIdentifier: Omni.Omni
+PackageVersion: 1.3.0
+PackageName: Omni
+Publisher: Omni
+ShortDescription: AI agent orchestration daemon
+License: MIT
+PackageUrl: https://github.com/Shaik-Sirajuddin/memory
+
+Installers:
+  - Architecture: x64
+    InstallerType: exe
+    InstallerUrl: https://github.com/Shaik-Sirajuddin/memory/releases/download/v1.3.0/omni-installer-windows-amd64.exe
+    InstallerSha256: "" # filled at release time
+    InstallerSwitches:
+      Silent: /S
+      SilentWithProgress: /S
+    UpgradeBehavior: install
+
+ManifestType: singleton
+ManifestVersion: 1.4.0

@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package ptyunix implements the raw Unix socket protocol for the PTY daemon.
 package ptyunix
 

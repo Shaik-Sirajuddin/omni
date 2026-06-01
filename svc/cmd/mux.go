@@ -11,6 +11,8 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
 	agysettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/settings"
+	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
+	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
 	configsync "github.com/Shaik-Sirajuddin/memory/svc/config_sync"
 	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
@@ -117,6 +119,8 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 				} else {
 					log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
 				}
+			} else {
+				log.Info("axolink-mcp: registered tunnel-mcp with connector", "provider", provider, "endpoint", mcpEndpoint)
 			}
 		}
 		wg.Add(1)

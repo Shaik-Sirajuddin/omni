@@ -18,6 +18,22 @@ import (
 
 var logger = pkglog.NewLogger("component", "mcp-handler")
 
+const serverInstructions = `You are an agent connected to the tunnel-mcp messaging system.
+
+Authentication headers (set by your runtime — do not override):
+  X-SENDER-ID:       your agent id
+  X-SENDER-TYPE:     omni_agent
+  X-AGENT-WORKSPACE: your workspace directory
+
+Tool discipline by request_type:
+  query   → you MUST call query_result (or query_result_batch) with the original message_id and your answer.
+  execute → you MUST call query_result with the message_id after completing the task; include a summary of changes.
+  instant → no reply tool required; acknowledgement is optional.
+
+Never use send_message to reply to a received message. Always use query_result / query_result_batch.
+
+Retry behaviour: if you receive a message with a mandatory tool call and do not invoke it, the engine will inject a recall prompt up to 3 times before marking the message failed.`
+
 type SenderInfo struct {
 	ID        string
 	Kind      string
@@ -96,8 +112,11 @@ func (h *Handler) buildMCPServer() *mcpserver.MCPServer {
 		"tunnel-mcp",
 		h.serviceVersion,
 		mcpserver.WithToolCapabilities(true),
+		mcpserver.WithPromptCapabilities(true),
+		mcpserver.WithInstructions(serverInstructions),
 	)
 	h.registerMCPTools(s)
+	h.registerMCPPrompts(s)
 	return s
 }
 
@@ -109,6 +128,93 @@ func (h *Handler) MCPHandler() http.Handler {
 	)
 }
 
+
+func promptText(text string) *mcp.GetPromptResult {
+	return &mcp.GetPromptResult{
+		Messages: []mcp.PromptMessage{{
+			Role:    mcp.RoleUser,
+			Content: mcp.TextContent{Type: "text", Text: text},
+		}},
+	}
+}
+
+func (h *Handler) registerMCPPrompts(s *mcpserver.MCPServer) {
+	s.AddPrompt(mcp.NewPrompt("how-to-send-message",
+		mcp.WithPromptDescription("Explains how to send a message to another agent."),
+		mcp.WithArgument("to_name", mcp.RequiredArgument(), mcp.ArgumentDescription("Name of the target agent.")),
+		mcp.WithArgument("to_type", mcp.ArgumentDescription("Target type (default: omni_agent).")),
+		mcp.WithArgument("request_type", mcp.ArgumentDescription("Request type: query, instant, or execute.")),
+	), func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		toName := req.Params.Arguments["to_name"]
+		reqType := req.Params.Arguments["request_type"]
+		if reqType == "" {
+			reqType = "instant"
+		}
+		return promptText(fmt.Sprintf(
+			"To send a message to agent %q:\n"+
+				"  tool: send_message\n"+
+				"  to_type: omni_agent\n"+
+				"  to_name: %q  (or use to_id if you know the agent UUID)\n"+
+				"  to_workspace: <workspace directory of the target agent, if known>\n"+
+				"  prompt: <your message text>\n"+
+				"  request_type: %q\n\n"+
+				"request_type values:\n"+
+				"  query   — you expect a response; the recipient must call query_result.\n"+
+				"  execute — you are delegating a task; the recipient must call query_result when done.\n"+
+				"  instant — fire-and-forget; no reply required.",
+			toName, toName, reqType,
+		)), nil
+	})
+
+	s.AddPrompt(mcp.NewPrompt("how-to-respond-query",
+		mcp.WithPromptDescription("Explains how to respond to a query message."),
+		mcp.WithArgument("message_id", mcp.RequiredArgument(), mcp.ArgumentDescription("The message_id of the query to respond to.")),
+	), func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		msgID := req.Params.Arguments["message_id"]
+		return promptText(fmt.Sprintf(
+			"To respond to query message %q:\n"+
+				"  tool: query_result\n"+
+				"  message_id: %q\n"+
+				"  response: <your answer text>\n\n"+
+				"For multiple queries at once use query_result_batch with a results array.\n"+
+				"Do NOT use send_message to reply — only query_result / query_result_batch close the query loop.",
+			msgID, msgID,
+		)), nil
+	})
+
+	s.AddPrompt(mcp.NewPrompt("how-to-respond-execute",
+		mcp.WithPromptDescription("Explains how to report task completion for an execute message."),
+		mcp.WithArgument("message_id", mcp.RequiredArgument(), mcp.ArgumentDescription("The message_id of the execute request.")),
+	), func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		msgID := req.Params.Arguments["message_id"]
+		return promptText(fmt.Sprintf(
+			"To report completion of execute message %q:\n"+
+				"  tool: query_result\n"+
+				"  message_id: %q\n"+
+				"  response: <summary of what was done, file paths changed, outcome>\n\n"+
+				"Include paths of any files created or modified in the response so the requester can verify.\n"+
+				"Do NOT use send_message to reply — only query_result closes the execute loop.",
+			msgID, msgID,
+		)), nil
+	})
+
+	s.AddPrompt(mcp.NewPrompt("how-to-check-status",
+		mcp.WithPromptDescription("Explains how to check, interrupt, or resume an agent."),
+		mcp.WithArgument("agent_id", mcp.RequiredArgument(), mcp.ArgumentDescription("The UUID of the agent to inspect.")),
+	), func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		agentID := req.Params.Arguments["agent_id"]
+		return promptText(fmt.Sprintf(
+			"Agent control for agent_id %q:\n\n"+
+				"  check_status   — fetch current delivery status (idle, busy, interrupted).\n"+
+				"    tool: check_status, agent_id: %q\n\n"+
+				"  agent_interrupt — pause message delivery to the agent.\n"+
+				"    tool: agent_interrupt, agent_id: %q\n\n"+
+				"  agent_resume   — resume delivery after an interrupt.\n"+
+				"    tool: agent_resume, agent_id: %q",
+			agentID, agentID, agentID, agentID,
+		)), nil
+	})
+}
 
 func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 	logger.Debug("mcp tools registering")

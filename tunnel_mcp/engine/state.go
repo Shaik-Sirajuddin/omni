@@ -44,9 +44,9 @@ type SessionUsage struct {
 
 // CodeSession holds the runtime session state of an agent's coding loop.
 type CodeSession struct {
-	IsInterrupted    bool
-	SessionID        string
-	QueryToolInvoked bool // set true when query_result/query_result_batch tool fires in this session
+	IsInterrupted        bool
+	SessionID            string
+	MandatoryToolInvoked bool // set true when a tool that confirms delivery fires (update_message/update_messages for execute, query_result/query_result_batch for query)
 }
 
 type AgentState struct {

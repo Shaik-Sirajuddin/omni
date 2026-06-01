@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package clients
 
 import (
@@ -16,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
-	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -518,11 +520,11 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 
 // inheritSize copies the calling terminal's window size onto ptmx.
 func inheritSize(ptmx *os.File) {
-	size, err := pty.GetsizeFull(os.Stdin)
+	ws, err := pkgpty.GetWinsize(os.Stdin)
 	if err != nil {
 		return
 	}
-	_ = pty.Setsize(ptmx, size)
+	_ = pkgpty.SetWinsize(ptmx, ws)
 }
 
 // redrawSettle is how long forceRedraw waits between the nudge and the real
@@ -551,7 +553,7 @@ const (
 // next keypress. We force a real delta: briefly set a different size, settle so
 // the child processes that SIGWINCH, then set the true size.
 func forceRedraw(ptmx *os.File) {
-	size, err := pty.GetsizeFull(os.Stdin)
+	size, err := pkgpty.GetWinsize(os.Stdin)
 	if err != nil {
 		return // not a tty; nothing to repaint against
 	}
@@ -560,13 +562,13 @@ func forceRedraw(ptmx *os.File) {
 		// resize is meaningless and would never trigger a repaint — skip it.
 		return
 	}
-	nudge := *size
+	nudge := size
 	if nudge.Rows > 1 {
 		nudge.Rows--
 	} else {
 		nudge.Rows++
 	}
-	_ = pty.Setsize(ptmx, &nudge)
+	_ = pkgpty.SetWinsize(ptmx, nudge)
 	time.Sleep(redrawSettle)
-	_ = pty.Setsize(ptmx, size)
+	_ = pkgpty.SetWinsize(ptmx, size)
 }
