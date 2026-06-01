@@ -47,6 +47,22 @@ export OMNI_PTY_SOCKET=/run/omni-root/omni-pty.sock
 EOF
   grep -q HOOK_OPERATOR_SOCKET /root/.bashrc 2>/dev/null || \
     echo 'source /etc/profile.d/omni-sockets.sh' >> /root/.bashrc
+
+  # Write auth env vars to profile.d so interactive shells (docker exec bash)
+  # have the same credentials as omni-server. The systemd drop-in only covers
+  # the service process; shells get a clean env and would show the login prompt.
+  local auth_profile=/etc/profile.d/omni-auth.sh
+  : > "$auth_profile"
+  for var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
+             OPENAI_API_KEY OPENAI_OAUTH_TOKEN \
+             GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_CLOUD_PROJECT \
+             ANTHROPIC_MODEL CODEX_MODEL GEMINI_MODEL AGY_MODEL; do
+    if [[ -n "${!var:-}" ]]; then
+      printf 'export %s=%s\n' "$var" "${!var}" >> "$auth_profile"
+    fi
+  done
+  grep -q omni-auth /root/.bashrc 2>/dev/null || \
+    echo 'source /etc/profile.d/omni-auth.sh' >> /root/.bashrc
 }
 write_runtime_env
 
