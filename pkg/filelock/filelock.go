@@ -10,8 +10,10 @@ type Locker interface {
 	// RLock acquires a shared lock on lockPath (multiple readers, one writer).
 	RLock(lockPath string) (unlock func(), err error)
 
-	// WriteAtomic writes data to path atomically (temp file + rename).
-	// Must be called while holding Lock.
+	// WriteAtomic writes data to the config file at path atomically (temp file +
+	// Sync + rename). path is the config file (e.g. config.toml); lockPath passed
+	// to Lock/RLock is the sidecar lock file (e.g. .config.toml.lock). Must be
+	// called while holding Lock.
 	WriteAtomic(path string, data []byte) error
 }
 

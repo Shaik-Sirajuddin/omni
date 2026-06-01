@@ -51,6 +51,11 @@ func (w *windowsLocker) WriteAtomic(path string, data []byte) error {
 		os.Remove(name)
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(name)
 		return err
