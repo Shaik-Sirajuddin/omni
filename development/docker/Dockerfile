@@ -49,6 +49,7 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
 # ── build omni binaries into image ────────────────────────────────────────────
 WORKDIR /build
 
+COPY go.work          go.work
 COPY omni/            omni/
 COPY svc/             svc/
 COPY pkg/             pkg/

@@ -15,18 +15,18 @@ build() {
 
   mkdir -p "$out_dir"
 
-  # sync go.mod/go.sum so Docker cache misses from local replace directives don't break the build
-  go mod tidy -C "$OMNI_DIR"    2>/dev/null || true
-  go mod tidy -C "$SVC_CMD_DIR" 2>/dev/null || true
+  # go.work at REPO_ROOT lets Go resolve all local modules without per-module
+  # replace directives. GOWORK must point at it when running from a sub-dir.
+  export GOWORK="$REPO_ROOT/go.work"
 
-  echo "==> building omni ${goos:+$goos/}${goarch}${goos:+} ($version)..."
+  echo "==> building omni ${goos:+$goos/}${goarch:+$goarch} ($version)..."
   GOOS="$goos" GOARCH="$goarch" go build \
     -C "$OMNI_DIR" \
     -ldflags "-X main.Version=${version}" \
     -o "$out_dir/omni" \
     ./cli/cmd/omni/
 
-  echo "==> building omni-server ${goos:+$goos/}${goarch}${goos:+} ($version)..."
+  echo "==> building omni-server ${goos:+$goos/}${goarch:+$goarch} ($version)..."
   GOOS="$goos" GOARCH="$goarch" go build \
     -C "$SVC_CMD_DIR" \
     -ldflags "-X main.Version=${version}" \
