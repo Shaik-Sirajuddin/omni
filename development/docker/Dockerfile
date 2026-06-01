@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     curl wget git sudo \
     ca-certificates gnupg \
     make build-essential \
+    gawk \
     nano \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
