@@ -259,17 +259,8 @@ func (a *agyAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult, er
 			if blob, err := json.Marshal(servers); err == nil {
 				raw["mcpServers"] = blob
 			}
-
-			found := false
-			for _, n := range enabled {
-				if n == p.Server.Name {
-					found = true
-					break
-				}
-			}
-			if !found {
-				enabled = append(enabled, p.Server.Name)
-			}
+			// enabledMcpjsonServers is only for ~/.mcp.json servers; inline
+			// mcpServers written above are always active without an enable entry.
 			return writeAgySettingsRaw(settingsPath, raw, enabled, mtime)
 		})
 		if err != nil {
@@ -387,14 +378,8 @@ func (a *agyAgent) DeleteMCP(p codeagent.DeleteMCPParams) (*codeagent.DeleteMCPR
 			} else {
 				delete(raw, "mcpServers")
 			}
-
-			newEnabled := make([]string, 0, len(enabled))
-			for _, n := range enabled {
-				if n != p.Name {
-					newEnabled = append(newEnabled, n)
-				}
-			}
-			return writeAgySettingsRaw(settingsPath, raw, newEnabled, mtime)
+			// Pass enabled unchanged — inline mcpServers don't use enabledMcpjsonServers.
+			return writeAgySettingsRaw(settingsPath, raw, enabled, mtime)
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agy: DeleteMCP global: %w", err)

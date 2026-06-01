@@ -82,8 +82,8 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 		logger.Warn("Create: could not sync model to config", "err", syncErr)
 	}
 
-	// Auto-approve tunnel_mcp tool calls so Codex never pauses for MCP approval.
-	if mcpErr := a.ensureMCPApprovalMode("tunnel_mcp"); mcpErr != nil {
+	// Auto-approve axolink tool calls so Codex never pauses for MCP approval.
+	if mcpErr := a.ensureMCPApprovalMode("axolink"); mcpErr != nil {
 		logger.Warn("Create: could not set MCP approval mode", "err", mcpErr)
 	}
 
@@ -222,6 +222,7 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 	// SIGTERM lets codex flush the session file before exiting.
 	_ = cmd.Process.Signal(os.Interrupt)
 	_ = cmd.Wait()
+
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil
