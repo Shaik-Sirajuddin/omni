@@ -29,17 +29,16 @@ ENV PATH="/usr/local/go/bin:$PATH"
 
 # Agent CLIs — pinned versions, baked into image (update ARGs to bump)
 ARG CLAUDE_CODE_VERSION=2.1.145
-ARG CODEX_VERSION=0.132.0
 
 # Claude Code — official binary installer; npm path deprecated by Anthropic
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
     && CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION} bash /tmp/install-claude.sh \
     && rm /tmp/install-claude.sh
 
-# Codex — Rust binary from GitHub releases
-RUN curl -fL "https://github.com/openai/codex/releases/download/v${CODEX_VERSION}/codex-x86_64-unknown-linux-musl.tar.gz" \
-    | tar -xz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/codex
+# Codex — official OpenAI curl installer
+RUN curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/install-codex.sh \
+    && CODEX_NON_INTERACTIVE=1 sh /tmp/install-codex.sh \
+    && rm /tmp/install-codex.sh
 
 # Agy (Antigravity / Gemini CLI by Google) — installs to ~/.local/bin/agy
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
