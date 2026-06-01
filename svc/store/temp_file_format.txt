@@ -1,3 +1,0 @@
-unix_timestamp_milli:seqno:action:<rule>
-
-details : action can be one of update,add,remove

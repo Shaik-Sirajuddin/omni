@@ -34,7 +34,7 @@ func installFakeAgyBinary(t *testing.T, dir, logPath string) {
 		`  printf '{"type":"result","result":"ok"}\n'`,
 		`  exit 0`,
 		`fi`,
-		`if [[ "${1:-}" == "--conversation" ]]; then`,
+		`if [[ "${1:-}" == --conversation* ]]; then`,
 		`  printf 'interactive-started\n'`,
 		`  read -r -t 30 _ || true`,
 		`  exit 0`,
@@ -215,7 +215,7 @@ func TestResumeSessionForkFlag(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond)
 
 	lines := readLogLines(t, logPath)
-	assert.Contains(t, lines[0], "--continue", "Resume with ForkSession should pass --continue flag")
+	assert.Contains(t, lines[0], "-c", "Resume with ForkSession should pass -c flag")
 }
 
 func TestSessionLifecycle(t *testing.T) {

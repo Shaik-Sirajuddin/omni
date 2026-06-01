@@ -170,8 +170,10 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 //	{"type":"thread.started","thread_id":"<id>"}
 //
 // Once the thread_id is found we send SIGTERM (not SIGKILL) so codex can
-// flush the session file to disk before exiting. Killing with SIGKILL prevents
-// session persistence, causing "No saved session found" on subsequent Resume calls.
+// flush the session file to disk before exiting. SIGKILL (via context cancel)
+// prevents session persistence, causing "No saved session found" on subsequent
+// Resume calls. The 20 s context timeout backstops any hang if codex ignores
+// the signal.
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -192,7 +194,8 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Drain stdout lines; send the first thread_id found to found channel.
+	// Drain stdout lines; send the first thread_id found to the channel.
+	// Draining is required so codex is never blocked on a full pipe.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -216,11 +219,10 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return id, nil
 	}
 
-	// SIGTERM lets codex flush the session file; SIGKILL (context cancel) would not.
-	// ctx (20 s) provides the backstop: exec.CommandContext kills the process on expiry,
-	// unblocking cmd.Wait() if codex ignores the signal.
+	// SIGTERM lets codex flush the session file before exiting.
 	_ = cmd.Process.Signal(os.Interrupt)
 	_ = cmd.Wait()
+
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil

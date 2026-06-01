@@ -14,7 +14,9 @@ type Engine interface {
 	OnPreSessionStart(agentID, agentName, sessionID, cwd string)
 	OnPreToolUse(agentID, sessionID, toolName string, toolInput map[string]any)
 	OnUserPromptSubmit(ctx context.Context, agentID, sessionID, prompt string)
-	OnStop(ctx context.Context, agentID, sessionID string)
+	// OnStop returns an optional recall prompt to inject as systemMessage when the
+	// mandatory tool was not invoked and retries remain. Nil means no injection.
+	OnStop(ctx context.Context, agentID, sessionID string) *string
 	OnPostToolUseFailure(agentID, sessionID, toolName, errMsg string)
 }
 
@@ -86,7 +88,11 @@ func (h *HookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case hooks.PostPrompt:
-		h.eng.OnStop(r.Context(), agentID, base.SessionID)
+		if recall := h.eng.OnStop(r.Context(), agentID, base.SessionID); recall != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(hooks.HookOuput{Continue: true, SystemMessage: recall})
+			return
+		}
 
 	case hooks.PostToolUseFailure:
 		var input hooks.PostToolUseFailureParams

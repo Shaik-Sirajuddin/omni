@@ -98,6 +98,11 @@ type codexAgent struct {
 	locker          filelock.Locker
 }
 
+func init() {
+	// locker must be initialized; withMCPConfig calls a.locker.Lock which panics on nil.
+	codeagent.GlobalMCPRegistry.Register(Codex, &codexAgent{locker: filelock.New()})
+}
+
 // New returns a CodeAgent backed by the local codex CLI binary.
 // c is the PTY daemon client used by ExecInSession; pass nil if not needed.
 // Optional Option values (e.g. WithPTYClient) may override c.
