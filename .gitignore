@@ -11,4 +11,4 @@ development/local/.env.docker
 .goreleaser.yaml
 play/
 website/
-dist/
+dist/generated/
