@@ -164,21 +164,19 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 	return nil
 }
 
-// bootstrapSession runs `codex exec "." --json --max-turns=1` to register a
-// real codex session and capture its thread_id from the first JSON line:
+// bootstrapSession runs `codex exec "." --json` to register a real codex
+// session and capture its thread_id from the first JSON line:
 //
 //	{"type":"thread.started","thread_id":"<id>"}
 //
-// --max-turns=1 ensures codex completes one turn and exits naturally, which
-// guarantees the session file is flushed to disk before we return. Killing the
-// process early (old behaviour) prevented the session from being persisted,
-// causing "No saved session found" errors on the subsequent Resume call.
+// Once the thread_id is found we send SIGTERM (not SIGKILL) so codex can
+// flush the session file to disk before exiting. Killing with SIGKILL prevents
+// session persistence, causing "No saved session found" on subsequent Resume calls.
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// --max-turns=1: one turn then exit, so the session is persisted quickly.
-	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "--max-turns=1", "-C", workDir}
+	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "-C", workDir}
 	logger.Info("bootstrapSession: running command", "bin", binPath, "args", args)
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
@@ -194,8 +192,7 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Drain all stdout lines. Collect the first thread_id seen.
-	// Draining is required so codex is never blocked on a full pipe.
+	// Drain stdout lines; send the first thread_id found to found channel.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -210,15 +207,20 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		close(found)
 	}()
 
-	// Wait for natural exit so codex flushes the session file to disk.
-	// The goroutine above drains stdout to prevent pipe-full blocking.
-	_ = cmd.Wait()
-
 	var id string
 	select {
 	case id = <-found:
-	default:
+	case <-ctx.Done():
+		_ = cmd.Wait()
+		logger.Debug("bootstrapSession: timed out", "sessionID", id)
+		return id, nil
 	}
+
+	// SIGTERM lets codex flush the session file; SIGKILL (context cancel) would not.
+	// ctx (20 s) provides the backstop: exec.CommandContext kills the process on expiry,
+	// unblocking cmd.Wait() if codex ignores the signal.
+	_ = cmd.Process.Signal(os.Interrupt)
+	_ = cmd.Wait()
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil
