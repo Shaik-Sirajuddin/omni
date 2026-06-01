@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 	github.com/adrg/xdg v0.5.3
@@ -77,6 +78,8 @@ require (
 )
 
 replace github.com/Shaik-Sirajuddin/memory/mcp => ../tunnel_mcp
+
+replace github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../pkg/filelock
 
 replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../pkg/log
 
