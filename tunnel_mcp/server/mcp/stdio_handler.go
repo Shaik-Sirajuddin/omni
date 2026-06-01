@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/proxy"
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/service"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/proxy"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/service"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

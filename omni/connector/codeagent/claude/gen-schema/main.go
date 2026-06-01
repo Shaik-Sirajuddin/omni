@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	claude "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
+	claude "github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 

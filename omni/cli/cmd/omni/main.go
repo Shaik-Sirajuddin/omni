@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/cli"
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/operator"
-	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
+	"github.com/Shaik-Sirajuddin/omni/cli"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/operator"
+	operatorimpl "github.com/Shaik-Sirajuddin/omni/operator/impl"
 )
 
 var Version = "dev"

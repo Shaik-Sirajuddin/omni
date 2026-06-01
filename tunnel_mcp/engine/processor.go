@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/engine/hook"
-	omnicli "github.com/Shaik-Sirajuddin/memory/mcp/engine/impl/cli"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/session"
+	"github.com/Shaik-Sirajuddin/omni/mcp/engine/hook"
+	omnicli "github.com/Shaik-Sirajuddin/omni/mcp/engine/impl/cli"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/agents"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/session"
 	"gopkg.in/yaml.v3"
 )
 

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	codeagentutils "github.com/Shaik-Sirajuddin/memory/connector/codeagent/utils"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	codeagentutils "github.com/Shaik-Sirajuddin/omni/connector/codeagent/utils"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
 )
 
 // TODO : attach parser methods to AgyParser

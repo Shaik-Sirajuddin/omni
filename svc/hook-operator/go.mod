@@ -1,12 +1,12 @@
-module github.com/Shaik-Sirajuddin/memory/svc/hook-operator
+module github.com/Shaik-Sirajuddin/omni/svc/hook-operator
 
 go 1.26.1
 
 require (
-	github.com/Shaik-Sirajuddin/memory v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
+	github.com/Shaik-Sirajuddin/omni v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/filelock v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/sockpath v0.0.0
 )
 
 require (
@@ -53,10 +53,10 @@ require (
 	modernc.org/sqlite v1.50.1 // indirect
 )
 
-replace github.com/Shaik-Sirajuddin/memory => ../../omni
+replace github.com/Shaik-Sirajuddin/omni => ../../omni
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../../pkg/filelock
+replace github.com/Shaik-Sirajuddin/omni/pkg/filelock => ../../pkg/filelock
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
+replace github.com/Shaik-Sirajuddin/omni/pkg/log => ../../pkg/log
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
+replace github.com/Shaik-Sirajuddin/omni/pkg/sockpath => ../../pkg/sockpath

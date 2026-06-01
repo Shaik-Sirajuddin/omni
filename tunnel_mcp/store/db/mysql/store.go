@@ -3,7 +3,7 @@ package mysql
 import (
 	"context"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store"
 )
 
 type Store struct{}

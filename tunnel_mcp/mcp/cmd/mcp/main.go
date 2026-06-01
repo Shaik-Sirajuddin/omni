@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/mcp/mcp/runner"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 )
 
 var logger = pkglog.NewLogger("component", "mcp-main")

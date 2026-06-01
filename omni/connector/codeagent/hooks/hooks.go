@@ -1,6 +1,6 @@
 package hooks
 
-import sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+import sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 
 type HookID string
 

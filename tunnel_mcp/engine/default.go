@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
 )
 
 // Default is the production Engine: a ProcessingEngine backed by msgStore

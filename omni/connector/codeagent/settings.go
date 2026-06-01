@@ -1,8 +1,8 @@
 package codeagent
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 // OutputFormat controls the format of Exec responses.

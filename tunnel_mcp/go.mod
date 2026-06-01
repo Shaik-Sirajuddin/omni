@@ -1,17 +1,17 @@
-module github.com/Shaik-Sirajuddin/memory/mcp
+module github.com/Shaik-Sirajuddin/omni/mcp
 
 go 1.26.1
 
-replace github.com/Shaik-Sirajuddin/memory => ../omni
+replace github.com/Shaik-Sirajuddin/omni => ../omni
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../pkg/log
+replace github.com/Shaik-Sirajuddin/omni/pkg/log => ../pkg/log
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../pkg/sockpath
+replace github.com/Shaik-Sirajuddin/omni/pkg/sockpath => ../pkg/sockpath
 
 require (
-	github.com/Shaik-Sirajuddin/memory v1.1.0
-	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
+	github.com/Shaik-Sirajuddin/omni v1.1.0
+	github.com/Shaik-Sirajuddin/omni/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/sockpath v0.0.0
 	github.com/adrg/xdg v0.5.3
 	github.com/docker/docker v28.5.2+incompatible // test-only: e2e Docker SDK executor
 	github.com/google/uuid v1.6.0

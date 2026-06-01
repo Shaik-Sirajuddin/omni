@@ -4,7 +4,7 @@ package log
 import (
 	"log/slog"
 
-	applog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	applog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 )
 
 // NewLogger returns a connector-tagged logger.

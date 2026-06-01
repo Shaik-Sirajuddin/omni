@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
 	"github.com/google/uuid"
 )
 

@@ -7,12 +7,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
-	confhooks "github.com/Shaik-Sirajuddin/memory/config/hooks"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	claudeconnector "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude/settings"
-	codehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	confhooks "github.com/Shaik-Sirajuddin/omni/config/hooks"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	claudeconnector "github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude/settings"
+	codehooks "github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
 )
 
 type claudeHookTransformer struct {

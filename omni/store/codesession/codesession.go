@@ -3,7 +3,7 @@ package codesession
 import (
 	"database/sql"
 
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
 )
 
 // CodeSessionStore provides persistent storage for code sessions.

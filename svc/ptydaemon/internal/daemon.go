@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"sync"
 
-	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
+	pkgpty "github.com/Shaik-Sirajuddin/omni/pkg/pty"
 )
 
 var ErrNotFound = errors.New("terminal not found")

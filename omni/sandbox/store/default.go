@@ -11,8 +11,8 @@ import (
 	"sort"
 	"sync"
 
-	provider "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
-	"github.com/Shaik-Sirajuddin/memory/store/database"
+	provider "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/store/database"
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
 )

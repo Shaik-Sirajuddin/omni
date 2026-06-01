@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 )
 
 // ProviderHookStatus is the verification result for one provider's transformer.

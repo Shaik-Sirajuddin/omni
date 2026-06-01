@@ -8,9 +8,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	codexconnector "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
-	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
-	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
+	codexconnector "github.com/Shaik-Sirajuddin/omni/connector/codeagent/codex"
+	operatorimpl "github.com/Shaik-Sirajuddin/omni/operator/impl"
+	hookoperator "github.com/Shaik-Sirajuddin/omni/svc/hook-operator"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

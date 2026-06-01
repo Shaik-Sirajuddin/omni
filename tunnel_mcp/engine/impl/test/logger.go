@@ -1,5 +1,5 @@
 package test
 
-import pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+import pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 
 var logger = pkglog.NewLogger("component", "engine-test")

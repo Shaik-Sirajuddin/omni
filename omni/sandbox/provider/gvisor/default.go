@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	sandboxcommon "github.com/Shaik-Sirajuddin/memory/sandbox/common"
-	sandboxlog "github.com/Shaik-Sirajuddin/memory/sandbox/log"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	sandboxcommon "github.com/Shaik-Sirajuddin/omni/sandbox/common"
+	sandboxlog "github.com/Shaik-Sirajuddin/omni/sandbox/log"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 	"github.com/adrg/xdg"
 )
 

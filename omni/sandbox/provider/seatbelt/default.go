@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	sandboxcommon "github.com/Shaik-Sirajuddin/memory/sandbox/common"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	sandboxcommon "github.com/Shaik-Sirajuddin/omni/sandbox/common"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 type Provisioner struct {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	storebroadcast "github.com/Shaik-Sirajuddin/memory/mcp/store/broadcast"
+	storebroadcast "github.com/Shaik-Sirajuddin/omni/mcp/store/broadcast"
 )
 
 type CallbackType = storebroadcast.CallbackType

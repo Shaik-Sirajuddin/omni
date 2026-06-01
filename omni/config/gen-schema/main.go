@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
+	"github.com/Shaik-Sirajuddin/omni/config"
 	"github.com/invopop/jsonschema"
 )
 

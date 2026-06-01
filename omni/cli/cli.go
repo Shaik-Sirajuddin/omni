@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/Shaik-Sirajuddin/memory/config"
+import "github.com/Shaik-Sirajuddin/omni/config"
 
 type Cli interface {
 	// Install executes the CLI root command.

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 // rawPermissions and rawFile hold only the fields we map to codeagent.Settings.

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	sandboxcommon "github.com/Shaik-Sirajuddin/memory/sandbox/common"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	sandboxcommon "github.com/Shaik-Sirajuddin/omni/sandbox/common"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 	kjson "github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"

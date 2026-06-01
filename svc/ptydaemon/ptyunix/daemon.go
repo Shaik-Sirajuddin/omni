@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
-	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal"
+	pkgpty "github.com/Shaik-Sirajuddin/omni/pkg/pty"
+	"github.com/Shaik-Sirajuddin/omni/svc/ptydaemon/internal"
 	"golang.org/x/sys/unix"
 )
 

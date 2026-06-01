@@ -1,21 +1,21 @@
-module github.com/Shaik-Sirajuddin/memory/svc/ptydaemon
+module github.com/Shaik-Sirajuddin/omni/svc/ptydaemon
 
 go 1.25.0
 
 require (
-	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/pty v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/sockpath v0.0.0
 	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
 	modernc.org/sqlite v1.34.5
 )
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
+replace github.com/Shaik-Sirajuddin/omni/pkg/log => ../../pkg/log
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/pty => ../../pkg/pty
+replace github.com/Shaik-Sirajuddin/omni/pkg/pty => ../../pkg/pty
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
+replace github.com/Shaik-Sirajuddin/omni/pkg/sockpath => ../../pkg/sockpath
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect

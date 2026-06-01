@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
-	"github.com/Shaik-Sirajuddin/memory/store/codesession"
-	"github.com/Shaik-Sirajuddin/memory/store/database"
-	"github.com/Shaik-Sirajuddin/memory/store/utils"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/store/codesession"
+	"github.com/Shaik-Sirajuddin/omni/store/database"
+	"github.com/Shaik-Sirajuddin/omni/store/utils"
 )
 
 type sqlOmniAgentStore struct {

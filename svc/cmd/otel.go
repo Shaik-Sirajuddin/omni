@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/config"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 )
 
 // initOtel registers OTLP log targets from two sources:

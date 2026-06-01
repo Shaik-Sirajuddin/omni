@@ -1,4 +1,4 @@
-module github.com/Shaik-Sirajuddin/memory/pkg/log
+module github.com/Shaik-Sirajuddin/omni/pkg/log
 
 go 1.25.0
 

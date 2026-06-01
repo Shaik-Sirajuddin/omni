@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	storebroadcast "github.com/Shaik-Sirajuddin/memory/mcp/store/broadcast"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	storebroadcast "github.com/Shaik-Sirajuddin/omni/mcp/store/broadcast"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
 	"github.com/google/uuid"
 )
 

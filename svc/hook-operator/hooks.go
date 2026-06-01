@@ -1,8 +1,8 @@
 package hookoperator
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
 )
 
 // DefaultHook pairs a lifecycle event with the hook entry the operator registers

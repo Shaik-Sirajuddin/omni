@@ -9,8 +9,8 @@ import (
 	"os/user"
 	"syscall"
 
-	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	ptydaemon "github.com/Shaik-Sirajuddin/omni/svc/ptydaemon"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 )
 
 var logger = pkglog.NewLogger("component", "ptydaemon")

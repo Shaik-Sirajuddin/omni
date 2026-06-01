@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
 )
 
 // ─── ExclusiveLock_Serializes ──────────────────────────────────────────────────

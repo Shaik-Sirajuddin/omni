@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	agy "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
+	agy "github.com/Shaik-Sirajuddin/omni/connector/codeagent/agy"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 

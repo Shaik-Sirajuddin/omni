@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/service"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/service"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 )
 
 const defaultMCPHTTPPath = "/mcp"

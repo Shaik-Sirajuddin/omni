@@ -1,6 +1,6 @@
 package hookoperator
 
-import "github.com/Shaik-Sirajuddin/memory/config"
+import "github.com/Shaik-Sirajuddin/omni/config"
 
 // hookEntriesFromConfig extracts the hook entries map from an OmniConfig.
 // Returns an empty map when the config has no agent hooks section.

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/server"
-	mcpapi "github.com/Shaik-Sirajuddin/memory/mcp/server/mcp"
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/proxy"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
-	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server"
+	mcpapi "github.com/Shaik-Sirajuddin/omni/mcp/server/mcp"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/proxy"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/pkg/sockpath"
 )
 
 const (

@@ -7,16 +7,16 @@ import (
 	"errors"
 	"sync"
 
-	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
-	agysettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/settings"
-	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
-	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
-	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
-	configsync "github.com/Shaik-Sirajuddin/memory/svc/config_sync"
-	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
-	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
+	omniconfig "github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/agy"
+	agysettings "github.com/Shaik-Sirajuddin/omni/connector/codeagent/agy/settings"
+	_ "github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude"
+	_ "github.com/Shaik-Sirajuddin/omni/connector/codeagent/codex"
+	"github.com/Shaik-Sirajuddin/omni/mcp/mcp/runner"
+	configsync "github.com/Shaik-Sirajuddin/omni/svc/config_sync"
+	hookoperator "github.com/Shaik-Sirajuddin/omni/svc/hook-operator"
+	"github.com/Shaik-Sirajuddin/omni/svc/ptydaemon"
 )
 
 // ServiceConfig holds the enable flag shared by all service entries.

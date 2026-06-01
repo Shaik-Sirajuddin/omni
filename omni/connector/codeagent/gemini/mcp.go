@@ -1,7 +1,7 @@
 package gemini
 
 import (
-	codeagent "github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	codeagent "github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 )
 
 func (a *geminiAgent) AddMCP(_ codeagent.AddMCPParams) (*codeagent.AddMCPResult, error) {

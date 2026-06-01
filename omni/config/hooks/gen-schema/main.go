@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	confhooks "github.com/Shaik-Sirajuddin/memory/config/hooks"
+	confhooks "github.com/Shaik-Sirajuddin/omni/config/hooks"
 	"github.com/invopop/jsonschema"
 )
 

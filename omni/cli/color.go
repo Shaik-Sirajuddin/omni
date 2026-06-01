@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/cli/theme"
+	"github.com/Shaik-Sirajuddin/omni/cli/theme"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )

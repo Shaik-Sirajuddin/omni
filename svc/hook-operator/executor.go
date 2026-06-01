@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
+	"github.com/Shaik-Sirajuddin/omni/config"
 
 )
 

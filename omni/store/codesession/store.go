@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	"github.com/Shaik-Sirajuddin/memory/store/database"
-	"github.com/Shaik-Sirajuddin/memory/store/utils"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	"github.com/Shaik-Sirajuddin/omni/store/database"
+	"github.com/Shaik-Sirajuddin/omni/store/utils"
 )
 
 var (

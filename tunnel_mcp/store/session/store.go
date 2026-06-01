@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/database"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/database"
 )
 
 // PromptSessionStore tracks which prompts have already been delivered to an

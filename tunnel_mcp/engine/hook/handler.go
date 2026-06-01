@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
 )
 
 // Engine is the callback interface HookHandler uses to drive the ProcessingEngine.

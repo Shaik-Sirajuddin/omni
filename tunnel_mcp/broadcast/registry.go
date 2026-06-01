@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	storebroadcast "github.com/Shaik-Sirajuddin/memory/mcp/store/broadcast"
+	storebroadcast "github.com/Shaik-Sirajuddin/omni/mcp/store/broadcast"
 )
 
 var (

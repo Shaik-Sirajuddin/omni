@@ -2,6 +2,6 @@
 
 package ptyunix
 
-import pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+import pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 
 var ptylog = pkglog.NewLogger("component", "ptydaemon")

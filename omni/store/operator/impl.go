@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/pkg/log"
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	"github.com/Shaik-Sirajuddin/memory/operator"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
-	"github.com/Shaik-Sirajuddin/memory/store/database"
+	"github.com/Shaik-Sirajuddin/omni/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	"github.com/Shaik-Sirajuddin/omni/operator"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/store/database"
 )
 
 var logger = log.NewLogger("component", "store")

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
-	confhooks "github.com/Shaik-Sirajuddin/memory/config/hooks"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	confhooks "github.com/Shaik-Sirajuddin/omni/config/hooks"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 )
 
 type fakeResolver struct {

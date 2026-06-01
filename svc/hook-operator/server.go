@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 )
 
 type hookServer struct {

@@ -1,8 +1,8 @@
 package store
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 type ListAgentParams struct {

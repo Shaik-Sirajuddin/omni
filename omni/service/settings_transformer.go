@@ -1,10 +1,10 @@
 package service
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	"github.com/Shaik-Sirajuddin/memory/operator"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	"github.com/Shaik-Sirajuddin/omni/operator"
 )
 
 // SettingsTransformer paris with a watcher to auto propogate changes at one of config to across all configs
