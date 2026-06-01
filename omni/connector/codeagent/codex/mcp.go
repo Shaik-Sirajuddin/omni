@@ -27,6 +27,9 @@ func (a *codexAgent) configPathForMCP(global bool) (string, error) {
 // TOML map. The file lock (via a.locker) serializes external processes; mcpMu
 // serializes goroutines within this process.
 func (a *codexAgent) withMCPConfig(path string, fn func(raw map[string]interface{}) error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("codex: mkdir %s: %w", filepath.Dir(path), err)
+	}
 	lockPath := filepath.Join(filepath.Dir(path), ".config.toml.lock")
 	unlock, err := a.locker.Lock(lockPath)
 	if err != nil {
@@ -47,9 +50,6 @@ func (a *codexAgent) withMCPConfig(path string, fn func(raw map[string]interface
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
 		return fmt.Errorf("codex: encode config.toml: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("codex: mkdir %s: %w", filepath.Dir(path), err)
 	}
 	return a.locker.WriteAtomic(path, buf.Bytes())
 }

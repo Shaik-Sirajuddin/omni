@@ -217,6 +217,9 @@ func readHooksConfig(path string) (map[string][]codexHookMatcher, error) {
 }
 
 func writeHooksConfig(locker filelock.Locker, path string, hooksByEvent map[string][]codexHookMatcher) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("codex: mkdir config dir: %w", err)
+	}
 	lockPath := filepath.Join(filepath.Dir(path), ".config.toml.lock")
 	unlock, err := locker.Lock(lockPath)
 	if err != nil {
