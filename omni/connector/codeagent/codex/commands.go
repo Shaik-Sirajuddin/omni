@@ -164,15 +164,16 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 	return nil
 }
 
-// bootstrapSession runs `codex exec "." --json` briefly to register a real
-// codex session and capture its thread_id from the first JSON line:
+// bootstrapSession runs `codex exec "." --json` to register a real codex
+// session and capture its thread_id from the first JSON line:
 //
 //	{"type":"thread.started","thread_id":"<id>"}
 //
-// The process is killed as soon as the thread_id is found so we don't wait
-// for the full exec to finish.
+// Once the thread_id is found we send SIGTERM (not SIGKILL) so codex can
+// flush the session file to disk before exiting. Killing with SIGKILL prevents
+// session persistence, causing "No saved session found" on subsequent Resume calls.
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "-C", workDir}
@@ -191,15 +192,16 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Read lines as they arrive — no polling, no buffering delay.
-	// Stop as soon as thread_id is found.
+	// Drain stdout lines; send the first thread_id found to found channel.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			if id := parseBootstrapSessionID(scanner.Text()); id != "" {
-				found <- id
-				return
+				select {
+				case found <- id:
+				default:
+				}
 			}
 		}
 		close(found)
@@ -209,9 +211,15 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 	select {
 	case id = <-found:
 	case <-ctx.Done():
+		_ = cmd.Wait()
+		logger.Debug("bootstrapSession: timed out", "sessionID", id)
+		return id, nil
 	}
 
-	cancel()
+	// SIGTERM lets codex flush the session file; SIGKILL (context cancel) would not.
+	// ctx (20 s) provides the backstop: exec.CommandContext kills the process on expiry,
+	// unblocking cmd.Wait() if codex ignores the signal.
+	_ = cmd.Process.Signal(os.Interrupt)
 	_ = cmd.Wait()
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
