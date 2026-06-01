@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package clients
 
 import (
@@ -15,8 +17,8 @@ import (
 	"strings"
 	"syscall"
 
+	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
-	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -446,9 +448,9 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 
 // inheritSize copies the calling terminal's window size onto ptmx.
 func inheritSize(ptmx *os.File) {
-	size, err := pty.GetsizeFull(os.Stdin)
+	ws, err := pkgpty.GetWinsize(os.Stdin)
 	if err != nil {
 		return
 	}
-	_ = pty.Setsize(ptmx, size)
+	_ = pkgpty.SetWinsize(ptmx, ws)
 }
