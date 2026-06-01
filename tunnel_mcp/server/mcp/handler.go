@@ -83,6 +83,9 @@ func senderContextFromRequest(ctx context.Context, r *http.Request) context.Cont
 	} else {
 		logger.Warn("mcp sender type parse failed", "err", err, "sender_id", sender.ID, "sender_type", r.Header.Get("X-SENDER-TYPE"), "workspace", sender.Workspace, "path", r.URL.Path)
 	}
+	if sender.ID == "" {
+		logger.Warn("mcp anonymous connection — X-SENDER-ID missing; tool calls requiring auth will fail", "sender_type", r.Header.Get("X-SENDER-TYPE"), "path", r.URL.Path)
+	}
 	logger.Debug("mcp sender context extracted", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace, "path", r.URL.Path)
 	return context.WithValue(ctx, senderContextKey{}, sender)
 }
