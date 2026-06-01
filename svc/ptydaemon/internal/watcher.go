@@ -16,6 +16,7 @@ func watchTerminal(t *PTYTerminal, store *Store, onExit func(agentID, sessionID 
 
 	t.setStatus(status)
 	_ = store.UpdateStatus(t.AgentID, t.SessionID, status)
+	t.closeMaster() // child is gone; release the master fd now instead of at GC
 
 	if onExit != nil {
 		onExit(t.AgentID, t.SessionID)
@@ -28,6 +29,7 @@ func watchAdopted(t *PTYTerminal, store *Store, remove func(string, string)) {
 		if _, err := os.Stat(procDir); os.IsNotExist(err) {
 			t.setStatus(StatusStopped)
 			_ = store.UpdateStatus(t.AgentID, t.SessionID, StatusStopped)
+			t.closeMaster() // adopted process gone; release the opened master fd
 			remove(t.AgentID, t.SessionID)
 			return
 		}
