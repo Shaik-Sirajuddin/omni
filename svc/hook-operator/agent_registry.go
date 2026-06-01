@@ -7,6 +7,7 @@ import (
 	claude "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
 	claudehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude/hooks"
 	codex "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
+	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
 )
 
 // agentRegistry owns one HookTransformer per provider, initialized at startup.
@@ -31,7 +32,7 @@ func (ar *agentRegistry) init() {
 	providers := map[codeagent.Provider]codeagent.HookTransformer{
 		claude.Claude: claudehooks.New(),
 		agy.Agy:       agyhooks.New(),
-		codex.Codex:   codex.NewHookTransformer(),
+		codex.Codex:   codex.NewHookTransformer(filelock.New()),
 	}
 	for provider, transformer := range providers {
 		if err := ar.reg.apply(transformer); err != nil {
