@@ -105,7 +105,7 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 		for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
 			if _, err := mgr.AddMCP(codeagent.AddMCPParams{
 				Server: codeagent.MCPServer{
-					Name:      "tunnel-mcp",
+					Name:      "axolink",
 					Transport: codeagent.MCPTransportHTTP,
 					URL:       mcpEndpoint,
 					Headers:   headers,
