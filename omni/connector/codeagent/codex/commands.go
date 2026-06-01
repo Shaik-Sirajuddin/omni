@@ -164,18 +164,21 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 	return nil
 }
 
-// bootstrapSession runs `codex exec "." --json` briefly to register a real
-// codex session and capture its thread_id from the first JSON line:
+// bootstrapSession runs `codex exec "." --json --max-turns=1` to register a
+// real codex session and capture its thread_id from the first JSON line:
 //
 //	{"type":"thread.started","thread_id":"<id>"}
 //
-// The process is killed as soon as the thread_id is found so we don't wait
-// for the full exec to finish.
+// --max-turns=1 ensures codex completes one turn and exits naturally, which
+// guarantees the session file is flushed to disk before we return. Killing the
+// process early (old behaviour) prevented the session from being persisted,
+// causing "No saved session found" errors on the subsequent Resume call.
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "-C", workDir}
+	// --max-turns=1: one turn then exit, so the session is persisted quickly.
+	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "--max-turns=1", "-C", workDir}
 	logger.Info("bootstrapSession: running command", "bin", binPath, "args", args)
 
 	cmd := exec.CommandContext(ctx, binPath, args...)
@@ -191,28 +194,31 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Read lines as they arrive — no polling, no buffering delay.
-	// Stop as soon as thread_id is found.
+	// Drain all stdout lines. Collect the first thread_id seen.
+	// Draining is required so codex is never blocked on a full pipe.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			if id := parseBootstrapSessionID(scanner.Text()); id != "" {
-				found <- id
-				return
+				select {
+				case found <- id:
+				default:
+				}
 			}
 		}
 		close(found)
 	}()
 
+	// Wait for natural exit so codex flushes the session file to disk.
+	// The goroutine above drains stdout to prevent pipe-full blocking.
+	_ = cmd.Wait()
+
 	var id string
 	select {
 	case id = <-found:
-	case <-ctx.Done():
+	default:
 	}
-
-	cancel()
-	_ = cmd.Wait()
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil
