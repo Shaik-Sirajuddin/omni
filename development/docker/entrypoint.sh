@@ -166,18 +166,33 @@ seed_mcp_configs() {
   fi
   seed_mcp_json /root/.claude.json "$url" "$claude_key_suffix"
 
-  # accept workspace trust + project onboarding for /build (write-once)
-  # Bug A: claude.ai installer places binary at ~/.local/bin — not in non-login-shell PATH.
-  # Bug B: claude 2.1.x interprets `claude config set` as an agent prompt, not a CLI flag.
-  #        Write the project trust JSON directly instead.
+  # claude.ai installer places binary at ~/.local/bin — not in non-login-shell PATH.
   export PATH="${HOME}/.local/bin:${PATH}"
-  local build_project_json="${HOME}/.claude/projects/-build.json"
-  if command -v claude &>/dev/null && [[ ! -f "$build_project_json" ]]; then
-    echo "==> accepting claude workspace trust for /build"
-    mkdir -p "$(dirname "$build_project_json")"
-    echo '{"hasTrustDialogAccepted":true,"hasTrustDialogHooksAccepted":true,"hasCompletedProjectOnboarding":true}' \
-      > "$build_project_json"
+
+  # Clear stale stored credentials so CLAUDE_CODE_OAUTH_TOKEN (env pos 5) is not
+  # shadowed by a console API key from a previous interactive login (stored pos 6
+  # for subscription, but an API key from --console login could cause prompt loops).
+  if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    rm -f "${HOME}/.claude/.credentials.json"
   fi
+
+  # Accept workspace trust for all directories omni-server may use as workDir.
+  # claude 2.1.x uses per-project JSON; `claude config set` no longer works for this.
+  # Directory → project file mapping: replace leading / with -, then .json
+  # /build → -build.json, / → root.json (systemd default cwd), /workspace → -workspace.json
+  local trust_json='{"hasTrustDialogAccepted":true,"hasTrustDialogHooksAccepted":true,"hasCompletedProjectOnboarding":true}'
+  local projects_dir="${HOME}/.claude/projects"
+  mkdir -p "$projects_dir"
+  for dir in /build /workspace /; do
+    local fname
+    fname="$(echo "$dir" | sed 's|^/||; s|/|-|g')"
+    [[ -z "$fname" ]] && fname="root"
+    local project_json="${projects_dir}/${fname}.json"
+    if [[ ! -f "$project_json" ]]; then
+      echo "==> accepting claude workspace trust for $dir"
+      echo "$trust_json" > "$project_json"
+    fi
+  done
 
   # ── agy (Antigravity CLI) ────────────────────────────────────────────────────
   # agy MCP seeded via codeagent.GlobalMCPRegistry at runtime (see omni/connector/codeagent/agy/mcp.go)
