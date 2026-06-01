@@ -96,6 +96,10 @@ type codexAgent struct {
 	ptyClient       codeagent.PTYClient
 }
 
+func init() {
+	codeagent.GlobalMCPRegistry.Register(Codex, &codexAgent{})
+}
+
 // New returns a CodeAgent backed by the local codex CLI binary.
 // c is the PTY daemon client used by ExecInSession; pass nil if not needed.
 // Optional Option values (e.g. WithPTYClient) may override c.

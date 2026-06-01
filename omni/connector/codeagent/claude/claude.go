@@ -75,6 +75,10 @@ type claudeAgent struct {
 	registeredHooks []*hooks.HookData
 }
 
+func init() {
+	codeagent.GlobalMCPRegistry.Register(Claude, &claudeAgent{})
+}
+
 // New returns a CodeAgent backed by the local claude CLI binary.
 // workDir defaults to the process working directory; model defaults to DefaultModel.
 // c is the PTY daemon client used by ExecInSession; pass nil to disable PTY support.
