@@ -82,8 +82,8 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 		logger.Warn("Create: could not sync model to config", "err", syncErr)
 	}
 
-	// Auto-approve tunnel_mcp tool calls so Codex never pauses for MCP approval.
-	if mcpErr := a.ensureMCPApprovalMode("tunnel_mcp"); mcpErr != nil {
+	// Auto-approve axolink tool calls so Codex never pauses for MCP approval.
+	if mcpErr := a.ensureMCPApprovalMode("axolink"); mcpErr != nil {
 		logger.Warn("Create: could not set MCP approval mode", "err", mcpErr)
 	}
 
@@ -192,7 +192,8 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Drain stdout lines; send the first thread_id found to found channel.
+	// Drain stdout lines; send the first thread_id found to the channel.
+	// Draining is required so codex is never blocked on a full pipe.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -216,11 +217,10 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return id, nil
 	}
 
-	// SIGTERM lets codex flush the session file; SIGKILL (context cancel) would not.
-	// ctx (20 s) provides the backstop: exec.CommandContext kills the process on expiry,
-	// unblocking cmd.Wait() if codex ignores the signal.
+	// SIGTERM lets codex flush the session file before exiting.
 	_ = cmd.Process.Signal(os.Interrupt)
 	_ = cmd.Wait()
+
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil
