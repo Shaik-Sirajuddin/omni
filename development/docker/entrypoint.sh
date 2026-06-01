@@ -5,13 +5,6 @@ set -euo pipefail
 WORKSPACE="${WORKSPACE:-/workspace}"
 
 # ── install + setup omni (binary already baked into image at /opt/omni/bin) ───
-fix_claude_binary() {
-  local native="/usr/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
-  if [[ -f "$native" ]]; then
-    ln -sf "$native" /usr/bin/claude
-  fi
-}
-fix_claude_binary
 
 install_and_setup() {
   echo "==> install_phase"
@@ -174,7 +167,7 @@ seed_mcp_configs() {
   seed_mcp_json /root/.claude.json "$url" "$claude_key_suffix"
 
   # accept workspace trust + project onboarding for /build (write-once)
-  if [[ -f /usr/bin/claude ]] && ! claude config get hasTrustDialogAccepted 2>/dev/null | grep -q true; then
+  if command -v claude &>/dev/null && ! claude config get hasTrustDialogAccepted 2>/dev/null | grep -q true; then
     echo "==> accepting claude workspace trust for /build"
     cd /build && claude config set hasTrustDialogAccepted true 2>/dev/null || true
     cd /build && claude config set hasCompletedProjectOnboarding true 2>/dev/null || true
