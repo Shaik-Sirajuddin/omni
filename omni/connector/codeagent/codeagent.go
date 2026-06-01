@@ -159,8 +159,9 @@ type MCPServer struct {
 	Args      []string          // stdio: arguments
 	URL       string            // sse/http: endpoint URL
 	Env       map[string]string // extra environment variables
-	Headers   map[string]string // sse/http: request headers
-	Timeout   int               // milliseconds; 0 = provider default
+	Headers    map[string]string // sse/http: literal request headers → http_headers
+	EnvHeaders map[string]string // sse/http: env-var-expanded headers → env_http_headers
+	Timeout    int               // milliseconds; 0 = provider default
 }
 
 type AddMCPParams struct {
