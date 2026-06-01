@@ -7,8 +7,22 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// DECSET/DECRST 2004 are the terminal control sequences a TUI emits to enable
+// and disable bracketed-paste mode. The daemon observes them on the child's
+// output stream to know whether \x1b[200~/201~ paste framing will be consumed
+// by the app or rendered as literal text (see noteOutput / execPrompt).
+var (
+	bpEnableSeq  = []byte("\x1b[?2004h")
+	bpDisableSeq = []byte("\x1b[?2004l")
+)
+
+// bpCarrySize is the longest DECSET/DECRST 2004 sequence minus one — the most a
+// match can straddle two consecutive drain reads.
+const bpCarrySize = 7
 
 type Status string
 
@@ -104,6 +118,18 @@ type PTYTerminal struct {
 	drainActive bool
 	drainParked bool // true while the drainer is parked (provably not reading)
 	drainClosed bool
+
+	// bpasteOn tracks whether the child currently has bracketed-paste mode
+	// (DECSET 2004) enabled, learned by scanning its output in noteOutput.
+	// execPrompt reads it to decide whether to bracket-wrap the prompt or inject
+	// it raw. Defaults false: until we have positively observed the enable
+	// sequence we must not emit paste markers, or they leak into the TUI as text.
+	bpasteOn atomic.Bool
+	// bpCarry holds the tail of the previous drain read so a DECSET/DECRST 2004
+	// sequence split across two reads is still detected. Touched only by the
+	// single drainLoop goroutine — no lock required.
+	bpCarry  [bpCarrySize]byte
+	bpCarryN int
 }
 
 func (t *PTYTerminal) write(p []byte) error {
@@ -190,7 +216,12 @@ func (t *PTYTerminal) drainLoop() {
 		// Bounded deadline so a paused/closed transition is noticed even when
 		// the child is silent.
 		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
-		if _, err := m.Read(buf); err != nil {
+		n, err := m.Read(buf)
+		if n > 0 {
+			// Observe bracketed-paste mode toggles before discarding the bytes.
+			t.noteOutput(buf[:n])
+		}
+		if err != nil {
 			if os.IsTimeout(err) {
 				continue
 			}
@@ -198,6 +229,48 @@ func (t *PTYTerminal) drainLoop() {
 		}
 		// bytes discarded; keep draining
 	}
+}
+
+// noteOutput scans a chunk of child output for DECSET/DECRST 2004 (bracketed
+// paste enable/disable) and updates bpasteOn to the most recent state seen. A
+// small carry from the previous read is checked against the head of this one so
+// a sequence split across two reads is still caught. Called only from the single
+// drainLoop goroutine.
+func (t *PTYTerminal) noteOutput(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	// Boundary: previous carry tail + head of this chunk (enough to cover a
+	// straddling 8-byte sequence).
+	if t.bpCarryN > 0 {
+		m := len(b)
+		if m > bpCarrySize {
+			m = bpCarrySize
+		}
+		edge := make([]byte, 0, t.bpCarryN+m)
+		edge = append(edge, t.bpCarry[:t.bpCarryN]...)
+		edge = append(edge, b[:m]...)
+		t.scanBracketedPaste(edge)
+	}
+	t.scanBracketedPaste(b)
+	// Carry the tail for the next read.
+	keep := len(b)
+	if keep > bpCarrySize {
+		keep = bpCarrySize
+	}
+	copy(t.bpCarry[:], b[len(b)-keep:])
+	t.bpCarryN = keep
+}
+
+// scanBracketedPaste sets bpasteOn from the last enable/disable marker in buf.
+// No-op when buf contains neither.
+func (t *PTYTerminal) scanBracketedPaste(buf []byte) {
+	on := bytes.LastIndex(buf, bpEnableSeq)
+	off := bytes.LastIndex(buf, bpDisableSeq)
+	if on < 0 && off < 0 {
+		return
+	}
+	t.bpasteOn.Store(on > off)
 }
 
 // pauseDrain stops the drainer before a client takes over reading the master,
@@ -283,7 +356,8 @@ func (t *PTYTerminal) readLastInput() []byte {
 // stale human input instead of the prompt.
 //
 //  1. ctrlU                          clear the human's partial line
-//  2. paste(prompt)                  bracketed-paste the prompt (no submit yet)
+//  2. inject(prompt)                 bracketed-paste when the child has paste
+//                                     mode active, else raw (no submit yet)
 //  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
 //  4. human input (once, no submit)  restore what the human was typing
 //
@@ -296,6 +370,14 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	t.execMu.Lock()
 	defer t.execMu.Unlock()
 
+	// Step-level trace so a "prompt visible in TUI but not submitted / shown as
+	// literal escape codes" report can be pinned to a specific stage. The prompt
+	// must arrive raw here (no caller-side bracketed-paste/submit framing): this
+	// method is the single owner of framing — see handleExec.
+	ptylog.Debug("ptydaemon: execPrompt begin", "session_id", t.SessionID,
+		"submit_key", t.submitKey, "prompt_len", len(prompt),
+		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "human_carry", len(human))
+
 	// 1. Clear the human's partial line, then let the TUI apply it before we
 	//    paste — otherwise the clear races behind the paste/submit.
 	if err := t.write([]byte(ctrlU)); err != nil {
@@ -303,9 +385,25 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	}
 	time.Sleep(pasteSettle)
 
-	// 2. Bracketed-paste the prompt as its own write and let it settle. The
-	//    submit must not share this write or it races the paste.
-	if err := t.write([]byte(pasteStart + prompt + pasteEnd)); err != nil {
+	// 2. Inject the prompt as its own write and let it settle. The submit must
+	//    not share this write or it races the paste.
+	//
+	//    Bracketed-paste framing is used ONLY when the child has paste mode
+	//    (DECSET 2004) active — observed from its output stream in noteOutput.
+	//    If it is not active (e.g. a TUI that never enables it, or exec racing
+	//    startup before the app turns it on), the \x1b[200~/201~ markers would be
+	//    inserted as literal text and surface in the user TUI, so fall back to a
+	//    raw write of the prompt.
+	bracketed := t.bpasteOn.Load()
+	var inject []byte
+	if bracketed {
+		inject = []byte(pasteStart + prompt + pasteEnd)
+	} else {
+		inject = []byte(prompt)
+	}
+	ptylog.Debug("ptydaemon: execPrompt inject", "session_id", t.SessionID,
+		"bracketed_paste", bracketed, "prompt_len", len(prompt))
+	if err := t.write(inject); err != nil {
 		return err
 	}
 	time.Sleep(pasteSettle)
