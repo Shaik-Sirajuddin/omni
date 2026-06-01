@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # common/verify.sh — post-install sanity checks (sourced by setup scripts)
+#
+# verify_install() always exits 0 (degraded-ok): missing binaries print
+# actionable warnings but do not abort, since the user may need to open a
+# new shell or add ~/.local/bin to PATH before the check passes.
 set -euo pipefail
 
 verify_install() {
@@ -28,6 +32,7 @@ verify_install() {
   if [[ "$ok" -eq 1 ]]; then
     echo "==> install verified"
   else
-    echo "==> install complete with warnings — see above" >&2
+    # Degraded-ok: binaries are installed, PATH may just need updating.
+    echo "==> install complete with warnings — open a new shell or update PATH" >&2
   fi
 }

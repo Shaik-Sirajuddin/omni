@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
-# install.sh — omni curl installer entry point
+# install.sh — omni release-tarball installer entry point
+# Bundled inside each release tarball alongside the bin/ directory.
 # Detects platform and delegates to the appropriate setup script.
+#
+# Usage (from extracted tarball):
+#   bash install.sh
+#
+# Override defaults via environment:
+#   BIN_DIR=/path/to/bins bash install.sh     # use binaries from a custom path
+#   OMNI_GLOBAL_INSTALL=1 bash install.sh     # system-wide install (requires root)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# BIN_DIR: directory containing the omni/omni-server binaries.
+# Defaults to bin/ adjacent to this script (standard tarball layout).
+export BIN_DIR="${BIN_DIR:-${SCRIPT_DIR}/bin}"
+
 OS="$(uname -s)"
 
 case "$OS" in

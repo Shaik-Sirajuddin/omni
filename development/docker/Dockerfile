@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     curl wget git sudo \
     ca-certificates gnupg \
     make build-essential \
+    gawk \
     nano \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -27,20 +28,21 @@ RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:$PATH"
 
-# Agent CLIs — all via official curl installers, no Node/npm
+# Agent CLIs — pinned versions via official curl installers, no Node/npm
 ARG CLAUDE_CODE_VERSION=2.1.145
+ARG CODEX_VERSION=0.135.0
 
 # Claude Code — official binary installer
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
     && CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION} bash /tmp/install-claude.sh \
     && rm /tmp/install-claude.sh
 
-# Codex — official OpenAI curl installer
+# Codex — official OpenAI curl installer; CODEX_RELEASE pins the version
 RUN curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/install-codex.sh \
-    && CODEX_NON_INTERACTIVE=1 sh /tmp/install-codex.sh \
+    && CODEX_NON_INTERACTIVE=1 CODEX_RELEASE=${CODEX_VERSION} sh /tmp/install-codex.sh \
     && rm /tmp/install-codex.sh
 
-# Agy (Antigravity / Gemini CLI by Google)
+# Agy (Antigravity / Gemini CLI by Google) — floating latest; bump image to update
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
     && ln -sf /root/.local/bin/agy /usr/local/bin/agy
 

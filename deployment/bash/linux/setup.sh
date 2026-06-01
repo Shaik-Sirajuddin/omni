@@ -3,18 +3,21 @@
 set -euo pipefail
 
 : "${BIN_DIR:?BIN_DIR must be set by caller}"
-: "${OMNI_PREFIX:=${HOME}/.local/opt/omni}"
 
-OMNI_BIN="$OMNI_PREFIX/bin"
-SYMLINK_DIR="${HOME}/.local/bin"
 BINARIES=(omni omni-server)
 
+# Set prefix and symlink dir based on install mode.
+# OMNI_PREFIX can be overridden by the caller in either mode.
 if [[ "${OMNI_GLOBAL_INSTALL:-0}" == "1" ]]; then
   [[ "$EUID" -eq 0 ]] || { echo "error: OMNI_GLOBAL_INSTALL=1 requires root" >&2; exit 1; }
   OMNI_PREFIX="${OMNI_PREFIX:-/opt/omni}"
-  OMNI_BIN="$OMNI_PREFIX/bin"
   SYMLINK_DIR="/usr/local/bin"
+else
+  OMNI_PREFIX="${OMNI_PREFIX:-${HOME}/.local/opt/omni}"
+  SYMLINK_DIR="${HOME}/.local/bin"
 fi
+
+OMNI_BIN="$OMNI_PREFIX/bin"
 
 echo "==> installing omni to $OMNI_BIN"
 mkdir -p "$OMNI_BIN"
