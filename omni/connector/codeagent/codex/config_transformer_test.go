@@ -10,6 +10,7 @@ import (
 	"github.com/BurntSushi/toml"
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,9 +46,14 @@ func seedTOML(t *testing.T, path string, m map[string]interface{}) {
 	require.NoError(t, toml.NewEncoder(f).Encode(m))
 }
 
+// testAgent returns a minimal codexAgent with a real file locker for tests.
+func testAgent() *codexAgent {
+	return &codexAgent{locker: filelock.New()}
+}
+
 // addTestMCP inserts one stdio MCP entry via withMCPConfig.
 func addTestMCP(path, name, command string) error {
-	return withMCPConfig(path, func(raw map[string]interface{}) error {
+	return testAgent().withMCPConfig(path, func(raw map[string]interface{}) error {
 		servers := getMCPServersRaw(raw)
 		entry, err := mcpServerToRaw(codeagent.MCPServer{
 			Name:      name,
@@ -116,7 +122,7 @@ func TestConfigTransformer_ContextC_ModelSectionPreserved(t *testing.T) {
 	require.NoError(t, addTestMCP(path, "omni-mcp", "omni-server"))
 
 	// Hook write.
-	require.NoError(t, writeHooksConfig(path, map[string][]codexHookMatcher{
+	require.NoError(t, writeHooksConfig(filelock.New(), path, map[string][]codexHookMatcher{
 		"UserPromptSubmit": {{
 			Hooks: []codexHookDef{{Type: "command", Command: "omni hook --event UserPromptSubmit"}},
 		}},
@@ -182,7 +188,7 @@ func TestConfigTransformer_ContextE_HookAccumulation(t *testing.T) {
 	raw0 := map[string]interface{}{"model": "claude-3-5-sonnet"}
 	require.NoError(t, writeConfigTOML(configPath, raw0))
 
-	tr := NewHookTransformer()
+	tr := NewHookTransformer(filelock.New())
 
 	cmd1 := "omni"
 	entry1 := omniconfig.HookEntry{
@@ -249,7 +255,7 @@ func TestConfigTransformer_ContextF_FullRoundTrip(t *testing.T) {
 	assert.Contains(t, srv1, "omni-mcp", "omni-mcp must be added")
 
 	// Step 2: write hooks → mcp_servers and model must be preserved.
-	require.NoError(t, writeHooksConfig(path, map[string][]codexHookMatcher{
+	require.NoError(t, writeHooksConfig(filelock.New(), path, map[string][]codexHookMatcher{
 		"UserPromptSubmit": {{
 			Hooks: []codexHookDef{{Type: "command", Command: "omni hook --event UserPromptSubmit"}},
 		}},
@@ -358,7 +364,7 @@ func TestConfigTransformer_S2_ExhaustiveStrict(t *testing.T) {
 	assert.True(t, h1ok, "S2: hooks section survives MCP write")
 
 	// ── Hook write ───────────────────────────────────────────────────────────
-	require.NoError(t, writeHooksConfig(path, map[string][]codexHookMatcher{
+	require.NoError(t, writeHooksConfig(filelock.New(), path, map[string][]codexHookMatcher{
 		"UserPromptSubmit": {{
 			Hooks: []codexHookDef{{Type: "command", Command: "omni hook --event UserPromptSubmit"}},
 		}},

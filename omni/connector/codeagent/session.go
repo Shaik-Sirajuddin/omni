@@ -107,6 +107,10 @@ type GetSessionSandboxResult struct {
 type ExecInSessionParams struct {
 	SessionID string
 	Prompt    string
+	// Detached signals that the session is running without a TTY attachment.
+	// Connectors should route the prompt through PTY daemon stdin write only,
+	// without attempting any blocking output read or TTY attachment.
+	Detached bool
 }
 
 type ExecInSessionResult struct {

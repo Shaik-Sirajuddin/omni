@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # E2E tests: omni agent exec --resume delivers prompts to background agent.
 #
 # Critical gate (TEST 2): hook receipt via journalctl proves the prompt was
