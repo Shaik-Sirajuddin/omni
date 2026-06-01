@@ -83,7 +83,7 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	}
 
 	// Auto-approve tunnel_mcp tool calls so Codex never pauses for MCP approval.
-	if mcpErr := ensureMCPApprovalMode("tunnel_mcp"); mcpErr != nil {
+	if mcpErr := a.ensureMCPApprovalMode("tunnel_mcp"); mcpErr != nil {
 		logger.Warn("Create: could not set MCP approval mode", "err", mcpErr)
 	}
 

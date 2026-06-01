@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/Shaik-Sirajuddin/memory v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
 )
@@ -53,6 +54,8 @@ require (
 )
 
 replace github.com/Shaik-Sirajuddin/memory => ../../omni
+
+replace github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../../pkg/filelock
 
 replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
 

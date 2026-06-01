@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # E2E tests: agy and gemini agents no longer silently succeed or hang on exec --resume.
 #
 # TEST A: agy — exec --resume with no PTY client must error with a clear message,

@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/creack/pty"
+	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 )
 
 var ErrNotFound = errors.New("terminal not found")
@@ -85,10 +85,11 @@ func (d *defaultDaemon) Create(p PTYCreateParams) (*PTYTerminalInfo, error) {
 	cmd.Env = append(os.Environ(), p.Env...)
 	cmd.Dir = p.Dir
 
-	master, err := pty.Start(cmd)
+	ptm, err := pkgpty.StartCmd(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("pty start: %w", err)
 	}
+	master := ptm.Master()
 
 	info := PTYTerminalInfo{
 		AgentID:   p.AgentID,
@@ -113,8 +114,28 @@ func (d *defaultDaemon) Create(p PTYCreateParams) (*PTYTerminalInfo, error) {
 	}
 
 	go watchTerminal(t, d.store, d.removeTerminal)
+	t.startDrain() // drain output while detached so the child never blocks on write
 
 	return &info, nil
+}
+
+// OnAttach is called when a client takes over the master fd for a session. It
+// pauses the idle drainer so the client is the sole reader of the master. The
+// redraw of the current screen is driven client-side (forceRedraw in the unix
+// client), which can guarantee a genuine SIGWINCH against the real terminal size
+// even when the PTY size is unchanged.
+func (d *defaultDaemon) OnAttach(agentID, sessionID string) {
+	if t := d.get(agentID, sessionID); t != nil {
+		t.pauseDrain()
+	}
+}
+
+// OnDetach is called when a client releases the master fd. It resumes the idle
+// drainer so the kernel buffer keeps draining and the child does not stall.
+func (d *defaultDaemon) OnDetach(agentID, sessionID string) {
+	if t := d.get(agentID, sessionID); t != nil {
+		t.resumeDrain()
+	}
 }
 
 func (d *defaultDaemon) Pipe(agentID, sessionID string, data []byte) error {
@@ -201,6 +222,7 @@ func (d *defaultDaemon) Stop(agentID, sessionID string) error {
 		// adopted session — process not owned by daemon; just mark stopped and remove
 		t.setStatus(StatusStopped)
 		_ = d.store.UpdateStatus(agentID, sessionID, StatusStopped)
+		t.closeMaster() // release the master fd we opened for the adopted pid
 		d.removeTerminal(agentID, sessionID)
 		return nil
 	}

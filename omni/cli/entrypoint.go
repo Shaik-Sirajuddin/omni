@@ -1010,6 +1010,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 				AgentID:   resolvedID,
 				SessionID: sessionID,
 				Prompt:    prompt,
+				Detached:  resume,
 			}); err != nil {
 				return err
 			}

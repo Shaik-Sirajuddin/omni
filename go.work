@@ -1,0 +1,13 @@
+go 1.26.1
+
+use (
+	./omni
+	./pkg/log
+	./pkg/pty
+	./pkg/sockpath
+	./svc/cmd
+	./svc/config_sync
+	./svc/hook-operator
+	./svc/ptydaemon
+	./tunnel_mcp
+)

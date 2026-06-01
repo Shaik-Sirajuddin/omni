@@ -1,3 +1,5 @@
+//go:build linux
+
 package ptyunix
 
 import (
@@ -14,8 +16,8 @@ import (
 	"sync"
 	"time"
 
+	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal"
-	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
 
@@ -24,6 +26,14 @@ type session struct {
 	ptmx *os.File
 	cmd  *exec.Cmd
 	mu   sync.Mutex
+}
+
+// attachAware is optionally implemented by inner daemons that want notice when
+// a client attaches/detaches so they can pause/resume idle output draining and
+// trigger a repaint. The in-memory daemon does not implement it.
+type attachAware interface {
+	OnAttach(agentID, sessionID string)
+	OnDetach(agentID, sessionID string)
 }
 
 // Daemon serves the ptyunix raw JSON protocol over a Unix domain socket.
@@ -157,12 +167,13 @@ func (d *Daemon) handleStart(conn *net.UnixConn, req Request) {
 	ptylog.Debug("starting in-memory session", "session_id", req.SessionID, "command", req.Command)
 
 	cmd := exec.Command(req.Command[0], req.Command[1:]...)
-	ptmx, err := pty.Start(cmd)
+	ptm, err := pkgpty.StartCmd(cmd)
 	if err != nil {
 		ptylog.Error("pty start failed", "err", err, "session_id", req.SessionID)
 		respond(conn, Response{Error: err.Error()})
 		return
 	}
+	ptmx := ptm.Master()
 
 	s := &session{ptmx: ptmx, cmd: cmd}
 	d.mu.Lock()
@@ -288,6 +299,11 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 	if clientPID > 0 {
 		d.attachedPIDs.Store(req.SessionID, clientPID)
 	}
+	// Pause idle draining (client is now the sole reader) and repaint so the
+	// client sees the current screen. repaint covers the brief handoff window.
+	if aw, ok := d.inner.(attachAware); ok {
+		aw.OnAttach(req.AgentID, req.SessionID)
+	}
 	ptylog.Info("fd granted to client", "session_id", req.SessionID, "client_pid", clientPID)
 }
 
@@ -333,6 +349,10 @@ func (d *Daemon) handleDetach(conn *net.UnixConn, req Request) {
 		ptylog.Debug("detach: cleared attachment record", "session_id", req.SessionID)
 	} else {
 		ptylog.Warn("detach: session had no attachment record (idempotent)", "session_id", req.SessionID)
+	}
+	// Resume idle draining so the child does not stall while detached.
+	if aw, ok := d.inner.(attachAware); ok {
+		aw.OnDetach(req.AgentID, req.SessionID)
 	}
 	respond(conn, Response{OK: true})
 }

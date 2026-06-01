@@ -133,6 +133,10 @@ type ExecInSessionParams struct {
 	// currently attached. When false (default) the operator auto-resumes the
 	// agent before executing.
 	LiveOnly bool `json:"live_only,omitempty"`
+	// Detached signals that the session was started in detached mode (no TTY
+	// attachment). When true, waitPTYReady is always run before delivering the
+	// prompt regardless of recentlyStarted so the TUI has time to initialise.
+	Detached bool `json:"detached,omitempty"`
 }
 
 type ExecInSessionResult struct {
