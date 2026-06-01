@@ -181,50 +181,48 @@ seed_mcp_configs() {
   fi
 
   # ── agy (Antigravity CLI) ────────────────────────────────────────────────────
-  # agy MCP: server defined in .mcp.json at workspace root, approved via enabledMcpjsonServers
-  # env field passes AXO_LINK_MCP_* vars so agy sessions inherit them for header interpolation
+  # agy MCP seeded via codeagent.GlobalMCPRegistry at runtime (see omni/connector/codeagent/agy/mcp.go)
   local agy_settings="/root/.agy/settings.json"
-  python3 - <<PYEOF
-import json, os
-path = "${agy_settings}"
-cfg = {}
-if os.path.exists(path):
-    try: cfg = json.load(open(path))
-    except Exception: cfg = {}
-cfg.setdefault("enabledMcpjsonServers", ["tunnel-mcp"])
-cfg.setdefault("permissions", {}).setdefault("allow", ["mcp__tunnel-mcp__*"])
-env = cfg.setdefault("env", {})
-for var in ["AXO_LINK_MCP_AUTH_TOKEN","AXO_LINK_MCP_SENDER_ID","AXO_LINK_MCP_SENDER_TYPE","AXO_LINK_MCP_AGENT_WORKSPACE"]:
-    val = os.environ.get(var, "")
-    if val:
-        env[var] = val
-    elif var not in env:
-        env[var] = ""
-os.makedirs(os.path.dirname(path), exist_ok=True)
-json.dump(cfg, open(path, "w"), indent=2)
-PYEOF
+  # python3 - <<PYEOF
+  # import json, os
+  # path = "${agy_settings}"
+  # cfg = {}
+  # if os.path.exists(path):
+  #     try: cfg = json.load(open(path))
+  #     except Exception: cfg = {}
+  # cfg.setdefault("enabledMcpjsonServers", ["tunnel-mcp"])
+  # cfg.setdefault("permissions", {}).setdefault("allow", ["mcp__tunnel-mcp__*"])
+  # env = cfg.setdefault("env", {})
+  # for var in ["AXO_LINK_MCP_AUTH_TOKEN","AXO_LINK_MCP_SENDER_ID","AXO_LINK_MCP_SENDER_TYPE","AXO_LINK_MCP_AGENT_WORKSPACE"]:
+  #     val = os.environ.get(var, "")
+  #     if val:
+  #         env[var] = val
+  #     elif var not in env:
+  #         env[var] = ""
+  # os.makedirs(os.path.dirname(path), exist_ok=True)
+  # json.dump(cfg, open(path, "w"), indent=2)
+  # PYEOF
   seed_hooks_settings "$agy_settings"
 
-  # ~/.gemini/config/mcp_config.json — global agy MCP config using stdio omni axo-link
-  # stdio transport: env vars injected directly, no header interpolation issues
-  local agy_mcp_config="/root/.gemini/config/mcp_config.json"
-  if [[ ! -f "$agy_mcp_config" ]] || [[ ! -s "$agy_mcp_config" ]]; then
-    echo "==> seeding $agy_mcp_config (agy global MCP via omni axo-link)"
-    mkdir -p "$(dirname "$agy_mcp_config")"
-    cat > "$agy_mcp_config" <<'EOF'
-{
-  "mcpServers": {
-    "tunnel-mcp": {
-      "command": "omni",
-      "args": ["axo-link"],
-      "env": {
-        "AXO_LINK_MCP_SENDER_TYPE": "omni_agent"
-      }
-    }
-  }
-}
-EOF
-  fi
+  # ~/.gemini/config/mcp_config.json — commented out: agy MCPManager handles this at runtime
+  # local agy_mcp_config="/root/.gemini/config/mcp_config.json"
+  # if [[ ! -f "$agy_mcp_config" ]] || [[ ! -s "$agy_mcp_config" ]]; then
+  #   echo "==> seeding $agy_mcp_config (agy global MCP via omni axo-link)"
+  #   mkdir -p "$(dirname "$agy_mcp_config")"
+  #   cat > "$agy_mcp_config" <<'EOF'
+  # {
+  #   "mcpServers": {
+  #     "tunnel-mcp": {
+  #       "command": "omni",
+  #       "args": ["axo-link"],
+  #       "env": {
+  #         "AXO_LINK_MCP_SENDER_TYPE": "omni_agent"
+  #       }
+  #     }
+  #   }
+  # }
+  # EOF
+  # fi
   # bypass color/terminal agreement/tool-permission prompts on first launch
   # always ensure keys are present — merge into existing file if it exists
   local agy_dir="/root/.gemini/antigravity-cli"

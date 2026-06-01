@@ -16,15 +16,18 @@ import (
 	"syscall"
 	"text/tabwriter"
 
+	"log"
+
+	"github.com/Shaik-Sirajuddin/memory/cli/theme"
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	"github.com/Shaik-Sirajuddin/memory/operator"
 	"github.com/Shaik-Sirajuddin/memory/operator/impl/defaults"
 	omnisandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
-	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
 	"github.com/knadh/koanf/providers/posflag"
 	"github.com/knadh/koanf/v2"
 	"github.com/spf13/cobra"
@@ -61,6 +64,9 @@ func EntrypointWithVersion(op operator.Operator, resolver config.OmniConfigResol
 		Version: version,
 	}
 	root.SetVersionTemplate("{{.Version}}\n")
+	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		renderHelp(cmd, os.Stdout)
+	})
 
 	root.AddCommand(c.newVersionCommand())
 	root.AddCommand(c.newHookCommand())
@@ -96,8 +102,21 @@ func (c *DefaultCli) Install() error {
 	if c == nil || c.root == nil {
 		return errors.New("cli is not initialized")
 	}
+	c.activateTheme()
 	normalizeSessionIDFlag(os.Args[1:])
 	return c.root.Execute()
+}
+
+// activateTheme resolves the active colour theme from env → config → default.
+func (c *DefaultCli) activateTheme() {
+	name := os.Getenv("OMNI_THEME")
+	if name == "" && c.configResolver != nil {
+		if cfg, err := ResolveConfig(c.configResolver); err == nil && cfg != nil {
+			name = cfg.Theme
+		}
+	}
+	theme.Activate(name)
+	log.SetOutput(newLogWriter(os.Stderr))
 }
 
 func normalizeSessionIDFlag(args []string) {
@@ -176,6 +195,21 @@ func (c *DefaultCli) newConfigSetCommand() *cobra.Command {
 				cfg.Features.AutoSync = v
 			}
 
+			if resolved.Theme != "" {
+				valid := theme.Names()
+				ok := false
+				for _, n := range valid {
+					if n == resolved.Theme {
+						ok = true
+						break
+					}
+				}
+				if !ok {
+					return fmt.Errorf("invalid --theme value %q (valid: %s)", resolved.Theme, strings.Join(valid, ", "))
+				}
+				cfg.Theme = resolved.Theme
+			}
+
 			if err := SaveConfig(c.configResolver, cfg); err != nil {
 				return err
 			}
@@ -186,6 +220,7 @@ func (c *DefaultCli) newConfigSetCommand() *cobra.Command {
 
 	setCmd.Flags().String("memory", flags.Memory, "Set memory feature (true|false); empty leaves value unchanged")
 	setCmd.Flags().String("autosync", flags.AutoSync, "Set autosync feature (true|false); empty leaves value unchanged")
+	setCmd.Flags().String("theme", flags.Theme, "Set terminal colour theme (dark|dark-dim|light|colorblind); empty leaves value unchanged")
 
 	return setCmd
 }
@@ -281,8 +316,8 @@ func (c *DefaultCli) newDoctorCommand() *cobra.Command {
 	}
 
 	doctorCmd.AddCommand(c.newDoctorHooksCommand())
-	doctorCmd.AddCommand(c.newDoctorCheckCommand())
-	doctorCmd.AddCommand(c.newDoctorInstallCommand())
+	// doctorCmd.AddCommand(c.newDoctorCheckCommand())
+	// doctorCmd.AddCommand(c.newDoctorInstallCommand())
 	return doctorCmd
 }
 

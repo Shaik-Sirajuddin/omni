@@ -17,34 +17,15 @@ import (
 // ============================================================
 
 func (a *agyAgent) GetSessionSandbox(_ codeagent.GetSessionSandboxParams) (*codeagent.GetSessionSandboxResult, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	logger.Debug("GetSessionSandbox", "sandbox", a.sbx)
-	return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	// sandbox disabled
+	// return &codeagent.GetSessionSandboxResult{Sandbox: a.sbx}, nil
+	return &codeagent.GetSessionSandboxResult{}, nil
 }
 
-func (a *agyAgent) UpdateSessionSandbox(p codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
-	a.mu.Lock()
-	a.sbx = p.Sandbox
-	workDir := a.workDir
-	if err := a.syncSandboxRuntimeLocked(); err != nil {
-		a.mu.Unlock()
-		logger.Error("UpdateSessionSandbox: runtime sync failed", "err", err)
-		return nil, fmt.Errorf("agy: update sandbox: sync runtime: %w", err)
-	}
-	a.mu.Unlock()
-
-	if err := writeAgySettings(agyWorkspaceSettingsPath(workDir), &codeagent.Settings{
-		Provider: Agy,
-		Config: codeagent.Config{
-			Sandbox: p.Sandbox,
-		},
-	}); err != nil {
-		logger.Error("UpdateSessionSandbox: settings sync failed", "err", err)
-		return nil, fmt.Errorf("agy: update sandbox: sync settings: %w", err)
-	}
-	logger.Info("UpdateSessionSandbox: updated")
-	return &codeagent.UpdateSessionSandboxResult{Sandbox: p.Sandbox}, nil
+func (a *agyAgent) UpdateSessionSandbox(_ codeagent.UpdateSessionSandboxParams) (*codeagent.UpdateSessionSandboxResult, error) {
+	// sandbox disabled
+	// a.mu.Lock(); a.sbx = p.Sandbox; syncSandboxRuntimeLocked; writeAgySettings
+	return &codeagent.UpdateSessionSandboxResult{}, nil
 }
 
 // ============================================================

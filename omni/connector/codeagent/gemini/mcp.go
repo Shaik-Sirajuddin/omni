@@ -1,13 +1,11 @@
 package gemini
 
 import (
-	"fmt"
-
 	codeagent "github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 )
 
 func (a *geminiAgent) AddMCP(_ codeagent.AddMCPParams) (*codeagent.AddMCPResult, error) {
-	return nil, fmt.Errorf("gemini: MCP not supported")
+	return nil, codeagent.ErrMCPNotSupported
 }
 
 func (a *geminiAgent) ListMCP(_ codeagent.ListMCPParams) (*codeagent.ListMCPResult, error) {
@@ -15,9 +13,9 @@ func (a *geminiAgent) ListMCP(_ codeagent.ListMCPParams) (*codeagent.ListMCPResu
 }
 
 func (a *geminiAgent) DeleteMCP(_ codeagent.DeleteMCPParams) (*codeagent.DeleteMCPResult, error) {
-	return nil, fmt.Errorf("gemini: MCP not supported")
+	return nil, codeagent.ErrMCPNotSupported
 }
 
 func (a *geminiAgent) SetMCPToolPrompt(_ codeagent.SetMCPToolPromptParams) (*codeagent.SetMCPToolPromptResult, error) {
-	return nil, fmt.Errorf("gemini: MCP not supported")
+	return nil, codeagent.ErrMCPNotSupported
 }

@@ -26,6 +26,14 @@ type session struct {
 	mu   sync.Mutex
 }
 
+// attachAware is optionally implemented by inner daemons that want notice when
+// a client attaches/detaches so they can pause/resume idle output draining and
+// trigger a repaint. The in-memory daemon does not implement it.
+type attachAware interface {
+	OnAttach(agentID, sessionID string)
+	OnDetach(agentID, sessionID string)
+}
+
 // Daemon serves the ptyunix raw JSON protocol over a Unix domain socket.
 // When constructed with NewDaemonWithInner, all session operations are
 // delegated to the provided PTYDaemon (store-backed). NewDaemon returns
@@ -179,7 +187,9 @@ func (d *Daemon) handleStart(conn *net.UnixConn, req Request) {
 	}()
 
 	ptylog.Info("in-memory session started", "session_id", req.SessionID, "pid", cmd.Process.Pid)
-	respond(conn, Response{OK: true, SessionID: req.SessionID})
+	respond(conn, Response{OK: true, SessionID: req.SessionID, Sessions: []SessionEntry{
+		{SessionID: req.SessionID, Status: "active", PID: cmd.Process.Pid},
+	}})
 }
 
 // handleCreate starts a new store-backed PTY session.
@@ -286,6 +296,11 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 	if clientPID > 0 {
 		d.attachedPIDs.Store(req.SessionID, clientPID)
 	}
+	// Pause idle draining (client is now the sole reader) and repaint so the
+	// client sees the current screen. repaint covers the brief handoff window.
+	if aw, ok := d.inner.(attachAware); ok {
+		aw.OnAttach(req.AgentID, req.SessionID)
+	}
 	ptylog.Info("fd granted to client", "session_id", req.SessionID, "client_pid", clientPID)
 }
 
@@ -331,6 +346,10 @@ func (d *Daemon) handleDetach(conn *net.UnixConn, req Request) {
 		ptylog.Debug("detach: cleared attachment record", "session_id", req.SessionID)
 	} else {
 		ptylog.Warn("detach: session had no attachment record (idempotent)", "session_id", req.SessionID)
+	}
+	// Resume idle draining so the child does not stall while detached.
+	if aw, ok := d.inner.(attachAware); ok {
+		aw.OnDetach(req.AgentID, req.SessionID)
 	}
 	respond(conn, Response{OK: true})
 }
@@ -627,6 +646,7 @@ func recordToEntry(r *internal.PTYSessionRecord) SessionEntry {
 		AgentID:   r.AgentID,
 		SessionID: r.SessionID,
 		Status:    string(r.Status),
+		PID:       r.PID,
 	}
 	s := r.StartedAt.UTC().Format(time.RFC3339)
 	e.StartedAt = &s
