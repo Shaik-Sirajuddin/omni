@@ -861,6 +861,9 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	logger.Debug("hook: user prompt submit processed", "agent_id", agentID, "session_id", sessionID, "count", len(payload.Messages))
 }
 
+// maxMandatoryToolRetries is the number of recall injections before giving up.
+// Compared against msg.Retries which executeLoop increments (to 1) before the
+// first ExecInSession, so the guard uses <= to get exactly 3 recall attempts.
 const maxMandatoryToolRetries = 3
 
 var recallPrompt = map[message.RequestType]string{
@@ -925,7 +928,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	// msg.Retries is persisted in the DB (messages table), so the counter survives process restarts.
 	if len(msgs) > 0 && !mandatoryToolInvoked {
 		retries := msgs[0].Retries
-		if retries < maxMandatoryToolRetries {
+		if retries <= maxMandatoryToolRetries {
 			recall, ok := recallPrompt[msgs[0].RequestType]
 			if !ok {
 				recall = "Tool callback not received. Please use the appropriate tool to respond."
