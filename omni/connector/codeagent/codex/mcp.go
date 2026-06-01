@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/BurntSushi/toml"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 )
 
 // mcpMu guards all read-modify-write operations on config.toml for MCP entries.

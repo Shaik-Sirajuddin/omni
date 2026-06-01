@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/database"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/database"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

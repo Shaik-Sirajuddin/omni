@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
+	"github.com/Shaik-Sirajuddin/omni/config"
 )
 
 // entryCache is an in-memory TTL cache of hook entries keyed by event name.

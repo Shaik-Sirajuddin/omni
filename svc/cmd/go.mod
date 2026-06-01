@@ -1,16 +1,16 @@
-module github.com/Shaik-Sirajuddin/memory/svc/cmd
+module github.com/Shaik-Sirajuddin/omni/svc/cmd
 
 go 1.26.1
 
 require (
-	github.com/Shaik-Sirajuddin/memory v1.1.0
-	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
-	github.com/Shaik-Sirajuddin/memory/svc/config_sync v0.0.0
-	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0
-	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
+	github.com/Shaik-Sirajuddin/omni v1.1.0
+	github.com/Shaik-Sirajuddin/omni/mcp v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/sockpath v0.0.0
+	github.com/Shaik-Sirajuddin/omni/svc/config_sync v0.0.0
+	github.com/Shaik-Sirajuddin/omni/svc/hook-operator v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/pty v0.0.0
+	github.com/Shaik-Sirajuddin/omni/svc/ptydaemon v0.0.0
 )
 
 require (
@@ -64,12 +64,12 @@ require (
 )
 
 replace (
-	github.com/Shaik-Sirajuddin/memory => ../../omni
-	github.com/Shaik-Sirajuddin/memory/mcp => ../../tunnel_mcp
-	github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
-	github.com/Shaik-Sirajuddin/memory/pkg/pty => ../../pkg/pty
-	github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
-	github.com/Shaik-Sirajuddin/memory/svc/config_sync => ../config_sync
-	github.com/Shaik-Sirajuddin/memory/svc/hook-operator => ../hook-operator
-	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../ptydaemon
+	github.com/Shaik-Sirajuddin/omni => ../../omni
+	github.com/Shaik-Sirajuddin/omni/mcp => ../../tunnel_mcp
+	github.com/Shaik-Sirajuddin/omni/pkg/log => ../../pkg/log
+	github.com/Shaik-Sirajuddin/omni/pkg/pty => ../../pkg/pty
+	github.com/Shaik-Sirajuddin/omni/pkg/sockpath => ../../pkg/sockpath
+	github.com/Shaik-Sirajuddin/omni/svc/config_sync => ../config_sync
+	github.com/Shaik-Sirajuddin/omni/svc/hook-operator => ../hook-operator
+	github.com/Shaik-Sirajuddin/omni/svc/ptydaemon => ../ptydaemon
 )

@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	codesession "github.com/Shaik-Sirajuddin/memory/store/codesession"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	codesession "github.com/Shaik-Sirajuddin/omni/store/codesession"
 )
 
 // CodeSession is the same type as omniagent.CodeSession — aliased so callers

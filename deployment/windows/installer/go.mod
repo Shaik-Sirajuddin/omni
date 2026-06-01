@@ -1,4 +1,4 @@
-module github.com/Shaik-Sirajuddin/memory/deployment/windows/installer
+module github.com/Shaik-Sirajuddin/omni/deployment/windows/installer
 
 go 1.23.0
 

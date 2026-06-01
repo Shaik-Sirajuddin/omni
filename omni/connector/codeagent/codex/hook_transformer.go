@@ -5,11 +5,11 @@ import (
 	"strings"
 	"sync"
 
-	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
-	confhooks "github.com/Shaik-Sirajuddin/memory/config/hooks"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	codehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
+	omniconfig "github.com/Shaik-Sirajuddin/omni/config"
+	confhooks "github.com/Shaik-Sirajuddin/omni/config/hooks"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	codehooks "github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
 )
 
 type codexHookTransformer struct {

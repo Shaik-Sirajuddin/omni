@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

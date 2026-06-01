@@ -1,6 +1,6 @@
 package store
 
-import provider "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+import provider "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 
 type Info = provider.Info
 type Sandbox = provider.Sandbox

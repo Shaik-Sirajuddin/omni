@@ -9,12 +9,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude/settings"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	claudelog "github.com/Shaik-Sirajuddin/memory/connector/codeagent/log"
-	rootsandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude/settings"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	claudelog "github.com/Shaik-Sirajuddin/omni/connector/codeagent/log"
+	rootsandbox "github.com/Shaik-Sirajuddin/omni/sandbox"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 var Config codeagent.ConfigPaths = codeagent.ConfigPaths{

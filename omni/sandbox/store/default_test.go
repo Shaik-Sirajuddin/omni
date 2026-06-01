@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	provider "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	provider "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"

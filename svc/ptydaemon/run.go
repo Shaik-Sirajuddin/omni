@@ -6,8 +6,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal"
-	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/ptyunix"
+	"github.com/Shaik-Sirajuddin/omni/svc/ptydaemon/internal"
+	"github.com/Shaik-Sirajuddin/omni/svc/ptydaemon/ptyunix"
 )
 
 // Run wires the store, daemon, and unix socket server, then blocks until ctx

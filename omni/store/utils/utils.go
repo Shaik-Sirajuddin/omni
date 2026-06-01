@@ -1,6 +1,6 @@
 package utils
 
-import "github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+import "github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 
 // TODO : move utils to specific exporters
 func BuildModel(provider, name string) *codeagent.Model {

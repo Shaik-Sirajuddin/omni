@@ -1,8 +1,8 @@
 package agents
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	omnistore "github.com/Shaik-Sirajuddin/memory/store/agent"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	omnistore "github.com/Shaik-Sirajuddin/omni/store/agent"
 )
 
 // Type aliases — same underlying types as omni, no duplication, no conversion needed.

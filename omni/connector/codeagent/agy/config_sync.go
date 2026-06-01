@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 var agyUserSettingsCandidates = []string{

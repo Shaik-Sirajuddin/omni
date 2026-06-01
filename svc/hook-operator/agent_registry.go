@@ -1,13 +1,13 @@
 package hookoperator
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	agy "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
-	agyhooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/hooks"
-	claude "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
-	claudehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude/hooks"
-	codex "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	agy "github.com/Shaik-Sirajuddin/omni/connector/codeagent/agy"
+	agyhooks "github.com/Shaik-Sirajuddin/omni/connector/codeagent/agy/hooks"
+	claude "github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude"
+	claudehooks "github.com/Shaik-Sirajuddin/omni/connector/codeagent/claude/hooks"
+	codex "github.com/Shaik-Sirajuddin/omni/connector/codeagent/codex"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
 )
 
 // agentRegistry owns one HookTransformer per provider, initialized at startup.

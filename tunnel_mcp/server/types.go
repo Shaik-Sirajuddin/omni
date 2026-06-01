@@ -1,6 +1,6 @@
 package server
 
-import "github.com/Shaik-Sirajuddin/memory/mcp/server/service"
+import "github.com/Shaik-Sirajuddin/omni/mcp/server/service"
 
 type targetSpec = service.TargetSpec
 type payloadMessage = service.PayloadMessage

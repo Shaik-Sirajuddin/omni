@@ -9,8 +9,8 @@ import (
 	"os/user"
 	"syscall"
 
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
-	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/pkg/sockpath"
 )
 
 var Version = "dev"

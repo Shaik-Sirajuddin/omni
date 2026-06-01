@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	sandboxlog "github.com/Shaik-Sirajuddin/memory/sandbox/log"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	sandboxlog "github.com/Shaik-Sirajuddin/omni/sandbox/log"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 var logger = sandboxlog.NewLogger("bubblewrap")

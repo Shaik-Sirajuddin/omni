@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
-	codehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	codehooks "github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 // ============================================================

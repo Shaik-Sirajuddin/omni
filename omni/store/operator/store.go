@@ -1,9 +1,9 @@
 package operator
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	"github.com/Shaik-Sirajuddin/memory/operator"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	"github.com/Shaik-Sirajuddin/omni/operator"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 // OperatorStore handles persistence for the operator layer.

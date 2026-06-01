@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider/bubblewrap"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider/gvisor"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/provider/seatbelt"
-	sandboxstore "github.com/Shaik-Sirajuddin/memory/sandbox/store"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider/bubblewrap"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider/gvisor"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/provider/seatbelt"
+	sandboxstore "github.com/Shaik-Sirajuddin/omni/sandbox/store"
 )
 
 type WorkspaceDir = provider.WorkspaceDir

@@ -1,8 +1,8 @@
 package confhooks
 
 import (
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
 )
 
 // HookSchema is the marker interface for per-event schema bundles.

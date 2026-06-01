@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
+	"github.com/Shaik-Sirajuddin/omni/mcp/mcp/runner"
 	"github.com/stretchr/testify/assert"
 )
 

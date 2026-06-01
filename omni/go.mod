@@ -1,13 +1,13 @@
-module github.com/Shaik-Sirajuddin/memory
+module github.com/Shaik-Sirajuddin/omni
 
 go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
-	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
+	github.com/Shaik-Sirajuddin/omni/mcp v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/filelock v0.0.0
+	github.com/Shaik-Sirajuddin/omni/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/omni/svc/ptydaemon v0.0.0
 	github.com/adrg/xdg v0.5.3
 	github.com/creack/pty v1.1.24
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -26,7 +26,7 @@ require (
 )
 
 require (
-	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0 // indirect
+	github.com/Shaik-Sirajuddin/omni/pkg/sockpath v0.0.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -59,7 +59,7 @@ require (
 )
 
 require (
-	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
+	github.com/Shaik-Sirajuddin/omni/svc/hook-operator v0.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -77,14 +77,14 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/Shaik-Sirajuddin/memory/mcp => ../tunnel_mcp
+replace github.com/Shaik-Sirajuddin/omni/mcp => ../tunnel_mcp
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../pkg/filelock
+replace github.com/Shaik-Sirajuddin/omni/pkg/filelock => ../pkg/filelock
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../pkg/log
+replace github.com/Shaik-Sirajuddin/omni/pkg/log => ../pkg/log
 
-replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../pkg/sockpath
+replace github.com/Shaik-Sirajuddin/omni/pkg/sockpath => ../pkg/sockpath
 
-replace github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../svc/ptydaemon
+replace github.com/Shaik-Sirajuddin/omni/svc/ptydaemon => ../svc/ptydaemon
 
-replace github.com/Shaik-Sirajuddin/memory/svc/hook-operator => ../svc/hook-operator
+replace github.com/Shaik-Sirajuddin/omni/svc/hook-operator => ../svc/hook-operator

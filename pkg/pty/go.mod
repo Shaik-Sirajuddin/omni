@@ -1,4 +1,4 @@
-module github.com/Shaik-Sirajuddin/memory/pkg/pty
+module github.com/Shaik-Sirajuddin/omni/pkg/pty
 
 go 1.25.0
 

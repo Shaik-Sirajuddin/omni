@@ -16,10 +16,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	codeagentlog "github.com/Shaik-Sirajuddin/memory/connector/codeagent/log"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	codeagentlog "github.com/Shaik-Sirajuddin/omni/connector/codeagent/log"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 var Config codeagent.ConfigPaths = codeagent.ConfigPaths{

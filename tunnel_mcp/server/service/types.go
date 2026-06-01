@@ -3,9 +3,9 @@ package service
 import (
 	"encoding/json"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
-	"github.com/Shaik-Sirajuddin/memory/operator"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/agents"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/operator"
 )
 
 type TargetSpec struct {

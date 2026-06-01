@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	gemini "github.com/Shaik-Sirajuddin/memory/connector/codeagent/gemini"
+	gemini "github.com/Shaik-Sirajuddin/omni/connector/codeagent/gemini"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 

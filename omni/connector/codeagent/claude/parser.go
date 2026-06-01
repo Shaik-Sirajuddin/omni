@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	codeagentutils "github.com/Shaik-Sirajuddin/memory/connector/codeagent/utils"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	codeagentutils "github.com/Shaik-Sirajuddin/omni/connector/codeagent/utils"
 )
 
 // TODO : attach parser methods to ClaudeParser

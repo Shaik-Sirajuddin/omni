@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/Shaik-Sirajuddin/memory/cli/theme"
+	"github.com/Shaik-Sirajuddin/omni/cli/theme"
 )
 
 // logWriter wraps an io.Writer and colorises [LEVEL] prefixes using the active theme.

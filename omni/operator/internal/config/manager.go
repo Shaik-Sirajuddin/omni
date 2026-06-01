@@ -1,6 +1,6 @@
 package config
 
-import "github.com/Shaik-Sirajuddin/memory/config"
+import "github.com/Shaik-Sirajuddin/omni/config"
 
 type WatchParams struct {
 	Workspace string

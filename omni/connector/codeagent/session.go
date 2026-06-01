@@ -3,7 +3,7 @@ package codeagent
 import (
 	"context"
 
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 // Session holds metadata about a persisted agent session.

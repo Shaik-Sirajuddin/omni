@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/database"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/database"
 	"testing"
 )
 

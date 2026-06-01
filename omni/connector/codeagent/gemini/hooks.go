@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 var eventNameByHookID = map[hooks.HookID]string{

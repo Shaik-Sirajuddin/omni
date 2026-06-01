@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/service"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/service"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
 )
 
 type hookRegistrar interface {

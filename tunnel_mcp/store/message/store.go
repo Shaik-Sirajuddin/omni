@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/database"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/database"
 )
 
 // MessageStore persists and retrieves messages.

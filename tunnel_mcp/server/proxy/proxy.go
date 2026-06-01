@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/service"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/service"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/agents"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 )
 
 var logger = pkglog.NewLogger("component", "proxy-server")

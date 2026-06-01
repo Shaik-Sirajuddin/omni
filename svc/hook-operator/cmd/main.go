@@ -7,12 +7,12 @@ import (
 	"syscall"
 	"time"
 
-	applog "github.com/Shaik-Sirajuddin/memory/pkg/log"
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/store/codesession"
-	"github.com/Shaik-Sirajuddin/memory/store/database"
-	opstore "github.com/Shaik-Sirajuddin/memory/store/operator"
-	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
+	applog "github.com/Shaik-Sirajuddin/omni/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/store/codesession"
+	"github.com/Shaik-Sirajuddin/omni/store/database"
+	opstore "github.com/Shaik-Sirajuddin/omni/store/operator"
+	hookoperator "github.com/Shaik-Sirajuddin/omni/svc/hook-operator"
 )
 
 func main() {

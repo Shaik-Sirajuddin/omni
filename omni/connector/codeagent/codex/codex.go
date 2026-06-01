@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex/settings"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	connlog "github.com/Shaik-Sirajuddin/memory/connector/codeagent/log"
-	rootsandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/codex/settings"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	connlog "github.com/Shaik-Sirajuddin/omni/connector/codeagent/log"
+	rootsandbox "github.com/Shaik-Sirajuddin/omni/sandbox"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 var config codeagent.ConfigPaths = codeagent.ConfigPaths{

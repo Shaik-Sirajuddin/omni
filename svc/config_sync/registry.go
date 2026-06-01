@@ -3,7 +3,7 @@ package configsync
 import (
 	"sync"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 )
 
 // HookParserRegistry maps active agent IDs to their hook transformer.

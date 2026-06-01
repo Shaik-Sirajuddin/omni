@@ -3,8 +3,8 @@ package hookoperator
 import (
 	"encoding/json"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
 )
 
 // SessionLookup resolves a code session by its own ID (not agent ID).

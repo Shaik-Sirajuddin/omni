@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
+	omniconfig "github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/pkg/filelock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

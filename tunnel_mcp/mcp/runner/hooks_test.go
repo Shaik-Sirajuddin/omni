@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

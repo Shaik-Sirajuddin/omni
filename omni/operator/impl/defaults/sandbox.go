@@ -5,9 +5,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
-	"github.com/Shaik-Sirajuddin/memory/sandbox/common"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox"
+	"github.com/Shaik-Sirajuddin/omni/sandbox/common"
 )
 
 // Binary candidate lists mirror the respective connector configs so that

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

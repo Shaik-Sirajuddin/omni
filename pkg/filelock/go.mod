@@ -1,4 +1,4 @@
-module github.com/Shaik-Sirajuddin/memory/pkg/filelock
+module github.com/Shaik-Sirajuddin/omni/pkg/filelock
 
 go 1.25.0
 

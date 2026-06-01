@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Shaik-Sirajuddin/memory/mcp/server/service"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
-	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
-	"github.com/Shaik-Sirajuddin/memory/operator"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
+	"github.com/Shaik-Sirajuddin/omni/mcp/server/service"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/agents"
+	"github.com/Shaik-Sirajuddin/omni/mcp/store/message"
+	"github.com/Shaik-Sirajuddin/omni/operator"
+	pkglog "github.com/Shaik-Sirajuddin/omni/pkg/log"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

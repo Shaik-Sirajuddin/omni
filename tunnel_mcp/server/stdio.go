@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	serverstdio "github.com/Shaik-Sirajuddin/memory/mcp/server/stdio"
+	serverstdio "github.com/Shaik-Sirajuddin/omni/mcp/server/stdio"
 )
 
 type StdioServer = serverstdio.StdioServer

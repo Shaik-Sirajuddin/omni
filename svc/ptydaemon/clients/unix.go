@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
-	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
+	pkgpty "github.com/Shaik-Sirajuddin/omni/pkg/pty"
+	ptydaemon "github.com/Shaik-Sirajuddin/omni/svc/ptydaemon"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )

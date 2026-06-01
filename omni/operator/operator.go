@@ -3,9 +3,9 @@ package operator
 import (
 	"fmt"
 
-	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
-	"github.com/Shaik-Sirajuddin/memory/omniagent"
-	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
+	"github.com/Shaik-Sirajuddin/omni/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/omni/omniagent"
+	sandbox "github.com/Shaik-Sirajuddin/omni/sandbox/provider"
 )
 
 const (

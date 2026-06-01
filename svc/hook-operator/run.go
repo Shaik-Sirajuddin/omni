@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Shaik-Sirajuddin/memory/config"
-	"github.com/Shaik-Sirajuddin/memory/store/codesession"
-	"github.com/Shaik-Sirajuddin/memory/store/database"
-	opstore "github.com/Shaik-Sirajuddin/memory/store/operator"
+	"github.com/Shaik-Sirajuddin/omni/config"
+	"github.com/Shaik-Sirajuddin/omni/store/codesession"
+	"github.com/Shaik-Sirajuddin/omni/store/database"
+	opstore "github.com/Shaik-Sirajuddin/omni/store/operator"
 )
 
 // RunOptions configures a Run call. All fields are optional — zero values apply
