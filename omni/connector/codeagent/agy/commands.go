@@ -154,9 +154,9 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 		return nil, errors.New("agy: resume: empty session id")
 	}
 
-	args := []string{"--conversation", resumeID}
+	args := []string{"--conversation=" + resumeID}
 	if p.ForkSession {
-		args = append(args, "--continue")
+		args = append(args, "-c")
 	}
 
 	// sandbox disabled:
@@ -441,7 +441,7 @@ func buildExecArgs(prompt, model string, permMode codeagent.PermissionMode, syst
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	if sessionID != "" {
-		args = append(args, "--conversation", sessionID)
+		args = append(args, "--conversation="+sessionID)
 	}
 	return args
 }
@@ -452,7 +452,7 @@ func buildStreamArgs(prompt, model string, permMode codeagent.PermissionMode, sy
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	if sessionID != "" {
-		args = append(args, "--conversation", sessionID)
+		args = append(args, "--conversation="+sessionID)
 	}
 	return args
 }
