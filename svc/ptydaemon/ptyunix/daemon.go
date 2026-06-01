@@ -371,10 +371,12 @@ func (d *Daemon) handlePipe(conn *net.UnixConn, req Request) {
 	respond(conn, Response{OK: true})
 }
 
-// handleExec pipes the pre-formatted payload from the connector and then retries
-// the submit key (100ms, 200ms) to handle timing races in the terminal.
-// The connector already wraps the prompt in bracketed paste + submit key, so we
-// must not re-wrap — we only add the retry safety net on top.
+// handleExec delivers a bot prompt into a live session. Connectors send the raw
+// prompt text; the daemon's execPrompt owns all input framing — clearing the
+// human's partial line, bracketed-pasting the prompt, submitting (with retries to
+// absorb terminal timing races), then reinjecting the human's partial input.
+// Connectors must NOT pre-wrap the prompt or it gets double-framed and the inner
+// paste/submit bytes render as literal text in the TUI.
 func (d *Daemon) handleExec(conn *net.UnixConn, req Request) {
 	ptylog.Debug("exec", "agent_id", req.AgentID, "session_id", req.SessionID)
 
