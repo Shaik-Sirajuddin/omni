@@ -16,6 +16,7 @@ import (
 	storebroadcast "github.com/Shaik-Sirajuddin/memory/mcp/store/broadcast"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/database"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+	storesession "github.com/Shaik-Sirajuddin/memory/mcp/store/session"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
 )
 
@@ -119,7 +120,13 @@ func NewWithDelivery(interval time.Duration, delivery delivery, opts ...Option) 
 		}
 	}
 	if srv.delivery == nil && srv.msgStore != nil {
-		eng := engine.New(srv.msgStore)
+		var engOpts []engine.Option
+		if pss, err := storesession.NewPromptSessionStore(); err != nil {
+			logger.Warn("prompt session store init failed, warm-up/active split disabled", "err", err)
+		} else {
+			engOpts = append(engOpts, engine.WithPromptSessionStore(pss))
+		}
+		eng := engine.New(srv.msgStore, engOpts...)
 		eng.SetReplyService(newReplyService(srv.msgStore, eng.MessageArrived))
 		srv.delivery = eng
 	}

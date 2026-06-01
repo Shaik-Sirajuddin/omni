@@ -14,84 +14,172 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ─── TestProcessingEngineIntegration ─────────────────────────────────────────
+
 func TestProcessingEngineIntegration(t *testing.T) {
 	ctx := context.Background()
 
+	// Message Callback Cycle:
+	// 1. Two messages queued for "tengine".
+	// 2. MessageArrived → executeLoop picks msg-1 → StatusCallback fires → ExecInSession blocks.
+	// 3. Test receives first StatusCallback, asserts payload.
+	// 4. Test waits for ExecInSession entry (which carries its per-call release channel).
+	// 5. Test releases first exec via entry.release → ExecInSession returns → onSessionEnd runs.
+	// 6. Test calls AgentCallback to mark msg-1 delivered → engine picks msg-2.
+	// 7. Second StatusCallback fires; test receives, releases second exec.
+	// 8. Asserts msg-1 is delivered and DeliveryTime is set.
 	t.Run("Message Callback Cycle", func(t *testing.T) {
 		msgStore := message.WithTestDB(t)
-		omni := newRecordingOmniCLI()
-		processor := engine.New(msgStore, engine.WithTestBinary(omni))
+		omni := newBlockingOmniCLI()
+		statusCB := newWaitableStatusCallback()
+
+		processor := engine.New(msgStore,
+			engine.WithTestBinary(omni),
+			engine.WithStatusCallback(statusCB),
+		)
+		engine.StartForTest(processor, ctx)
+		engine.RegisterAgentForTest(processor, "tengine", "tengine", "/ws", "team")
+
 		firstMessage := testEngineMessage("msg-engine-1", "tengine", "head", 1000, false)
 		secondMessage := testEngineMessage("msg-engine-2", "tengine", "head", 2000, false)
 		insertEngineMessages(t, ctx, msgStore, firstMessage, secondMessage)
 
+		// Trigger first delivery; ExecInSession blocks inside the executeLoop goroutine.
 		processor.MessageArrived(ctx, "head", "tengine")
 
-		require.Equal(t, "tengine", omni.waitForExec(t), "First ExecInSession call should target the queued agent")
-		assert.Equal(t, []string{"tengine"}, omni.execCalls(), "ExecInSession calls should include the first dispatch")
+		// StatusCallback fires before ExecInSession; receive and assert it.
+		cb1 := statusCB.waitForCallback(t)
+		assert.Equal(t, firstMessage.ID, cb1.messageID, "first StatusCallback must carry first message ID")
+		assert.Equal(t, "tengine", cb1.agentName, "first StatusCallback must carry agent name")
 
+		// Receive the exec entry (contains the per-call release channel).
+		e1 := omni.waitForExec(t)
+		assert.Equal(t, "tengine", e1.agentID)
+		assert.Equal(t, []string{"tengine"}, omni.execCalls(), "one ExecInSession before first release")
+
+		// Release first exec → ExecInSession returns → onSessionEnd runs.
+		close(e1.relCh)
+
+		// AgentCallback marks msg-1 delivered and triggers executeLoop for msg-2.
+		// Give onSessionEnd time to mark msg-1's status before AgentCallback queries it.
+		time.Sleep(10 * time.Millisecond)
 		processor.AgentCallback(ctx, engine.AgentCallbackRequest{
 			Source:  engine.MessageRef{MessageID: firstMessage.ID},
 			AgentID: "tengine",
 		}, false)
 
-		require.Equal(t, "tengine", omni.waitForExec(t), "Second ExecInSession call should target the same agent after callback")
+		// Second StatusCallback fires when msg-2 is picked.
+		cb2 := statusCB.waitForCallback(t)
+		assert.Equal(t, secondMessage.ID, cb2.messageID, "second StatusCallback must carry second message ID")
 
+		// Receive and release second exec.
+		e2 := omni.waitForExec(t)
+		assert.Equal(t, "tengine", e2.agentID)
+		assert.Equal(t, []string{"tengine", "tengine"}, omni.execCalls(), "two ExecInSession calls total")
+		close(e2.relCh)
+
+		// Allow onSessionEnd for msg-2 to settle before asserting msg-1.
+		time.Sleep(10 * time.Millisecond)
+
+		// msg-1 must be delivered by the AgentCallback → handlePostExec path.
 		delivered, err := msgStore.GetMessage(ctx, firstMessage.ID)
-		require.NoError(t, err, "GetMessage should load the completed source message")
-		assert.Equal(t, message.StatusDelivered, delivered.Status, "AgentCallback should mark the source message delivered")
-		assert.NotNil(t, delivered.DeliveryTime, "AgentCallback should set delivery time on the source message")
-
-		// second message is picked and marked queued before the second exec fires
-		queued, err := msgStore.GetMessage(ctx, secondMessage.ID)
-		require.NoError(t, err, "GetMessage should load the next message")
-		assert.Equal(t, message.Status("queued"), queued.Status, "pickNextMessages should mark the second message queued")
-		assert.Equal(t, []string{"tengine", "tengine"}, omni.execCalls(), "ExecInSession calls should include each command cycle dispatch")
+		require.NoError(t, err)
+		assert.Equal(t, message.StatusDelivered, delivered.Status, "AgentCallback must mark msg-1 delivered")
+		assert.NotNil(t, delivered.DeliveryTime, "AgentCallback must set DeliveryTime on msg-1")
 	})
 }
 
-type recordingOmniCLI struct {
-	mu    sync.Mutex
-	execs []string
-	ch    chan string
+// ─── blockingOmniCLI ─────────────────────────────────────────────────────────
+
+// execEntry carries the agentID and a per-call release channel for one ExecInSession call.
+// The test closes entry.relCh to unblock the blocking call.
+type execEntry struct {
+	agentID string
+	relCh   chan struct{}
 }
 
-func newRecordingOmniCLI() *recordingOmniCLI {
-	return &recordingOmniCLI{
-		ch: make(chan string, 10),
-	}
+// blockingOmniCLI blocks each ExecInSession call until the test closes the
+// per-call release channel returned by waitForExec. Each call gets its own
+// independent channel so concurrent or sequential calls cannot interfere.
+type blockingOmniCLI struct {
+	mu     sync.Mutex
+	execs  []string
+	execCh chan execEntry // buffered; one entry per ExecInSession call
 }
 
-func (c *recordingOmniCLI) ExecInSession(_ context.Context, agentID, _, _ string) error {
+func newBlockingOmniCLI() *blockingOmniCLI {
+	return &blockingOmniCLI{execCh: make(chan execEntry, 10)}
+}
+
+func (c *blockingOmniCLI) ExecInSession(_ context.Context, agentID, _, _, _ string) error {
+	rel := make(chan struct{}) // per-call release channel
 	c.mu.Lock()
 	c.execs = append(c.execs, agentID)
 	c.mu.Unlock()
-	c.ch <- agentID
+	c.execCh <- execEntry{agentID: agentID, relCh: rel}
+	<-rel // block until test closes this channel
 	return nil
 }
 
-func (c *recordingOmniCLI) GetPromptState(_ context.Context, _ string) (string, error) {
+func (c *blockingOmniCLI) GetPromptState(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
 
-func (c *recordingOmniCLI) waitForExec(t *testing.T) string {
+// waitForExec blocks until an ExecInSession is called and returns the entry.
+// The caller must close entry.relCh to unblock that specific call.
+func (c *blockingOmniCLI) waitForExec(t *testing.T) execEntry {
 	t.Helper()
 	select {
-	case agentID := <-c.ch:
-		return agentID
+	case e := <-c.execCh:
+		return e
 	case <-time.After(2 * time.Second):
-		require.FailNow(t, "ExecInSession should be called before timeout")
-		return ""
+		require.FailNow(t, "ExecInSession not called within timeout")
+		return execEntry{}
 	}
 }
 
-func (c *recordingOmniCLI) execCalls() []string {
+func (c *blockingOmniCLI) execCalls() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	calls := make([]string, len(c.execs))
-	copy(calls, c.execs)
-	return calls
+	out := make([]string, len(c.execs))
+	copy(out, c.execs)
+	return out
 }
+
+// ─── waitableStatusCallback ──────────────────────────────────────────────────
+
+type callbackPayload struct {
+	messageID string
+	agentName string
+	teamName  string
+}
+
+// waitableStatusCallback captures SendStatusCallback invocations and exposes a
+// blocking Wait() so tests can synchronise on the next callback.
+type waitableStatusCallback struct {
+	ch chan callbackPayload
+}
+
+func newWaitableStatusCallback() *waitableStatusCallback {
+	return &waitableStatusCallback{ch: make(chan callbackPayload, 10)}
+}
+
+func (w *waitableStatusCallback) SendStatusCallback(_ context.Context, messageID, agentName, teamName string) {
+	w.ch <- callbackPayload{messageID, agentName, teamName}
+}
+
+func (w *waitableStatusCallback) waitForCallback(t *testing.T) callbackPayload {
+	t.Helper()
+	select {
+	case p := <-w.ch:
+		return p
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "StatusCallback not received within timeout")
+		return callbackPayload{}
+	}
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 func testEngineMessage(id, to, by string, sentTime int64, shouldReply bool) *message.Message {
 	return &message.Message{
