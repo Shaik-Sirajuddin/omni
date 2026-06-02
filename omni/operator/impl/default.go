@@ -43,7 +43,7 @@ const (
 	providerGemini codeagent.Provider = "gemini"
 	providerAgy    codeagent.Provider = "agy"
 
-	mcpAuthToken  = "tunnel-mcp-dev-token"
+	mcpAuthToken  = "axolink-dev-token"
 	mcpSenderType = "omni_agent"
 )
 
