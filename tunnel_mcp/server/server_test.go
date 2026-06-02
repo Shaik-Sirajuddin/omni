@@ -335,7 +335,7 @@ func TestServerAPI(t *testing.T) {
 		var health healthResponse
 		require.NoError(t, json.Unmarshal(daemonRec.Body.Bytes(), &health), "Daemon health response should decode")
 		assert.Equal(t, "ok", health.Status, "Daemon health status should be ok")
-		assert.Equal(t, "tunnel-mcp", health.Service, "Daemon health service should identify tunnel MCP")
+		assert.Equal(t, "axolink", health.Service, "Daemon health service should identify axolink")
 		assert.Equal(t, serviceVersion, health.Version, "Daemon health version should match service version")
 	})
 
@@ -352,7 +352,7 @@ func TestServerAPI(t *testing.T) {
 		var health healthResponse
 		require.NoError(t, json.Unmarshal([]byte(content.Text), &health), "MCP health response should decode")
 		assert.Equal(t, "ok", health.Status, "MCP health status should be ok")
-		assert.Equal(t, "tunnel-mcp", health.Service, "MCP health service should identify tunnel MCP")
+		assert.Equal(t, "axolink", health.Service, "MCP health service should identify axolink")
 		assert.Equal(t, serviceVersion, health.Version, "MCP health version should match service version")
 		assert.Equal(t, "mcp", health.Transport, "MCP health transport should identify MCP")
 	})
