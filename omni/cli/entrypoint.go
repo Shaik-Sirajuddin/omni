@@ -19,6 +19,7 @@ import (
 	"log"
 
 	"github.com/Shaik-Sirajuddin/memory/cli/theme"
+	clitui "github.com/Shaik-Sirajuddin/memory/cli/tui"
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
@@ -717,6 +718,10 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
 			}
+			var statusReporter operator.StatusReporter
+			if !detach && clitui.IsTTY() {
+				statusReporter = clitui.NewReporter(os.Stdout)
+			}
 			return c.operator.ResumeAgent(operator.ResumeAgentParams{
 				Workspace:     sandbox.WorkspaceDir(resolved.Workspace),
 				Name:          args[0],
@@ -725,6 +730,7 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 				Model:         resolved.Model,
 				SessionID:     sessionID,
 				Detached:      detach,
+				Status:        statusReporter,
 			})
 		},
 	}

@@ -692,9 +692,11 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			}
 		}
 	}
+	reportStatus(params.Status, operator.InitPhaseResolving, "Initialising agent runtime…")
 	ca, err := o.createCodeAgent(agent, provider, string(agent.WorkspaceDir), model)
 	if err != nil {
 		logger.Error("ResumeAgent: init code agent runtime failed", "agentID", agent.ID, "err", err)
+		reportError(params.Status, fmt.Errorf("operator: init code agent runtime: %w", err))
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
 	}
 
@@ -720,11 +722,13 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 
+	reportStatus(params.Status, operator.InitPhaseStarting, "Starting PTY session…")
 	envs := mcpSessionEnvs(agent)
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
+			reportError(params.Status, fmt.Errorf("operator: resume session for agent %q: %w", agent.ID, err))
 			return fmt.Errorf("operator: resume session for agent %q: %w", agent.ID, err)
 		}
 		logger.Warn("ResumeAgent: no resumable session found, creating a new session", "agentID", agent.ID, "sessionID", sessionID)
@@ -782,12 +786,35 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		}
 	}
 	o.registerPTYSession(agent.ID, sessionID, resumeResult)
+	reportStatus(params.Status, operator.InitPhaseWaiting, "Waiting for session to be ready…")
 	if err := waitResumeLifecycle(resumeCtx, resumeResult); err != nil {
 		logger.Error("ResumeAgent: resume lifecycle ended with error", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+		reportError(params.Status, err)
 		return err
+	}
+	finalSessionID := sessionID
+	if resumeResult != nil && resumeResult.SessionID != "" {
+		finalSessionID = resumeResult.SessionID
+	}
+	if params.Status != nil {
+		params.Status.Ready(agent.Name, model, finalSessionID)
 	}
 	logger.Info("ResumeAgent: completed", "agentID", agent.ID, "workspace", workspace, "name", name, "provider", provider, "sessionID", sessionID)
 	return nil
+}
+
+// reportStatus calls PhaseUpdate on s when s is non-nil.
+func reportStatus(s operator.StatusReporter, phase operator.InitPhase, detail string) {
+	if s != nil {
+		s.PhaseUpdate(phase, detail)
+	}
+}
+
+// reportError calls Error on s when s is non-nil.
+func reportError(s operator.StatusReporter, err error) {
+	if s != nil {
+		s.Error(err)
+	}
 }
 
 // New returns an Operator with the default embedded AgentMemory module enabled.

@@ -12,6 +12,28 @@ const (
 	DefaultProvider = "claude"
 )
 
+// InitPhase identifies a named stage during agent initialisation.
+type InitPhase int
+
+const (
+	InitPhaseResolving InitPhase = iota // resolving agent record / binary checks
+	InitPhaseStarting                   // PTY session Start() called
+	InitPhaseWaiting                    // waitPTYReady polling
+	InitPhaseActive                     // session confirmed live
+)
+
+// StatusReporter receives progress callbacks from ResumeAgent.
+// All implementations must be safe to call from any goroutine.
+// A nil StatusReporter is valid and silently ignored by the operator.
+type StatusReporter interface {
+	// PhaseUpdate is called when the operator moves to a new init stage.
+	PhaseUpdate(phase InitPhase, detail string)
+	// Ready is called once the session is confirmed live.
+	Ready(agentName, model, sessionID string)
+	// Error is called when initialisation fails (before returning the error).
+	Error(err error)
+}
+
 type GetCodeAgentsParams struct {
 	Workspace sandbox.WorkspaceDir `json:"workspace,omitempty"`
 }
@@ -39,6 +61,9 @@ type ResumeAgentParams struct {
 	Model         string               `json:"model,omitempty"`
 	SessionID     string               `json:"session_id,omitempty"`
 	Detached      bool                 `json:"detached,omitempty"`
+	// Status receives phase/ready/error callbacks during initialisation.
+	// nil = no-op (server paths, detached mode, tests).
+	Status StatusReporter `json:"-"`
 }
 
 type DeleteAgentParams struct {
