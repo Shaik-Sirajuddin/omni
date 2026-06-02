@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: development/docker/Dockerfile
-    image: omni-dev:latest
+    image: ${OMNI_DEV_IMAGE:-omni-dev:latest}
     privileged: true                  # required for systemd PID 1
     tmpfs:
       - /run
