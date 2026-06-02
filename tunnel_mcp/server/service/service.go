@@ -708,7 +708,7 @@ func putStringRef(fields map[string]json.RawMessage, key, value string) {
 
 func queryResultRefs(original *message.Message, fromAgentID string) string {
 	fields := map[string]json.RawMessage{}
-	putStringRef(fields, "author", "tunnel-mcp")
+	putStringRef(fields, "author", "axolink")
 	putStringRef(fields, "author_agent_id", fromAgentID)
 	putStringRef(fields, "reply_to_message_id", original.ID)
 	putStringRef(fields, "original_sender", original.From)
