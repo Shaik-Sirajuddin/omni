@@ -344,7 +344,7 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	// The binary is only needed for auto-resume on the no-PTY fallback path.
 	agent, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
 	}
 
 	// Check PTY liveness before doing anything else.
