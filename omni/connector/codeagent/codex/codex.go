@@ -99,6 +99,7 @@ type codexAgent struct {
 }
 
 func init() {
+	// locker must be initialized; withMCPConfig calls a.locker.Lock which panics on nil.
 	codeagent.GlobalMCPRegistry.Register(Codex, &codexAgent{locker: filelock.New()})
 }
 

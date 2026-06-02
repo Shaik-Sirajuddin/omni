@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"errors"
+	"os/exec"
 	"sync"
 
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
@@ -99,28 +100,28 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 
 	if m.AxolinkMCP.Enabled {
 		cfg := runner.DefaultConfig()
-		mcpEndpoint := "http://127.0.0.1" + cfg.Addr + cfg.HTTPPath
-		headers := map[string]string{}
-		if cfg.AuthToken != "" {
-			headers["Authorization"] = "Bearer " + cfg.AuthToken
-		}
-		for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
-			if _, err := mgr.AddMCP(codeagent.AddMCPParams{
-				Server: codeagent.MCPServer{
-					Name:      "tunnel-mcp",
-					Transport: codeagent.MCPTransportHTTP,
-					URL:       mcpEndpoint,
-					Headers:   headers,
-				},
-				Global: true,
-			}); err != nil {
-				if errors.Is(err, codeagent.ErrMCPNotSupported) {
-					log.Warn("axolink-mcp: connector does not support MCP", "provider", provider)
+		omniPath, lookErr := exec.LookPath("omni")
+		if lookErr != nil {
+			log.Warn("axolink-mcp: omni binary not found in PATH, skipping connector registration", "err", lookErr)
+		} else {
+			for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
+				if _, err := mgr.AddMCP(codeagent.AddMCPParams{
+					Server: codeagent.MCPServer{
+						Name:      "axolink",
+						Transport: codeagent.MCPTransportStdio,
+						Command:   omniPath,
+						Args:      []string{"axolink"},
+					},
+					Global: true,
+				}); err != nil {
+					if errors.Is(err, codeagent.ErrMCPNotSupported) {
+						log.Warn("axolink-mcp: connector does not support MCP", "provider", provider)
+					} else {
+						log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
+					}
 				} else {
-					log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
+					log.Info("axolink-mcp: registered with connector", "provider", provider, "command", omniPath, "args", []string{"axolink"})
 				}
-			} else {
-				log.Info("axolink-mcp: registered tunnel-mcp with connector", "provider", provider, "endpoint", mcpEndpoint)
 			}
 		}
 		wg.Add(1)

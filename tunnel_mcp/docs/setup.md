@@ -35,7 +35,7 @@ Starts no server. It only connects to an existing local service process exposing
 
 ```env
 AXO_LINK_MCP_TRANSPORT=stdio
-AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token
+AXO_LINK_MCP_AUTH_TOKEN=axolink-dev-token
 AXO_LINK_MCP_SENDER_ID=mcp-client
 AXO_LINK_MCP_SENDER_TYPE=omni_agent
 AXO_LINK_MCP_AGENT_WORKSPACE=/path/to/workspace
@@ -65,7 +65,7 @@ Starts both local servers:
 AXO_LINK_MCP_TRANSPORT=streamable_http
 AXO_LINK_MCP_ADDR=:18062
 AXO_LINK_MCP_HTTP_PATH=/mcp
-AXO_LINK_MCP_AUTH_TOKEN=tunnel-mcp-dev-token
+AXO_LINK_MCP_AUTH_TOKEN=axolink-dev-token
 AXO_LINK_MCP_DELIVERY_MODE=async
 
 AXO_LINK_SERVICE_HTTP_BIND=unix

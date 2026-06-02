@@ -72,7 +72,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, service.HealthResponse{
 		Status:  "ok",
-		Service: "tunnel-mcp",
+		Service: "axolink",
 		Version: h.serviceVersion,
 	})
 }

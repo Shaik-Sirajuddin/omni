@@ -5,17 +5,47 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 )
 
-// mcpFileMu guards all reads and writes to claude settings.json for MCP state.
-// It coordinates goroutines within this process; mtime checks handle cross-process races.
-var mcpFileMu sync.RWMutex
+// mcpPathMu maps an absolute settings.json path to its own RWMutex so that
+// agents in different worktrees don't block each other.
+var mcpPathMu sync.Map // map[string]*sync.RWMutex
 
-// rawMCPServer is the JSON shape Claude Code stores in settings.json under mcpServers.
+func mcpMutexFor(path string) *sync.RWMutex {
+	v, _ := mcpPathMu.LoadOrStore(path, &sync.RWMutex{})
+	return v.(*sync.RWMutex)
+}
+
+// NOTE: MCP path resolution below is based on the Claude Code scope table and has
+// NOT been tested against a live Claude installation. Verify that ~/.claude.json
+// and <workDir>/.mcp.json match the actual files Claude Code reads before relying
+// on AddMCP/ListMCP/DeleteMCP in production.
+
+// mcpUserSettingsPath returns the path to the user-global MCP config file.
+// Claude Code stores user-scoped MCP servers in ~/.claude.json.
+func mcpUserSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("mcp: resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// mcpWorkspaceSettingsPath returns the per-worktree MCP config path.
+// Claude Code stores project-scoped MCP servers in .mcp.json at the project root,
+// so each worktree (workDir) gets its own isolated MCP config.
+func mcpWorkspaceSettingsPath(workDir string) string {
+	return filepath.Join(workDir, ".mcp.json")
+}
+
+// rawMCPServer is the JSON shape Claude Code stores under mcpServers.
+// Claude uses a single "headers" map for both literal and env-var-expanded
+// headers; env values use ${VAR} syntax inline (no separate field).
 type rawMCPServer struct {
 	Type    string                      `json:"type,omitempty"`
 	Command string                      `json:"command,omitempty"`
@@ -37,12 +67,12 @@ var errMtimeChanged = fmt.Errorf("mcp: settings file modified concurrently")
 
 func (a *claudeAgent) mcpSettingsPath(global bool) (string, error) {
 	if global {
-		return claudeUserSettingsPath()
+		return mcpUserSettingsPath()
 	}
 	a.mu.RLock()
 	workDir := a.workDir
 	a.mu.RUnlock()
-	return claudeWorkspaceSettingsPath(workDir), nil
+	return mcpWorkspaceSettingsPath(workDir), nil
 }
 
 // readMCPRaw reads the settings file at path and returns:
@@ -117,14 +147,16 @@ func writeMCPRaw(path string, raw map[string]json.RawMessage, servers map[string
 	return os.Rename(tmpName, path)
 }
 
-// withMCPWrite runs op under mcpFileMu write lock, retrying up to 3 times when
-// writeMCPRaw returns errMtimeChanged (cross-process concurrent write detected).
-func withMCPWrite(op func() error) error {
+// withMCPWrite runs op under the write lock for path, retrying up to 3 times
+// when writeMCPRaw returns errMtimeChanged (cross-process concurrent write).
+// Using a per-path mutex means agents in different worktrees don't block each other.
+func withMCPWrite(path string, op func() error) error {
 	const maxRetries = 3
+	mu := mcpMutexFor(path)
 	for i := 0; i < maxRetries; i++ {
-		mcpFileMu.Lock()
+		mu.Lock()
 		err := op()
-		mcpFileMu.Unlock()
+		mu.Unlock()
 		if err != errMtimeChanged {
 			return err
 		}
@@ -132,12 +164,24 @@ func withMCPWrite(op func() error) error {
 	return fmt.Errorf("mcp: settings file updated concurrently %d times, giving up", maxRetries)
 }
 
-// mcpToRaw converts a codeagent.MCPServer to its settings.json shape.
+// mcpToRaw converts a codeagent.MCPServer to its .mcp.json shape.
+// Claude uses a single "headers" map; EnvHeaders values (which contain ${VAR}
+// or ${VAR:-default} syntax) are merged in alongside literal Headers values.
 func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	r := rawMCPServer{
 		Env:     s.Env,
-		Headers: s.Headers,
 		Timeout: s.Timeout,
+	}
+	// Merge literal and env-var headers into a single map.
+	if len(s.Headers)+len(s.EnvHeaders) > 0 {
+		merged := make(map[string]string, len(s.Headers)+len(s.EnvHeaders))
+		for k, v := range s.Headers {
+			merged[k] = v
+		}
+		for k, v := range s.EnvHeaders {
+			merged[k] = v
+		}
+		r.Headers = merged
 	}
 	switch s.Transport {
 	case codeagent.MCPTransportSSE:
@@ -146,7 +190,7 @@ func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	case codeagent.MCPTransportHTTP:
 		r.Type = "http"
 		r.URL = s.URL
-	default:
+	default: // stdio
 		r.Type = "stdio"
 		r.Command = s.Command
 		r.Args = s.Args
@@ -154,13 +198,33 @@ func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	return r
 }
 
-// rawToMCP converts a raw settings entry to a codeagent.MCPServer.
+// isEnvHeader reports whether a header value uses Claude's ${VAR} or
+// ${VAR:-default} env-var interpolation syntax.
+func isEnvHeader(v string) bool {
+	return strings.Contains(v, "${") && strings.Contains(v, "}")
+}
+
+// rawToMCP converts a raw .mcp.json entry to a codeagent.MCPServer.
+// The single "headers" map is split: values containing ${VAR} or ${VAR:-default}
+// go into EnvHeaders; plain literal values go into Headers.
 func rawToMCP(name string, r rawMCPServer) codeagent.MCPServer {
 	s := codeagent.MCPServer{
 		Name:    name,
 		Env:     r.Env,
-		Headers: r.Headers,
 		Timeout: r.Timeout,
+	}
+	for k, v := range r.Headers {
+		if isEnvHeader(v) {
+			if s.EnvHeaders == nil {
+				s.EnvHeaders = make(map[string]string)
+			}
+			s.EnvHeaders[k] = v
+		} else {
+			if s.Headers == nil {
+				s.Headers = make(map[string]string)
+			}
+			s.Headers[k] = v
+		}
 	}
 	switch r.Type {
 	case "sse":
@@ -169,7 +233,7 @@ func rawToMCP(name string, r rawMCPServer) codeagent.MCPServer {
 	case "http":
 		s.Transport = codeagent.MCPTransportHTTP
 		s.URL = r.URL
-	default:
+	default: // stdio
 		s.Transport = codeagent.MCPTransportStdio
 		s.Command = r.Command
 		s.Args = r.Args
@@ -186,7 +250,7 @@ func (a *claudeAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult,
 	if err != nil {
 		return nil, fmt.Errorf("claude: AddMCP: resolve path: %w", err)
 	}
-	if err := withMCPWrite(func() error {
+	if err := withMCPWrite(path, func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
 			return err
@@ -204,9 +268,10 @@ func (a *claudeAgent) ListMCP(p codeagent.ListMCPParams) (*codeagent.ListMCPResu
 	if err != nil {
 		return nil, fmt.Errorf("claude: ListMCP: resolve path: %w", err)
 	}
-	mcpFileMu.RLock()
+	mu := mcpMutexFor(path)
+	mu.RLock()
 	_, servers, _, err := readMCPRaw(path)
-	mcpFileMu.RUnlock()
+	mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("claude: ListMCP: %w", err)
 	}
@@ -222,7 +287,7 @@ func (a *claudeAgent) DeleteMCP(p codeagent.DeleteMCPParams) (*codeagent.DeleteM
 	if err != nil {
 		return nil, fmt.Errorf("claude: DeleteMCP: resolve path: %w", err)
 	}
-	if err := withMCPWrite(func() error {
+	if err := withMCPWrite(path, func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
 			return err
@@ -240,7 +305,7 @@ func (a *claudeAgent) SetMCPToolPrompt(p codeagent.SetMCPToolPromptParams) (*cod
 	if err != nil {
 		return nil, fmt.Errorf("claude: SetMCPToolPrompt: resolve path: %w", err)
 	}
-	if err := withMCPWrite(func() error {
+	if err := withMCPWrite(path, func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
 			return err
