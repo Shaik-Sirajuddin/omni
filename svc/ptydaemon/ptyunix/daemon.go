@@ -309,8 +309,8 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 
 // handleStdinRelay acknowledges the request then enters a raw streaming loop,
 // forwarding every chunk from the client to the PTY master via
-// inner.StdinRelay — which calls trackHumanInput before each write so that
-// ExecInSession can serialise around human-typed input.
+// inner.StdinRelay — which calls trackUserInput before each write so that
+// ExecInSession can serialise around user-typed input.
 //
 // br must be the bufio.Reader wrapping conn from handleConn; it carries any
 // bytes the JSON decoder pre-buffered after reading the request envelope.
@@ -376,8 +376,8 @@ func (d *Daemon) handlePipe(conn *net.UnixConn, req Request) {
 
 // handleExec delivers a bot prompt into a live session. Connectors send the raw
 // prompt text; the daemon's execPrompt owns all input framing — clearing the
-// human's partial line, bracketed-pasting the prompt, submitting (with retries to
-// absorb terminal timing races), then reinjecting the human's partial input.
+// user's partial line, bracketed-pasting the prompt, submitting (with retries to
+// absorb terminal timing races), then reinjecting the user's partial input.
 // Connectors must NOT pre-wrap the prompt or it gets double-framed and the inner
 // paste/submit bytes render as literal text in the TUI.
 func (d *Daemon) handleExec(conn *net.UnixConn, req Request) {

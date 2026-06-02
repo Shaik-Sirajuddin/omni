@@ -230,7 +230,7 @@ func (c *UnixSocketClient) Attach(ctx context.Context, sessionID string) error {
 	ptylog.Debug("client: attach received master fd, entering raw terminal", "session_id", sessionID, "fd", fds[0])
 	ptmx := os.NewFile(uintptr(fds[0]), "ptmx")
 
-	// Open a second connection for stdin relay so the daemon can track human
+	// Open a second connection for stdin relay so the daemon can track user
 	// input and serialise it against ExecInSession writes.
 	var stdinDst io.Writer = ptmx // fallback: write stdin directly to ptmx
 	relayConn, relayErr := c.openStdinRelay(sessionID)

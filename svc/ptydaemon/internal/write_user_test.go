@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// TestWriteHumanSerialisesAfterExec proves a human keystroke arriving while an
+// TestWriteUserSerialisesAfterExec proves a user keystroke arriving while an
 // exec sequence holds execMu is deferred (not dropped, not interleaved): it
 // lands on the master only after the exec write, preserving ordering.
-func TestWriteHumanSerialisesAfterExec(t *testing.T) {
+func TestWriteUserSerialisesAfterExec(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
@@ -23,8 +23,8 @@ func TestWriteHumanSerialisesAfterExec(t *testing.T) {
 	// Simulate an in-flight execPrompt: it holds execMu across its whole sequence.
 	term.execMu.Lock()
 
-	humanDone := make(chan error, 1)
-	go func() { humanDone <- term.writeHuman([]byte("HUMAN")) }()
+	userDone := make(chan error, 1)
+	go func() { userDone <- term.writeUser([]byte("USER")) }()
 
 	// Let the relay goroutine reach (and block on) execMu before exec writes.
 	time.Sleep(20 * time.Millisecond)
@@ -32,17 +32,17 @@ func TestWriteHumanSerialisesAfterExec(t *testing.T) {
 	if err := term.write([]byte("EXEC")); err != nil {
 		t.Fatalf("exec write: %v", err)
 	}
-	term.execMu.Unlock() // exec done → deferred human input may now proceed
+	term.execMu.Unlock() // exec done → deferred user input may now proceed
 
-	if herr := <-humanDone; herr != nil {
-		t.Fatalf("writeHuman: %v", herr)
+	if herr := <-userDone; herr != nil {
+		t.Fatalf("writeUser: %v", herr)
 	}
 
-	buf := make([]byte, len("EXECHUMAN"))
+	buf := make([]byte, len("EXECUSER"))
 	if _, err := io.ReadFull(r, buf); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if string(buf) != "EXECHUMAN" {
-		t.Fatalf("expected exec before human (EXECHUMAN), got %q", buf)
+	if string(buf) != "EXECUSER" {
+		t.Fatalf("expected exec before user (EXECUSER), got %q", buf)
 	}
 }

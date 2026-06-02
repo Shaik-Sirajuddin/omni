@@ -35,7 +35,7 @@ const (
 
 	// pasteSettle is the pause between clear, paste, and submit so the TUI
 	// applies each step in order. Without it the submit key races ahead of the
-	// bracketed paste and lands on stale human input.
+	// bracketed paste and lands on stale user input.
 	pasteSettle = 40 * time.Millisecond
 
 	// drainReadTimeout bounds each idle-drain read so the drainer periodically
@@ -78,10 +78,10 @@ type PTYTerminal struct {
 	// PTY master cannot interleave.
 	execMu sync.Mutex
 
-	// humanMu guards the input tracking state below.
-	humanMu sync.Mutex
+	// userMu guards the input tracking state below.
+	userMu sync.Mutex
 	// inputQueue[0..queueLen-1] = committed history (oldest→newest).
-	// inputQueue[queueLen]      = active top slot; trackHumanInput writes here directly.
+	// inputQueue[queueLen]      = active top slot; trackUserInput writes here directly.
 	// On enter: active slot becomes history (queueLen++, drop oldest if full), new active = nil.
 	// Bot reads inputQueue[queueLen] (active top) via readLastInput — no pop.
 	inputQueue       [inputQueueCap + 1][]byte
@@ -116,12 +116,12 @@ func (t *PTYTerminal) write(p []byte) error {
 	return err
 }
 
-// writeHuman forwards a human-typed chunk to the master under execMu — the same
+// writeUser forwards a user-typed chunk to the master under execMu — the same
 // lock execPrompt holds across its whole clear→paste→submit→reinject sequence.
 // This keeps a keystroke from interleaving inside an in-flight exec (which would
 // corrupt the prompt line). The keystrokes are deferred while exec runs, not
 // dropped: they flush once the lock is released and surface after the prompt.
-func (t *PTYTerminal) writeHuman(chunk []byte) error {
+func (t *PTYTerminal) writeUser(chunk []byte) error {
 	t.execMu.Lock()
 	defer t.execMu.Unlock()
 	return t.write(chunk)
@@ -278,10 +278,10 @@ func (t *PTYTerminal) stopDrain() {
 }
 
 // readLastInput returns a full copy of the active queue top (inputQueue[queueLen]).
-// This is what the human is currently typing — never pops, never clears.
+// This is what the user is currently typing — never pops, never clears.
 func (t *PTYTerminal) readLastInput() []byte {
-	t.humanMu.Lock()
-	defer t.humanMu.Unlock()
+	t.userMu.Lock()
+	defer t.userMu.Unlock()
 	active := t.inputQueue[t.queueLen]
 	if len(active) == 0 {
 		return nil
@@ -289,22 +289,22 @@ func (t *PTYTerminal) readLastInput() []byte {
 	return append([]byte(nil), active...)
 }
 
-// execPrompt sends a bot prompt while preserving the human's partial input.
+// execPrompt sends a bot prompt while preserving the user's partial input.
 // Each step is a separate PTY write so the TUI applies them in order — a single
 // concatenated write lets the submit key race ahead of the paste and submit
-// stale human input instead of the prompt.
+// stale user input instead of the prompt.
 //
-//  1. ctrlU                          clear the human's partial line
+//  1. ctrlU                          clear the user's partial line
 //  2. inject(prompt)                 bracketed-paste the prompt; paste mode
 //     (DECSET 2004) assumed active (no submit yet)
 //  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
-//  4. human input (once, no submit)  restore what the human was typing
+//  4. user input (once, no submit)  restore what the user was typing
 //
 // execMu is held across the whole sequence (including the settle/retry sleeps)
 // so concurrent exec calls cannot interleave their writes.
 func (t *PTYTerminal) execPrompt(prompt string) error {
-	// Snapshot the human's partial input up front; restored at the end. Never pops.
-	human := t.readLastInput()
+	// Snapshot the user's partial input up front; restored at the end. Never pops.
+	user := t.readLastInput()
 
 	t.execMu.Lock()
 	defer t.execMu.Unlock()
@@ -315,9 +315,9 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	// method is the single owner of framing — see handleExec.
 	ptylog.Debug("ptydaemon: execPrompt begin", "session_id", t.SessionID,
 		"submit_key", t.submitKey, "prompt_len", len(prompt),
-		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "human_carry", len(human))
+		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "user_carry", len(user))
 
-	// 1. Clear the human's partial line, then let the TUI apply it before we
+	// 1. Clear the user's partial line, then let the TUI apply it before we
 	//    paste — otherwise the clear races behind the paste/submit.
 	if err := t.write([]byte(ctrlU)); err != nil {
 		return err
@@ -355,9 +355,9 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 		}
 	}
 
-	// 4. Restore the human's partial input (no submit) so they see it again.
-	if len(human) > 0 {
-		if err := t.write(human); err != nil {
+	// 4. Restore the user's partial input (no submit) so they see it again.
+	if len(user) > 0 {
+		if err := t.write(user); err != nil {
 			return err
 		}
 	}
@@ -390,12 +390,12 @@ func (t *PTYTerminal) setStatus(s Status) {
 	t.mu.Unlock()
 }
 
-// trackHumanInput is called by the stdin relay before forwarding each chunk
+// trackUserInput is called by the stdin relay before forwarding each chunk
 // to the PTY master. It maintains currentInput — the always-live active buffer
-// the bot reads to reinject human input after sending a prompt.
-func (t *PTYTerminal) trackHumanInput(chunk []byte) {
-	t.humanMu.Lock()
-	defer t.humanMu.Unlock()
+// the bot reads to reinject user input after sending a prompt.
+func (t *PTYTerminal) trackUserInput(chunk []byte) {
+	t.userMu.Lock()
+	defer t.userMu.Unlock()
 
 	// Prepend carry bytes to detect sequences split across chunk boundaries.
 	var buf []byte

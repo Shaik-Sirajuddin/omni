@@ -28,7 +28,7 @@ type PTYDaemon interface {
 	// The caller must not close the file; it is owned by the daemon.
 	GetMasterFd(agentID, sessionID string) (*os.File, error)
 	// StdinRelay reads from r and forwards each chunk to the PTY master while
-	// tracking human input for ExecInSession write serialisation.
+	// tracking user input for ExecInSession write serialisation.
 	// Blocks until r returns EOF/error or ctx is cancelled.
 	StdinRelay(ctx context.Context, agentID, sessionID string, r io.Reader) error
 	Shutdown(ctx context.Context) error
@@ -310,13 +310,13 @@ func (d *defaultDaemon) StdinRelay(ctx context.Context, agentID, sessionID strin
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			// writeHuman serialises against execPrompt so a keystroke can never
+			// writeUser serialises against execPrompt so a keystroke can never
 			// land inside an in-flight exec sequence; it is deferred until exec
 			// completes, then surfaces after the prompt.
-			if werr := t.writeHuman(chunk); werr != nil {
+			if werr := t.writeUser(chunk); werr != nil {
 				return werr
 			}
-			t.trackHumanInput(chunk)
+			t.trackUserInput(chunk)
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
