@@ -47,6 +47,22 @@ export OMNI_PTY_SOCKET=/run/omni-root/omni-pty.sock
 EOF
   grep -q HOOK_OPERATOR_SOCKET /root/.bashrc 2>/dev/null || \
     echo 'source /etc/profile.d/omni-sockets.sh' >> /root/.bashrc
+
+  # Write auth env vars to profile.d so interactive shells (docker exec bash)
+  # have the same credentials as omni-server. The systemd drop-in only covers
+  # the service process; shells get a clean env and would show the login prompt.
+  local auth_profile=/etc/profile.d/omni-auth.sh
+  : > "$auth_profile"
+  for var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
+             OPENAI_API_KEY OPENAI_OAUTH_TOKEN \
+             GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_CLOUD_PROJECT \
+             ANTHROPIC_MODEL CODEX_MODEL GEMINI_MODEL AGY_MODEL; do
+    if [[ -n "${!var:-}" ]]; then
+      printf 'export %s=%s\n' "$var" "${!var}" >> "$auth_profile"
+    fi
+  done
+  grep -q omni-auth /root/.bashrc 2>/dev/null || \
+    echo 'source /etc/profile.d/omni-auth.sh' >> /root/.bashrc
 }
 write_runtime_env
 
@@ -165,6 +181,22 @@ seed_mcp_configs() {
     claude_key_suffix="${CLAUDE_CODE_OAUTH_TOKEN: -20}"
   fi
   seed_mcp_json /root/.claude.json "$url" "$claude_key_suffix"
+
+  # Ensure onboarding/trust flags are set in ~/.claude.json even when the file
+  # already exists (claude creates it as {} on first run, seed_mcp_json skips it).
+  python3 - <<'PYEOF'
+import json, os
+path = os.path.expanduser("~/.claude.json")
+cfg = {}
+if os.path.exists(path):
+    try: cfg = json.load(open(path))
+    except Exception: cfg = {}
+cfg.setdefault("hasCompletedOnboarding", True)
+cfg.setdefault("hasTrustDialogAccepted", True)
+cfg.setdefault("hasTrustDialogHooksAccepted", True)
+cfg.setdefault("shiftEnterKeyBindingInstalled", True)
+json.dump(cfg, open(path, "w"), indent=2)
+PYEOF
 
   # claude.ai installer places binary at ~/.local/bin — not in non-login-shell PATH.
   export PATH="${HOME}/.local/bin:${PATH}"

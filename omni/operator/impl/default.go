@@ -43,7 +43,7 @@ const (
 	providerGemini codeagent.Provider = "gemini"
 	providerAgy    codeagent.Provider = "agy"
 
-	mcpAuthToken  = "tunnel-mcp-dev-token"
+	mcpAuthToken  = "axolink-dev-token"
 	mcpSenderType = "omni_agent"
 )
 
@@ -340,29 +340,16 @@ func waitPTYReady(d ptyclients.Client, agentID, sessionID string) error {
 }
 
 func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*operator.ExecInSessionResult, error) {
-	agent, ca, err := o.codeAgentForAgentID(params.AgentID)
+	// Resolve agent + session without initialising a code agent — no binary lookup.
+	// The binary is only needed for auto-resume on the no-PTY fallback path.
+	agent, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	sessionID := strings.TrimSpace(params.SessionID)
-	if sessionID == "" {
-		if o.sessionStore == nil {
-			return nil, fmt.Errorf("operator: session store is not configured")
-		}
-		session, err := o.sessionStore.GetSession(agent.ID)
-		if err != nil {
-			return nil, fmt.Errorf("operator: active session for agent %q: %w", agent.ID, err)
-		}
-		if session == nil || strings.TrimSpace(session.Id) == "" {
-			return nil, fmt.Errorf("operator: active session not found for agent %q", agent.ID)
-		}
-		sessionID = strings.TrimSpace(session.Id)
-	}
 
-	// Check whether the session is currently active via the pty daemon.
-	// Option C: MetaAttached is the fast path; if it returns 0, fall back to Get so that
-	// sessions which are running but not registered (connector did not return ProcessID)
-	// are not incorrectly auto-resumed a second time.
+	// Check PTY liveness before doing anything else.
+	// MetaAttached is the fast path; fall back to Get for sessions running but
+	// not registered (connector did not return ProcessID).
 	sessionActive := false
 	sessionNeedsGrace := false
 	if o.ptyDaemon != nil {
@@ -373,7 +360,6 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		if params.LiveOnly {
 			return nil, fmt.Errorf("operator: exec in session: session %q is not active", sessionID)
 		}
-		// Auto-resume the agent before executing.
 		logger.Info("ExecInSession: session not active, auto-resuming", "agentID", agent.ID, "sessionID", sessionID)
 		if err := o.ResumeAgent(operator.ResumeAgentParams{
 			Workspace: agent.WorkspaceDir,
@@ -384,22 +370,28 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 			return nil, fmt.Errorf("operator: exec in session: auto-resume: %w", err)
 		}
 		sessionNeedsGrace = true
-		// Re-init ca after resume since the connector instance may be stale.
-		_, ca, err = o.codeAgentForAgentID(params.AgentID)
-		if err != nil {
-			return nil, fmt.Errorf("operator: exec in session: re-init after resume: %w", err)
-		}
 	}
 
-	// Option B: run waitPTYReady when a resume just happened (sessionNeedsGrace) OR
-	// when the caller explicitly signals detached mode — the TUI may not be ready
-	// even if the session was not started recently (timing depends on the caller).
 	if (sessionNeedsGrace || params.Detached) && o.ptyDaemon != nil {
 		if err := waitPTYReady(o.ptyDaemon, agent.ID, sessionID); err != nil {
 			logger.Warn("ExecInSession: PTY readiness wait timed out", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 		}
 	}
 
+	// PTY path: write the prompt directly via the daemon — no code agent needed.
+	if o.ptyDaemon != nil {
+		if err := o.ptyDaemon.Exec(sessionID, params.Prompt); err != nil {
+			return nil, fmt.Errorf("operator: exec in session: %w", err)
+		}
+		return &operator.ExecInSessionResult{SessionID: sessionID}, nil
+	}
+
+	// No PTY daemon — fall back to code agent (non-PTY / stdio provider).
+	// Binary lookup happens here only when PTY is not configured.
+	_, ca, err := o.codeAgentForAgentID(params.AgentID)
+	if err != nil {
+		return nil, err
+	}
 	result, err := ca.ExecInSession(codeagent.ExecInSessionParams{
 		SessionID: sessionID,
 		Prompt:    params.Prompt,
@@ -443,26 +435,13 @@ func (o *DefaultOperator) DetachSession(params operator.DetachSessionParams) (*o
 }
 
 func (o *DefaultOperator) Pipe(params operator.PipeParams) error {
-	agent, _, err := o.codeAgentForAgentID(params.AgentID)
-	if err != nil {
-		return err
-	}
-	sessionID := strings.TrimSpace(params.SessionID)
-	if sessionID == "" {
-		if o.sessionStore == nil {
-			return fmt.Errorf("operator: session store is not configured")
-		}
-		session, err := o.sessionStore.GetSession(agent.ID)
-		if err != nil {
-			return fmt.Errorf("operator: active session for agent %q: %w", agent.ID, err)
-		}
-		if session == nil || strings.TrimSpace(session.Id) == "" {
-			return fmt.Errorf("operator: active session not found for agent %q", agent.ID)
-		}
-		sessionID = strings.TrimSpace(session.Id)
-	}
 	if o.ptyDaemon == nil {
 		return fmt.Errorf("operator: pty daemon client is not configured")
+	}
+	// resolveAgentSession does not initialise a code agent — no binary lookup.
+	agent, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
+	if err != nil {
+		return err
 	}
 	if err := o.ptyDaemon.Pipe(agent.ID, sessionID, params.Data); err != nil {
 		return fmt.Errorf("operator: pipe session: %w", err)
