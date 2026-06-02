@@ -15,6 +15,7 @@ import (
 	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
 	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
+	agentpool "github.com/Shaik-Sirajuddin/memory/svc/agentpool"
 	configsync "github.com/Shaik-Sirajuddin/memory/svc/config_sync"
 	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
@@ -44,6 +45,15 @@ type AxolinkMCPConfig struct {
 	ServiceConfig
 }
 
+// AgentPoolConfig configures the agent pool daemon service.
+type AgentPoolConfig struct {
+	ServiceConfig
+	SocketPath string
+	// CreateAgent is the callback the pool daemon uses to spawn detached sessions.
+	// Must be set when Enabled is true.
+	CreateAgent agentpool.CreateAgentFunc
+}
+
 // ConfigSyncConfig configures the config sync service.
 type ConfigSyncConfig struct {
 	ServiceConfig
@@ -55,14 +65,15 @@ type ConfigSyncConfig struct {
 	WatchSettings bool
 }
 
-// ServiceMux runs ptydaemon, hook-operator, axolink-mcp, and config-sync as
-// in-process goroutines under a shared context. Stopping the context is the
-// only shutdown signal needed.
+// ServiceMux runs ptydaemon, hook-operator, axolink-mcp, config-sync, and
+// agent-pool as in-process goroutines under a shared context. Stopping the
+// context is the only shutdown signal needed.
 type ServiceMux struct {
 	PTYDaemon    PTYDaemonConfig
 	HookOperator HookOperatorConfig
 	AxolinkMCP   AxolinkMCPConfig
 	ConfigSync   ConfigSyncConfig
+	AgentPool    AgentPoolConfig
 }
 
 // Run starts all enabled services and blocks until all have exited. The first
@@ -129,6 +140,17 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 			defer wg.Done()
 			if err := runner.Run(ctx, cfg); err != nil {
 				ch <- result{fmt.Errorf("axolink-mcp: %w", err)}
+			}
+		}()
+	}
+
+	if m.AgentPool.Enabled {
+		d := agentpool.NewDaemon(m.AgentPool.CreateAgent, log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := d.Run(ctx, m.AgentPool.SocketPath); err != nil {
+				ch <- result{fmt.Errorf("agentpool: %w", err)}
 			}
 		}()
 	}
