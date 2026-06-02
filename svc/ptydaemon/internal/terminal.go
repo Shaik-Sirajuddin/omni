@@ -331,10 +331,13 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 		"submit_key", t.submitKey, "prompt_len", len(prompt),
 		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "user_carry", len(user))
 
-	// 1. One atomic write: clear line, bracketed-paste the prompt, submit. The
-	//    child reads this in order; 201~ closes the paste before the submit byte.
+	// 1. One atomic write: close any dangling paste, clear line, bracketed-paste
+	//    the prompt, submit. The child reads this in order; the leading 201~
+	//    defensively closes a paste a prior sequence may have left open (else our
+	//    prompt would be swallowed as paste content) and is a harmless no-op
+	//    otherwise; the trailing 201~ closes our paste before the submit byte.
 	submit := submitSeq(t.submitKey)
-	payload := append([]byte(ctrlU+pasteStart+prompt+pasteEnd), submit...)
+	payload := append([]byte(pasteEnd+ctrlU+pasteStart+prompt+pasteEnd), submit...)
 	ptylog.Debug("ptydaemon: execPrompt payload", "session_id", t.SessionID,
 		"payload", dbgBytes(payload), "len", len(payload))
 	if err := t.write(payload); err != nil {
