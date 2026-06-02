@@ -164,14 +164,21 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 	return nil
 }
 
-// bootstrapSession runs `codex exec "." --json` to register a real codex
-// session and capture its thread_id from the first JSON line:
+// bootstrapSession runs `codex exec "." --json` to register a real codex session
+// and capture its thread_id. The codex JSON output sequence is:
 //
-//	{"type":"thread.started","thread_id":"<id>"}
+//	{"type":"thread.started","thread_id":"<id>"}   ← session ID captured here
+//	{"type":"turn.started"}
+//	... (model processing) ...
+//	{"type":"turn.completed"}                       ← SIGTERM sent here
 //
-// Once the thread_id is found we send SIGTERM (not SIGKILL) so codex can
-// flush the session file to disk before exiting. Killing with SIGKILL prevents
-// session persistence, causing "No saved session found" on subsequent Resume calls.
+// We wait for turn.completed (not just thread.started) because codex only flushes
+// the session file to disk at the end of a completed turn. Sending SIGTERM earlier
+// — or using SIGKILL at any point — leaves the session file incomplete, causing
+// "No saved session found" errors on subsequent Resume calls.
+//
+// A 20 s context timeout acts as a backstop: if codex hangs or never reaches
+// turn.completed, the context cancels and cmd.Wait() unblocks via SIGKILL.
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -192,15 +199,21 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Drain stdout lines; send the first thread_id found to the channel.
+	// Drain stdout lines; wait for thread_id (thread.started) then turn.completed
+	// before signalling — codex must complete its first turn to have flushed session state.
 	// Draining is required so codex is never blocked on a full pipe.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		var capturedID string
 		for scanner.Scan() {
-			if id := parseBootstrapSessionID(scanner.Text()); id != "" {
+			line := scanner.Text()
+			if capturedID == "" {
+				capturedID = parseBootstrapSessionID(line)
+			}
+			if capturedID != "" && strings.Contains(line, `"turn.completed"`) {
 				select {
-				case found <- id:
+				case found <- capturedID:
 				default:
 				}
 			}
