@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,16 +44,17 @@ func mcpWorkspaceSettingsPath(workDir string) string {
 }
 
 // rawMCPServer is the JSON shape Claude Code stores under mcpServers.
+// Claude uses a single "headers" map for both literal and env-var-expanded
+// headers; env values use ${VAR} syntax inline (no separate field).
 type rawMCPServer struct {
-	Type       string                      `json:"type,omitempty"`
-	Command    string                      `json:"command,omitempty"`
-	Args       []string                    `json:"args,omitempty"`
-	URL        string                      `json:"url,omitempty"`
-	Env        map[string]string           `json:"env,omitempty"`
-	Headers    map[string]string           `json:"headers,omitempty"`
-	EnvHeaders map[string]string           `json:"env_http_headers,omitempty"`
-	Timeout    int                         `json:"timeout,omitempty"`
-	Tools      map[string]rawMCPToolConfig `json:"tools,omitempty"`
+	Type    string                      `json:"type,omitempty"`
+	Command string                      `json:"command,omitempty"`
+	Args    []string                    `json:"args,omitempty"`
+	URL     string                      `json:"url,omitempty"`
+	Env     map[string]string           `json:"env,omitempty"`
+	Headers map[string]string           `json:"headers,omitempty"`
+	Timeout int                         `json:"timeout,omitempty"`
+	Tools   map[string]rawMCPToolConfig `json:"tools,omitempty"`
 }
 
 type rawMCPToolConfig struct {
@@ -162,13 +164,24 @@ func withMCPWrite(path string, op func() error) error {
 	return fmt.Errorf("mcp: settings file updated concurrently %d times, giving up", maxRetries)
 }
 
-// mcpToRaw converts a codeagent.MCPServer to its settings.json shape.
+// mcpToRaw converts a codeagent.MCPServer to its .mcp.json shape.
+// Claude uses a single "headers" map; EnvHeaders values (which contain ${VAR}
+// or ${VAR:-default} syntax) are merged in alongside literal Headers values.
 func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	r := rawMCPServer{
-		Env:        s.Env,
-		Headers:    s.Headers,
-		EnvHeaders: s.EnvHeaders,
-		Timeout:    s.Timeout,
+		Env:     s.Env,
+		Timeout: s.Timeout,
+	}
+	// Merge literal and env-var headers into a single map.
+	if len(s.Headers)+len(s.EnvHeaders) > 0 {
+		merged := make(map[string]string, len(s.Headers)+len(s.EnvHeaders))
+		for k, v := range s.Headers {
+			merged[k] = v
+		}
+		for k, v := range s.EnvHeaders {
+			merged[k] = v
+		}
+		r.Headers = merged
 	}
 	switch s.Transport {
 	case codeagent.MCPTransportSSE:
@@ -177,7 +190,7 @@ func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	case codeagent.MCPTransportHTTP:
 		r.Type = "http"
 		r.URL = s.URL
-	default:
+	default: // stdio
 		r.Type = "stdio"
 		r.Command = s.Command
 		r.Args = s.Args
@@ -185,14 +198,33 @@ func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	return r
 }
 
-// rawToMCP converts a raw settings entry to a codeagent.MCPServer.
+// isEnvHeader reports whether a header value uses Claude's ${VAR} or
+// ${VAR:-default} env-var interpolation syntax.
+func isEnvHeader(v string) bool {
+	return strings.Contains(v, "${") && strings.Contains(v, "}")
+}
+
+// rawToMCP converts a raw .mcp.json entry to a codeagent.MCPServer.
+// The single "headers" map is split: values containing ${VAR} or ${VAR:-default}
+// go into EnvHeaders; plain literal values go into Headers.
 func rawToMCP(name string, r rawMCPServer) codeagent.MCPServer {
 	s := codeagent.MCPServer{
-		Name:       name,
-		Env:        r.Env,
-		Headers:    r.Headers,
-		EnvHeaders: r.EnvHeaders,
-		Timeout:    r.Timeout,
+		Name:    name,
+		Env:     r.Env,
+		Timeout: r.Timeout,
+	}
+	for k, v := range r.Headers {
+		if isEnvHeader(v) {
+			if s.EnvHeaders == nil {
+				s.EnvHeaders = make(map[string]string)
+			}
+			s.EnvHeaders[k] = v
+		} else {
+			if s.Headers == nil {
+				s.Headers = make(map[string]string)
+			}
+			s.Headers[k] = v
+		}
 	}
 	switch r.Type {
 	case "sse":
@@ -201,7 +233,7 @@ func rawToMCP(name string, r rawMCPServer) codeagent.MCPServer {
 	case "http":
 		s.Transport = codeagent.MCPTransportHTTP
 		s.URL = r.URL
-	default:
+	default: // stdio
 		s.Transport = codeagent.MCPTransportStdio
 		s.Command = r.Command
 		s.Args = r.Args
