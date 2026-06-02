@@ -192,15 +192,21 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Drain stdout lines; send the first thread_id found to the channel.
+	// Drain stdout lines; wait for thread_id (thread.started) then turn.started
+	// before signalling — codex must reach turn.started to have flushed session state.
 	// Draining is required so codex is never blocked on a full pipe.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		var capturedID string
 		for scanner.Scan() {
-			if id := parseBootstrapSessionID(scanner.Text()); id != "" {
+			line := scanner.Text()
+			if capturedID == "" {
+				capturedID = parseBootstrapSessionID(line)
+			}
+			if capturedID != "" && strings.Contains(line, `"turn.started"`) {
 				select {
-				case found <- id:
+				case found <- capturedID:
 				default:
 				}
 			}
