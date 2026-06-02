@@ -42,16 +42,17 @@ func mcpWorkspaceSettingsPath(workDir string) string {
 	return filepath.Join(workDir, ".mcp.json")
 }
 
-// rawMCPServer is the JSON shape Claude Code stores in settings.json under mcpServers.
+// rawMCPServer is the JSON shape Claude Code stores under mcpServers.
 type rawMCPServer struct {
-	Type    string                      `json:"type,omitempty"`
-	Command string                      `json:"command,omitempty"`
-	Args    []string                    `json:"args,omitempty"`
-	URL     string                      `json:"url,omitempty"`
-	Env     map[string]string           `json:"env,omitempty"`
-	Headers map[string]string           `json:"headers,omitempty"`
-	Timeout int                         `json:"timeout,omitempty"`
-	Tools   map[string]rawMCPToolConfig `json:"tools,omitempty"`
+	Type       string                      `json:"type,omitempty"`
+	Command    string                      `json:"command,omitempty"`
+	Args       []string                    `json:"args,omitempty"`
+	URL        string                      `json:"url,omitempty"`
+	Env        map[string]string           `json:"env,omitempty"`
+	Headers    map[string]string           `json:"headers,omitempty"`
+	EnvHeaders map[string]string           `json:"env_http_headers,omitempty"`
+	Timeout    int                         `json:"timeout,omitempty"`
+	Tools      map[string]rawMCPToolConfig `json:"tools,omitempty"`
 }
 
 type rawMCPToolConfig struct {
@@ -164,9 +165,10 @@ func withMCPWrite(path string, op func() error) error {
 // mcpToRaw converts a codeagent.MCPServer to its settings.json shape.
 func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 	r := rawMCPServer{
-		Env:     s.Env,
-		Headers: s.Headers,
-		Timeout: s.Timeout,
+		Env:        s.Env,
+		Headers:    s.Headers,
+		EnvHeaders: s.EnvHeaders,
+		Timeout:    s.Timeout,
 	}
 	switch s.Transport {
 	case codeagent.MCPTransportSSE:
@@ -186,10 +188,11 @@ func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
 // rawToMCP converts a raw settings entry to a codeagent.MCPServer.
 func rawToMCP(name string, r rawMCPServer) codeagent.MCPServer {
 	s := codeagent.MCPServer{
-		Name:    name,
-		Env:     r.Env,
-		Headers: r.Headers,
-		Timeout: r.Timeout,
+		Name:       name,
+		Env:        r.Env,
+		Headers:    r.Headers,
+		EnvHeaders: r.EnvHeaders,
+		Timeout:    r.Timeout,
 	}
 	switch r.Type {
 	case "sse":
