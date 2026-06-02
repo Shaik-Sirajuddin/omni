@@ -25,20 +25,22 @@ type Daemon struct {
 	create CreateAgentFunc
 	log    *slog.Logger
 
-	mu      sync.Mutex
-	configs map[string]ProviderPoolConfig
-	queues  map[string][]PoolEntry
-	sems    map[string]chan struct{} // key → semaphore (size MaxParallel)
+	mu       sync.Mutex
+	configs  map[string]ProviderPoolConfig
+	queues   map[string][]PoolEntry
+	sems     map[string]chan struct{} // key → semaphore (size MaxParallel)
+	inflight map[string]int          // key → count of entries currently being spawned
 }
 
 // NewDaemon creates a pool daemon backed by the given CreateAgentFunc.
 func NewDaemon(create CreateAgentFunc, log *slog.Logger) *Daemon {
 	return &Daemon{
-		create:  create,
-		log:     log,
-		configs: make(map[string]ProviderPoolConfig),
-		queues:  make(map[string][]PoolEntry),
-		sems:    make(map[string]chan struct{}),
+		create:   create,
+		log:      log,
+		configs:  make(map[string]ProviderPoolConfig),
+		queues:   make(map[string][]PoolEntry),
+		sems:     make(map[string]chan struct{}),
+		inflight: make(map[string]int),
 	}
 }
 
@@ -99,13 +101,13 @@ func (d *Daemon) dispatch(ctx context.Context, req Request) Response {
 		if req.Config == nil {
 			return Response{OK: false, Error: "register_config: missing config"}
 		}
-		return d.handleRegisterConfig(*req.Config)
+		return d.handleRegisterConfig(ctx, *req.Config)
 	default:
 		return Response{OK: false, Error: "unknown op: " + string(req.Op)}
 	}
 }
 
-func (d *Daemon) handleRegisterConfig(cfg ProviderPoolConfig) Response {
+func (d *Daemon) handleRegisterConfig(ctx context.Context, cfg ProviderPoolConfig) Response {
 	if cfg.MaxParallel <= 0 {
 		cfg.MaxParallel = 5
 	}
@@ -121,6 +123,8 @@ func (d *Daemon) handleRegisterConfig(cfg ProviderPoolConfig) Response {
 	}
 	d.mu.Unlock()
 	d.log.Info("agentpool: config registered", "provider", cfg.Provider, "workspace", cfg.Workspace, "min", cfg.WorkspaceMin, "maxParallel", cfg.MaxParallel)
+	// Seed the queue to workspace_min immediately after registration.
+	d.scheduleReplenish(ctx, key)
 	return Response{OK: true}
 }
 
@@ -143,42 +147,67 @@ func (d *Daemon) handleGet(ctx context.Context, provider, workspace string) Resp
 	if len(d.queues[key]) > 0 {
 		entry := d.queues[key][0]
 		d.queues[key] = d.queues[key][1:]
-		cfg := d.configs[key]
-		depth := len(d.queues[key])
 		d.mu.Unlock()
 		d.log.Info("agentpool: dequeued pre-warmed entry", "provider", provider, "workspace", workspace, "session_id", entry.SessionID)
-		go d.replenish(ctx, key, cfg, depth)
+		d.scheduleReplenish(ctx, key)
 		return Response{OK: true, Entry: &entry}
 	}
-	cfg := d.configs[key]
 	d.mu.Unlock()
 
+	// Queue empty — create on demand, then schedule replenish.
 	d.log.Info("agentpool: queue empty, creating on demand", "provider", provider, "workspace", workspace)
+	d.mu.Lock()
+	cfg := d.configs[key]
+	d.mu.Unlock()
 	entry, err := d.spawnOne(ctx, cfg)
 	if err != nil {
 		d.log.Error("agentpool: on-demand create failed", "provider", provider, "workspace", workspace, "err", err)
 		return Response{OK: false, Error: err.Error()}
 	}
+	d.scheduleReplenish(ctx, key)
 	return Response{OK: true, Entry: entry}
 }
 
-// replenish fills the queue back up to workspace_min in the background.
-func (d *Daemon) replenish(ctx context.Context, key string, cfg ProviderPoolConfig, currentDepth int) {
-	needed := cfg.WorkspaceMin - currentDepth
-	for i := 0; i < needed; i++ {
-		if ctx.Err() != nil {
-			return
-		}
-		entry, err := d.spawnOne(ctx, cfg)
-		if err != nil {
-			d.log.Warn("agentpool: replenish failed", "provider", cfg.Provider, "workspace", cfg.Workspace, "err", err)
-			return
-		}
-		d.mu.Lock()
-		d.queues[key] = append(d.queues[key], *entry)
+// scheduleReplenish computes how many new entries are needed to reach
+// workspace_min, accounting for already-queued and already-in-flight spawns,
+// then spawns exactly that many in a goroutine. Called under no locks.
+func (d *Daemon) scheduleReplenish(ctx context.Context, key string) {
+	d.mu.Lock()
+	cfg, ok := d.configs[key]
+	if !ok {
 		d.mu.Unlock()
-		d.log.Info("agentpool: replenished", "provider", cfg.Provider, "workspace", cfg.Workspace, "session_id", entry.SessionID)
+		return
 	}
+	queued := len(d.queues[key])
+	inFlight := d.inflight[key]
+	needed := cfg.WorkspaceMin - queued - inFlight
+	if needed <= 0 {
+		d.mu.Unlock()
+		return
+	}
+	d.inflight[key] += needed
+	d.mu.Unlock()
+
+	go func() {
+		for i := 0; i < needed; i++ {
+			if ctx.Err() != nil {
+				d.mu.Lock()
+				d.inflight[key] -= (needed - i)
+				d.mu.Unlock()
+				return
+			}
+			entry, err := d.spawnOne(ctx, cfg)
+			d.mu.Lock()
+			d.inflight[key]--
+			if err != nil {
+				d.log.Warn("agentpool: replenish spawn failed", "provider", cfg.Provider, "workspace", cfg.Workspace, "err", err)
+			} else {
+				d.queues[key] = append(d.queues[key], *entry)
+				d.log.Info("agentpool: replenished", "provider", cfg.Provider, "workspace", cfg.Workspace, "session_id", entry.SessionID)
+			}
+			d.mu.Unlock()
+		}
+	}()
 }
 
 // spawnOne acquires the per-key semaphore, calls CreateAgentFunc, releases it.
