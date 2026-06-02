@@ -182,6 +182,22 @@ seed_mcp_configs() {
   fi
   seed_mcp_json /root/.claude.json "$url" "$claude_key_suffix"
 
+  # Ensure onboarding/trust flags are set in ~/.claude.json even when the file
+  # already exists (claude creates it as {} on first run, seed_mcp_json skips it).
+  python3 - <<'PYEOF'
+import json, os
+path = os.path.expanduser("~/.claude.json")
+cfg = {}
+if os.path.exists(path):
+    try: cfg = json.load(open(path))
+    except Exception: cfg = {}
+cfg.setdefault("hasCompletedOnboarding", True)
+cfg.setdefault("hasTrustDialogAccepted", True)
+cfg.setdefault("hasTrustDialogHooksAccepted", True)
+cfg.setdefault("shiftEnterKeyBindingInstalled", True)
+json.dump(cfg, open(path, "w"), indent=2)
+PYEOF
+
   # claude.ai installer places binary at ~/.local/bin — not in non-login-shell PATH.
   export PATH="${HOME}/.local/bin:${PATH}"
 
