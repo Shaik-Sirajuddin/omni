@@ -30,6 +30,7 @@ import (
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
+	agentpoolclient "github.com/Shaik-Sirajuddin/memory/svc/agentpool/client"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
 	"github.com/google/uuid"
@@ -58,8 +59,48 @@ type DefaultOperator struct {
 	agentMemory          operator.AgentMemory
 	provisioner          sandbox.SandboxProvisioner // nil = sandboxing disabled
 	ptyDaemon            ptyclients.Client
+	poolClient           *agentpoolclient.Client
 	newCodeAgent         func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	newCodeAgentForAgent func(agentID string, provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
+}
+
+// SetPoolClient attaches an agent pool client. When set, CreateAgent will
+// attempt to dequeue a pre-warmed session before starting one from scratch.
+func (o *DefaultOperator) SetPoolClient(c *agentpoolclient.Client) {
+	o.poolClient = c
+}
+
+// CreateAgentForPool creates a non-interactive agent and returns its agentID
+// and active sessionID. Intended for the pool daemon to pre-warm sessions.
+func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, workspace string) (agentID string, sessionID string, err error) {
+	_ = ctx
+	if err := o.CreateAgent(operator.CreateAgentParams{
+		Workspace:          sandbox.WorkspaceDir(workspace),
+		Provider:           codeagent.Provider(provider),
+		Interactive:        false,
+		AllowGeneratedName: true,
+	}); err != nil {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: create: %w", err)
+	}
+
+	agents, err := o.store.ListAgentsByDir(sandbox.WorkspaceDir(workspace))
+	if err != nil {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: list agents: %w", err)
+	}
+	// The newly created agent is appended last; find the most recently created.
+	if len(agents) == 0 {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: no agents found after create")
+	}
+	agent := agents[len(agents)-1]
+	agentID = agent.ID
+
+	if o.sessionStore != nil {
+		session, sErr := o.sessionStore.GetSession(agentID)
+		if sErr == nil && session != nil {
+			sessionID = session.Id
+		}
+	}
+	return agentID, sessionID, nil
 }
 
 type codexPTYAdapter struct {
@@ -980,6 +1021,47 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 					})
 				}
 			}
+		}
+	}
+
+	// Pool fast-path: attempt to dequeue a pre-warmed session before starting one
+	// from scratch. On a hit, create the agent store entry and record the session;
+	// the pool and operator stores are independent — no shared table.
+	if o.poolClient != nil {
+		if entry, poolErr := o.poolClient.Get(string(params.Provider), string(workspace)); poolErr == nil && entry != nil {
+			logger.Info("CreateAgent: pool hit — reusing pre-warmed session", "agentID", entry.AgentID, "sessionID", entry.SessionID)
+			agentID := entry.AgentID
+			if agentID == "" {
+				agentID = uuid.NewString()
+			}
+			agentName := sanitizeAgentName(params.Name)
+			if agentName == "" {
+				agentName = fmt.Sprintf("agent-%s", agentID[:8])
+			}
+			poolAgent := &omniagent.AgentInfo{
+				ID:           agentID,
+				Name:         agentName,
+				WorkspaceDir: workspace,
+				MemoryDir:    operator.AgentMemDir(string(workspace), agentName),
+			}
+			if storeErr := o.store.CreateAgent(poolAgent); storeErr != nil {
+				logger.Warn("CreateAgent: pool hit but store insert failed, falling through to normal path", "agentID", agentID, "err", storeErr)
+			} else {
+				if o.sessionStore != nil && entry.SessionID != "" {
+					sess := &omniagent.CodeSession{
+						Id:       entry.SessionID,
+						IsActive: true,
+						Status:   "ready",
+					}
+					if sessErr := o.sessionStore.CreateSession(agentID, sess); sessErr != nil {
+						logger.Warn("CreateAgent: pool hit but session write failed", "agentID", agentID, "sessionID", entry.SessionID, "err", sessErr)
+					}
+				}
+				logger.Info("CreateAgent: completed via pool", "agentID", agentID, "sessionID", entry.SessionID)
+				return nil
+			}
+		} else {
+			logger.Debug("CreateAgent: pool miss or error, using normal path", "provider", params.Provider, "workspace", workspace, "err", poolErr)
 		}
 	}
 
