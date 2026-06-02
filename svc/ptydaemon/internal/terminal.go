@@ -7,10 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal/bpaste"
 )
 
 type Status string
@@ -107,19 +104,6 @@ type PTYTerminal struct {
 	drainActive bool
 	drainParked bool // true while the drainer is parked (provably not reading)
 	drainClosed bool
-
-	// bpasteOn tracks whether the child currently has bracketed-paste mode
-	// (DECSET 2004) enabled. It is learned from the child's output stream:
-	// noteOutput while detached (drainLoop), or the attach client's paste-mode
-	// report via SetBracketedPaste while attached. execPrompt reads it to decide
-	// whether to bracket-wrap the prompt or inject it raw. Defaults false: until
-	// the enable sequence is positively observed we must not emit paste markers,
-	// or they leak into the TUI as literal text.
-	bpasteOn atomic.Bool
-	// bpScan carries detection state across drain reads so a DECSET/DECRST 2004
-	// sequence split across two reads is still caught. Touched only by the single
-	// drainLoop goroutine — no lock required.
-	bpScan bpaste.Scanner
 }
 
 func (t *PTYTerminal) write(p []byte) error {
@@ -217,11 +201,7 @@ func (t *PTYTerminal) drainLoop() {
 		// Bounded deadline so a paused/closed transition is noticed even when
 		// the child is silent.
 		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
-		n, err := m.Read(buf)
-		if n > 0 {
-			// Observe bracketed-paste mode toggles before discarding the bytes.
-			t.noteOutput(buf[:n])
-		}
+		_, err := m.Read(buf)
 		if err != nil {
 			if os.IsTimeout(err) {
 				continue
@@ -229,15 +209,6 @@ func (t *PTYTerminal) drainLoop() {
 			return // EOF / EIO / closed — master is gone
 		}
 		// bytes discarded; keep draining
-	}
-}
-
-// noteOutput scans a chunk of child output for DECSET/DECRST 2004 toggles and
-// updates bpasteOn to the most recent state seen, leaving it untouched when the
-// chunk carries no marker. Called only from the single drainLoop goroutine.
-func (t *PTYTerminal) noteOutput(b []byte) {
-	if on, changed := t.bpScan.Feed(b); changed {
-		t.bpasteOn.Store(on)
 	}
 }
 
@@ -324,8 +295,8 @@ func (t *PTYTerminal) readLastInput() []byte {
 // stale human input instead of the prompt.
 //
 //  1. ctrlU                          clear the human's partial line
-//  2. inject(prompt)                 bracketed-paste when the child has paste
-//     mode active, else raw (no submit yet)
+//  2. inject(prompt)                 bracketed-paste the prompt; paste mode
+//     (DECSET 2004) assumed active (no submit yet)
 //  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
 //  4. human input (once, no submit)  restore what the human was typing
 //
@@ -356,21 +327,14 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	// 2. Inject the prompt as its own write and let it settle. The submit must
 	//    not share this write or it races the paste.
 	//
-	//    Bracketed-paste framing is used ONLY when the child has paste mode
-	//    (DECSET 2004) active — observed from its output stream in noteOutput.
-	//    If it is not active (e.g. a TUI that never enables it, or exec racing
-	//    startup before the app turns it on), the \x1b[200~/201~ markers would be
-	//    inserted as literal text and surface in the user TUI, so fall back to a
-	//    raw write of the prompt.
-	bracketed := t.bpasteOn.Load()
-	var inject []byte
-	if bracketed {
-		inject = []byte(pasteStart + prompt + pasteEnd)
-	} else {
-		inject = []byte(prompt)
-	}
+	//    The prompt is always bracketed-paste framed (\x1b[200~ … \x1b[201~):
+	//    paste mode (DECSET 2004) is assumed active — every supported TUI enables
+	//    it at startup. Connectors must send the RAW prompt (no pre-wrap) or it
+	//    double-frames. Newline / multi-line intent is the prompt sender's
+	//    responsibility.
+	inject := []byte(pasteStart + prompt + pasteEnd)
 	ptylog.Debug("ptydaemon: execPrompt inject", "session_id", t.SessionID,
-		"bracketed_paste", bracketed, "prompt_len", len(prompt))
+		"prompt_len", len(prompt))
 	if err := t.write(inject); err != nil {
 		return err
 	}

@@ -131,8 +131,6 @@ func (d *Daemon) handleConn(conn *net.UnixConn) {
 	case "stdin-relay":
 		// Pass the bufio.Reader so pre-buffered bytes are not lost.
 		d.handleStdinRelay(conn, br, req)
-	case "paste-mode":
-		d.handlePasteMode(conn, req)
 	case "pipe":
 		d.handlePipe(conn, req)
 	case "exec":
@@ -341,25 +339,6 @@ func (d *Daemon) handleStdinRelay(conn *net.UnixConn, br *bufio.Reader, req Requ
 	if err := d.inner.StdinRelay(ctx, req.AgentID, req.SessionID, r); err != nil {
 		ptylog.Debug("stdin-relay ended", "session_id", req.SessionID, "err", err)
 	}
-}
-
-// handlePasteMode records the child's bracketed-paste (DECSET 2004) state as
-// observed by the attach client. While a client is attached it holds the master
-// fd and the daemon's drainer is paused, so the client is the only observer of
-// the child's output — it scans for 2004 toggles and reports them here, keeping
-// execPrompt's framing decision correct during an attach.
-func (d *Daemon) handlePasteMode(conn *net.UnixConn, req Request) {
-	if d.inner == nil {
-		respond(conn, Response{Error: "paste-mode requires a store-backed daemon"})
-		return
-	}
-	if err := d.inner.SetBracketedPaste(req.AgentID, req.SessionID, req.On); err != nil {
-		ptylog.Debug("paste-mode failed", "err", err, "session_id", req.SessionID)
-		respond(conn, Response{Error: err.Error()})
-		return
-	}
-	ptylog.Debug("paste-mode", "session_id", req.SessionID, "on", req.On)
-	respond(conn, Response{OK: true})
 }
 
 // handleDetach clears the attachment record for a session so the next caller

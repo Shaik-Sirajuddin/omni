@@ -21,9 +21,6 @@ type Request struct {
 	// Omitting both preserves the original unconditional-kill behaviour.
 	Safe  bool `json:"safe,omitempty"`
 	Force bool `json:"force,omitempty"`
-	// On carries the bracketed-paste (DECSET 2004) state for the paste-mode op,
-	// reported by the attach client when it observes the child toggle 2004.
-	On bool `json:"on,omitempty"`
 }
 
 // Response is the JSON envelope returned to clients.
