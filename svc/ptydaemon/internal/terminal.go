@@ -9,20 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-)
 
-// DECSET/DECRST 2004 are the terminal control sequences a TUI emits to enable
-// and disable bracketed-paste mode. The daemon observes them on the child's
-// output stream to know whether \x1b[200~/201~ paste framing will be consumed
-// by the app or rendered as literal text (see noteOutput / execPrompt).
-var (
-	bpEnableSeq  = []byte("\x1b[?2004h")
-	bpDisableSeq = []byte("\x1b[?2004l")
+	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal/bpaste"
 )
-
-// bpCarrySize is the longest DECSET/DECRST 2004 sequence minus one — the most a
-// match can straddle two consecutive drain reads.
-const bpCarrySize = 7
 
 type Status string
 
@@ -120,16 +109,17 @@ type PTYTerminal struct {
 	drainClosed bool
 
 	// bpasteOn tracks whether the child currently has bracketed-paste mode
-	// (DECSET 2004) enabled, learned by scanning its output in noteOutput.
-	// execPrompt reads it to decide whether to bracket-wrap the prompt or inject
-	// it raw. Defaults false: until we have positively observed the enable
-	// sequence we must not emit paste markers, or they leak into the TUI as text.
+	// (DECSET 2004) enabled. It is learned from the child's output stream:
+	// noteOutput while detached (drainLoop), or the attach client's paste-mode
+	// report via SetBracketedPaste while attached. execPrompt reads it to decide
+	// whether to bracket-wrap the prompt or inject it raw. Defaults false: until
+	// the enable sequence is positively observed we must not emit paste markers,
+	// or they leak into the TUI as literal text.
 	bpasteOn atomic.Bool
-	// bpCarry holds the tail of the previous drain read so a DECSET/DECRST 2004
-	// sequence split across two reads is still detected. Touched only by the
-	// single drainLoop goroutine — no lock required.
-	bpCarry  [bpCarrySize]byte
-	bpCarryN int
+	// bpScan carries detection state across drain reads so a DECSET/DECRST 2004
+	// sequence split across two reads is still caught. Touched only by the single
+	// drainLoop goroutine — no lock required.
+	bpScan bpaste.Scanner
 }
 
 func (t *PTYTerminal) write(p []byte) error {
@@ -140,6 +130,17 @@ func (t *PTYTerminal) write(p []byte) error {
 	}
 	_, err := t.master.Write(p)
 	return err
+}
+
+// writeHuman forwards a human-typed chunk to the master under execMu — the same
+// lock execPrompt holds across its whole clear→paste→submit→reinject sequence.
+// This keeps a keystroke from interleaving inside an in-flight exec (which would
+// corrupt the prompt line). The keystrokes are deferred while exec runs, not
+// dropped: they flush once the lock is released and surface after the prompt.
+func (t *PTYTerminal) writeHuman(chunk []byte) error {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	return t.write(chunk)
 }
 
 func (t *PTYTerminal) kill() error {
@@ -231,46 +232,13 @@ func (t *PTYTerminal) drainLoop() {
 	}
 }
 
-// noteOutput scans a chunk of child output for DECSET/DECRST 2004 (bracketed
-// paste enable/disable) and updates bpasteOn to the most recent state seen. A
-// small carry from the previous read is checked against the head of this one so
-// a sequence split across two reads is still caught. Called only from the single
-// drainLoop goroutine.
+// noteOutput scans a chunk of child output for DECSET/DECRST 2004 toggles and
+// updates bpasteOn to the most recent state seen, leaving it untouched when the
+// chunk carries no marker. Called only from the single drainLoop goroutine.
 func (t *PTYTerminal) noteOutput(b []byte) {
-	if len(b) == 0 {
-		return
+	if on, changed := t.bpScan.Feed(b); changed {
+		t.bpasteOn.Store(on)
 	}
-	// Boundary: previous carry tail + head of this chunk (enough to cover a
-	// straddling 8-byte sequence).
-	if t.bpCarryN > 0 {
-		m := len(b)
-		if m > bpCarrySize {
-			m = bpCarrySize
-		}
-		edge := make([]byte, 0, t.bpCarryN+m)
-		edge = append(edge, t.bpCarry[:t.bpCarryN]...)
-		edge = append(edge, b[:m]...)
-		t.scanBracketedPaste(edge)
-	}
-	t.scanBracketedPaste(b)
-	// Carry the tail for the next read.
-	keep := len(b)
-	if keep > bpCarrySize {
-		keep = bpCarrySize
-	}
-	copy(t.bpCarry[:], b[len(b)-keep:])
-	t.bpCarryN = keep
-}
-
-// scanBracketedPaste sets bpasteOn from the last enable/disable marker in buf.
-// No-op when buf contains neither.
-func (t *PTYTerminal) scanBracketedPaste(buf []byte) {
-	on := bytes.LastIndex(buf, bpEnableSeq)
-	off := bytes.LastIndex(buf, bpDisableSeq)
-	if on < 0 && off < 0 {
-		return
-	}
-	t.bpasteOn.Store(on > off)
 }
 
 // pauseDrain stops the drainer before a client takes over reading the master,
@@ -357,7 +325,7 @@ func (t *PTYTerminal) readLastInput() []byte {
 //
 //  1. ctrlU                          clear the human's partial line
 //  2. inject(prompt)                 bracketed-paste when the child has paste
-//                                     mode active, else raw (no submit yet)
+//     mode active, else raw (no submit yet)
 //  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
 //  4. human input (once, no submit)  restore what the human was typing
 //

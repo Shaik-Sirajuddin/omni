@@ -31,6 +31,11 @@ type PTYDaemon interface {
 	// tracking human input for ExecInSession write serialisation.
 	// Blocks until r returns EOF/error or ctx is cancelled.
 	StdinRelay(ctx context.Context, agentID, sessionID string, r io.Reader) error
+	// SetBracketedPaste records the child's bracketed-paste (DECSET 2004) state.
+	// Used by the attach client, which holds the master fd and is the sole
+	// observer of the child's output while attached (the daemon's drainer is
+	// paused), to report 2004 toggles back so execPrompt frames prompts correctly.
+	SetBracketedPaste(agentID, sessionID string, on bool) error
 	Shutdown(ctx context.Context) error
 }
 
@@ -152,6 +157,15 @@ func (d *defaultDaemon) Exec(agentID, sessionID, prompt string) error {
 		return ErrNotFound
 	}
 	return t.execPrompt(prompt)
+}
+
+func (d *defaultDaemon) SetBracketedPaste(agentID, sessionID string, on bool) error {
+	t := d.get(agentID, sessionID)
+	if t == nil {
+		return ErrNotFound
+	}
+	t.bpasteOn.Store(on)
+	return nil
 }
 
 func (d *defaultDaemon) Adopt(agentID, sessionID string, pid int, submitKey string) error {
@@ -310,7 +324,10 @@ func (d *defaultDaemon) StdinRelay(ctx context.Context, agentID, sessionID strin
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			if werr := t.write(chunk); werr != nil {
+			// writeHuman serialises against execPrompt so a keystroke can never
+			// land inside an in-flight exec sequence; it is deferred until exec
+			// completes, then surfaces after the prompt.
+			if werr := t.writeHuman(chunk); werr != nil {
 				return werr
 			}
 			t.trackHumanInput(chunk)

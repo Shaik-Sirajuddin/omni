@@ -20,6 +20,7 @@ import (
 
 	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
+	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal/bpaste"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -42,6 +43,7 @@ type unixRequest struct {
 	SubmitKey string   `json:"submit_key,omitempty"`
 	Safe      bool     `json:"safe,omitempty"`
 	Force     bool     `json:"force,omitempty"`
+	On        bool     `json:"on,omitempty"`
 }
 
 type unixResponse struct {
@@ -241,7 +243,16 @@ func (c *UnixSocketClient) Attach(ctx context.Context, sessionID string) error {
 		stdinDst = relayConn
 	}
 
-	if err := attachToTerminal(ctx, ptmx, stdinDst); err != nil {
+	// Report bracketed-paste toggles back to the daemon: while attached, this
+	// client is the sole reader of the child's output, so the daemon would
+	// otherwise miss a mid-attach DECSET 2004 change and frame the next exec wrong.
+	onPasteMode := func(on bool) {
+		if rerr := c.reportPasteMode(sessionID, on); rerr != nil {
+			ptylog.Debug("client: paste-mode report failed", "err", rerr, "session_id", sessionID, "on", on)
+		}
+	}
+
+	if err := attachToTerminal(ctx, ptmx, stdinDst, onPasteMode); err != nil {
 		ptylog.Error("client: attach terminal setup failed", "err", err, "session_id", sessionID)
 		return err
 	}
@@ -392,7 +403,15 @@ func (c *UnixSocketClient) do(req unixRequest) error {
 	return nil
 }
 
-func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) error {
+// reportPasteMode tells the daemon the child's current bracketed-paste (DECSET
+// 2004) state. The attach client is the only observer of the child's output
+// while attached (the daemon's drainer is paused), so it relays toggles here to
+// keep the daemon's exec framing decision correct.
+func (c *UnixSocketClient) reportPasteMode(sessionID string, on bool) error {
+	return c.do(unixRequest{Op: "paste-mode", SessionID: sessionID, On: on})
+}
+
+func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer, onPasteMode func(on bool)) error {
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		_ = ptmx.Close()
@@ -489,6 +508,8 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 	go func() {
 		buf := make([]byte, 32*1024)
 		first := true
+		var bpScan bpaste.Scanner
+		bpPrev := false
 		for {
 			n, rerr := ptmx.Read(buf)
 			if n > 0 {
@@ -499,6 +520,14 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 					select {
 					case painted <- struct{}{}:
 					default:
+					}
+				}
+				// Observe DECSET/DECRST 2004 toggles in the child's output and
+				// report only genuine flips (coalesced) back to the daemon.
+				if onPasteMode != nil {
+					if on, changed := bpScan.Feed(buf[:n]); changed && on != bpPrev {
+						bpPrev = on
+						onPasteMode(on)
 					}
 				}
 				if _, werr := os.Stdout.Write(buf[:n]); werr != nil {
