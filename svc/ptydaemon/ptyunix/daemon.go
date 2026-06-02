@@ -291,18 +291,30 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 	}
 	payload = append(payload, '\n')
 
+	// Pause idle draining BEFORE handing the fd to the client. pauseDrain blocks
+	// until the drainer is provably parked (drainParked), guaranteeing the daemon
+	// is no longer reading the master when the client takes over. If we sent the
+	// fd first, the still-active drainer and the client would race on read() over
+	// the same master for the handoff window — each read() steals bytes from the
+	// other, so the client receives torn escape sequences and the whole UI renders
+	// corrupted. Pausing first is strictly safe: the kernel PTY buffer simply
+	// accumulates during the tiny window until the client begins reading.
+	if aw, ok := d.inner.(attachAware); ok {
+		aw.OnAttach(req.AgentID, req.SessionID)
+	}
+
 	if _, _, err := conn.WriteMsgUnix(payload, rights, nil); err != nil {
 		ptylog.Error("SCM_RIGHTS send failed", "err", err, "session_id", req.SessionID)
+		// Roll back the drain pause so the child does not stall on a full buffer
+		// now that no client will read the master.
+		if aw, ok := d.inner.(attachAware); ok {
+			aw.OnDetach(req.AgentID, req.SessionID)
+		}
 		return
 	}
 
 	if clientPID > 0 {
 		d.attachedPIDs.Store(req.SessionID, clientPID)
-	}
-	// Pause idle draining (client is now the sole reader) and repaint so the
-	// client sees the current screen. repaint covers the brief handoff window.
-	if aw, ok := d.inner.(attachAware); ok {
-		aw.OnAttach(req.AgentID, req.SessionID)
 	}
 	ptylog.Info("fd granted to client", "session_id", req.SessionID, "client_pid", clientPID)
 }
