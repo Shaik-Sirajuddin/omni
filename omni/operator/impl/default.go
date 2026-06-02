@@ -340,15 +340,10 @@ func waitPTYReady(d ptyclients.Client, agentID, sessionID string) error {
 }
 
 func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*operator.ExecInSessionResult, error) {
-	// Resolve only the agent record here — no code agent runtime init (no binary
-	// lookup). The binary is only needed when the session is not live and we must
-	// auto-resume; for an already-running PTY session we write directly via the
-	// daemon and never touch the provider binary.
-	agent, err := o.resolveAgentRef(strings.TrimSpace(params.AgentID))
+	agent, ca, err := o.codeAgentForAgentID(params.AgentID)
 	if err != nil {
-		return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
+		return nil, err
 	}
-
 	sessionID := strings.TrimSpace(params.SessionID)
 	if sessionID == "" {
 		if o.sessionStore == nil {
@@ -365,8 +360,9 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	}
 
 	// Check whether the session is currently active via the pty daemon.
-	// MetaAttached is the fast path; fall back to Get for sessions running but
-	// not registered (connector did not return ProcessID).
+	// Option C: MetaAttached is the fast path; if it returns 0, fall back to Get so that
+	// sessions which are running but not registered (connector did not return ProcessID)
+	// are not incorrectly auto-resumed a second time.
 	sessionActive := false
 	sessionNeedsGrace := false
 	if o.ptyDaemon != nil {
@@ -377,7 +373,7 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		if params.LiveOnly {
 			return nil, fmt.Errorf("operator: exec in session: session %q is not active", sessionID)
 		}
-		// Auto-resume requires the full code agent runtime (binary lookup etc.).
+		// Auto-resume the agent before executing.
 		logger.Info("ExecInSession: session not active, auto-resuming", "agentID", agent.ID, "sessionID", sessionID)
 		if err := o.ResumeAgent(operator.ResumeAgentParams{
 			Workspace: agent.WorkspaceDir,
@@ -388,30 +384,22 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 			return nil, fmt.Errorf("operator: exec in session: auto-resume: %w", err)
 		}
 		sessionNeedsGrace = true
+		// Re-init ca after resume since the connector instance may be stale.
+		_, ca, err = o.codeAgentForAgentID(params.AgentID)
+		if err != nil {
+			return nil, fmt.Errorf("operator: exec in session: re-init after resume: %w", err)
+		}
 	}
 
-	// Wait for PTY to be ready after a resume or in detached mode.
+	// Option B: run waitPTYReady when a resume just happened (sessionNeedsGrace) OR
+	// when the caller explicitly signals detached mode — the TUI may not be ready
+	// even if the session was not started recently (timing depends on the caller).
 	if (sessionNeedsGrace || params.Detached) && o.ptyDaemon != nil {
 		if err := waitPTYReady(o.ptyDaemon, agent.ID, sessionID); err != nil {
 			logger.Warn("ExecInSession: PTY readiness wait timed out", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 		}
 	}
 
-	// When the PTY daemon is available, write the prompt directly — no code agent
-	// runtime (and therefore no binary) required.
-	if o.ptyDaemon != nil {
-		if err := o.ptyDaemon.Exec(sessionID, params.Prompt); err != nil {
-			return nil, fmt.Errorf("operator: exec in session: %w", err)
-		}
-		logger.Info("ExecInSession: prompt delivered via PTY daemon", "agentID", agent.ID, "sessionID", sessionID)
-		return &operator.ExecInSessionResult{SessionID: sessionID}, nil
-	}
-
-	// No PTY daemon — fall back to the code agent (non-PTY path, e.g. claude stdio).
-	_, ca, err := o.codeAgentForAgentID(params.AgentID)
-	if err != nil {
-		return nil, err
-	}
 	result, err := ca.ExecInSession(codeagent.ExecInSessionParams{
 		SessionID: sessionID,
 		Prompt:    params.Prompt,
