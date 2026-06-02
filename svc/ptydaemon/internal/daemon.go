@@ -310,7 +310,10 @@ func (d *defaultDaemon) StdinRelay(ctx context.Context, agentID, sessionID strin
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			if werr := t.write(chunk); werr != nil {
+			// writeHuman serialises against execPrompt so a keystroke can never
+			// land inside an in-flight exec sequence; it is deferred until exec
+			// completes, then surfaces after the prompt.
+			if werr := t.writeHuman(chunk); werr != nil {
 				return werr
 			}
 			t.trackHumanInput(chunk)
