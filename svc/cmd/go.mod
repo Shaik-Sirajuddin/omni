@@ -9,13 +9,13 @@ require (
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/config_sync v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
-	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 )
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0 // indirect
+	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
