@@ -20,7 +20,7 @@ import (
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
 )
 
-const defaultAuthToken = "tunnel-mcp-dev-token"
+const defaultAuthToken = "axolink-dev-token"
 const serviceVersion = "0.0.2"
 const defaultMCPHTTPPath = "/mcp"
 

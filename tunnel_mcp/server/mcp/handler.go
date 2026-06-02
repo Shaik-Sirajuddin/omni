@@ -18,7 +18,7 @@ import (
 
 var logger = pkglog.NewLogger("component", "mcp-handler")
 
-const serverInstructions = `You are an agent connected to the tunnel-mcp messaging system.
+const serverInstructions = `You are an agent connected to the axolink messaging system.
 
 Authentication headers (set by your runtime — do not override):
   X-SENDER-ID:       your agent id
@@ -83,6 +83,9 @@ func senderContextFromRequest(ctx context.Context, r *http.Request) context.Cont
 	} else {
 		logger.Warn("mcp sender type parse failed", "err", err, "sender_id", sender.ID, "sender_type", r.Header.Get("X-SENDER-TYPE"), "workspace", sender.Workspace, "path", r.URL.Path)
 	}
+	if sender.ID == "" {
+		logger.Warn("mcp anonymous connection — X-SENDER-ID missing; tool calls requiring auth will fail", "sender_type", r.Header.Get("X-SENDER-TYPE"), "path", r.URL.Path)
+	}
 	logger.Debug("mcp sender context extracted", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace, "path", r.URL.Path)
 	return context.WithValue(ctx, senderContextKey{}, sender)
 }
@@ -109,7 +112,7 @@ func senderFromContext(ctx context.Context) (service.SenderSpec, error) {
 
 func (h *Handler) buildMCPServer() *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
-		"tunnel-mcp",
+		"axolink",
 		h.serviceVersion,
 		mcpserver.WithToolCapabilities(true),
 		mcpserver.WithPromptCapabilities(true),
@@ -121,7 +124,7 @@ func (h *Handler) buildMCPServer() *mcpserver.MCPServer {
 }
 
 func (h *Handler) MCPHandler() http.Handler {
-	logger.Info("mcp streamable handler initializing", "service", "tunnel-mcp", "version", h.serviceVersion)
+	logger.Info("mcp streamable handler initializing", "service", "axolink", "version", h.serviceVersion)
 	return mcpserver.NewStreamableHTTPServer(
 		h.buildMCPServer(),
 		mcpserver.WithHTTPContextFunc(senderContextFromRequest),
@@ -306,7 +309,7 @@ func (h *Handler) handleMCPHealth(_ context.Context, _ mcp.CallToolRequest) (*mc
 	logger.Debug("mcp tool call received", "tool", "health")
 	resp := service.HealthResponse{
 		Status:    "ok",
-		Service:   "tunnel-mcp",
+		Service:   "axolink",
 		Version:   h.serviceVersion,
 		Transport: "mcp",
 	}

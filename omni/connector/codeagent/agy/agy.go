@@ -76,6 +76,12 @@ type agyAgent struct {
 // New returns a CodeAgent backed by the local agy CLI binary.
 // workDir defaults to the process working directory; model defaults to DefaultModel.
 // c is the PTY daemon client used by ExecInSession; pass nil to disable PTY support.
+// init registers a bare MCP manager so GlobalMCPRegistry is populated at
+// package import time — before any agent session is created.
+func init() {
+	codeagent.GlobalMCPRegistry.Register(Agy, &agyAgent{})
+}
+
 func New(workDir, model string, c codeagent.PTYClient) (codeagent.CodeAgent, error) {
 	binPath, err := lookPath("agy")
 	if err != nil {

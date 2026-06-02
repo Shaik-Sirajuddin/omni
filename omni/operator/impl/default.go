@@ -43,7 +43,7 @@ const (
 	providerGemini codeagent.Provider = "gemini"
 	providerAgy    codeagent.Provider = "agy"
 
-	mcpAuthToken  = "tunnel-mcp-dev-token"
+	mcpAuthToken  = "axolink-dev-token"
 	mcpSenderType = "omni_agent"
 )
 
@@ -391,10 +391,10 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		}
 	}
 
-	// Option B: when a resume just happened or the session was started very recently by an
-	// external caller (e.g. CLI --resume), poll until the PTY process is confirmed active then
-	// wait a grace period so the agent TUI finishes initialising before exec input arrives.
-	if sessionNeedsGrace && o.ptyDaemon != nil {
+	// Option B: run waitPTYReady when a resume just happened (sessionNeedsGrace) OR
+	// when the caller explicitly signals detached mode — the TUI may not be ready
+	// even if the session was not started recently (timing depends on the caller).
+	if (sessionNeedsGrace || params.Detached) && o.ptyDaemon != nil {
 		if err := waitPTYReady(o.ptyDaemon, agent.ID, sessionID); err != nil {
 			logger.Warn("ExecInSession: PTY readiness wait timed out", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 		}
@@ -403,6 +403,7 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	result, err := ca.ExecInSession(codeagent.ExecInSessionParams{
 		SessionID: sessionID,
 		Prompt:    params.Prompt,
+		Detached:  params.Detached,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("operator: exec in session: %w", err)

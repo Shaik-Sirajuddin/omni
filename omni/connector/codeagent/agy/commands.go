@@ -19,13 +19,9 @@ const (
 	Agy codeagent.Provider = "agy"
 )
 
-// PTY bracketed-paste and submit constants for ExecInSession.
-const (
-	submitKey  = "\x1b[13;2u" // CSI-u Shift+Enter
-	ctrlU      = "\x15"
-	pasteStart = "\x1b[200~"
-	pasteEnd   = "\x1b[201~"
-)
+// submitKey is the CSI-u Shift+Enter sequence passed to the ptydaemon on Start
+// so it knows how to submit injected prompts.
+const submitKey = "\x1b[13;2u" // CSI-u Shift+Enter
 
 // interactiveStdin/Stdout/Stderr are the I/O streams used by Resume.
 // They are package-level vars so tests can substitute non-TTY writers.
@@ -154,9 +150,9 @@ func (a *agyAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeSes
 		return nil, errors.New("agy: resume: empty session id")
 	}
 
-	args := []string{"--conversation", resumeID}
+	args := []string{"--conversation=" + resumeID}
 	if p.ForkSession {
-		args = append(args, "--continue")
+		args = append(args, "-c")
 	}
 
 	// sandbox disabled:
@@ -298,7 +294,6 @@ func (a *agyAgent) ExecInSession(p codeagent.ExecInSessionParams) (*codeagent.Ex
 	sessionID := a.sessionID
 	a.mu.RUnlock()
 
-	payload := buildExecPayload(p.Prompt)
 	if p.SessionID != "" {
 		sessionID = p.SessionID
 	}
@@ -308,7 +303,11 @@ func (a *agyAgent) ExecInSession(p codeagent.ExecInSessionParams) (*codeagent.Ex
 	if client == nil {
 		return nil, fmt.Errorf("agy: ExecInSession: no active PTY session")
 	}
-	if err := client.Exec(sessionID, string(payload)); err != nil {
+	// Send the raw prompt: the ptydaemon's execPrompt owns all input framing
+	// (clear-line, bracketed paste, submit key, human-input reinjection). Wrapping
+	// here too would double-frame the payload, nesting the inner paste/submit bytes
+	// inside the daemon's outer paste where the TUI renders them as literal text.
+	if err := client.Exec(sessionID, p.Prompt); err != nil {
 		return nil, fmt.Errorf("agy: ExecInSession: session not live: %w", err)
 	}
 
@@ -421,16 +420,6 @@ func (a *agyAgent) Stream(p codeagent.StreamParams) (*codeagent.StreamResult, er
 }
 
 // ============================================================
-// PTY helpers
-// ============================================================
-
-// buildExecPayload constructs the bracketed-paste sequence used by ExecInSession
-// to inject a prompt into a live PTY without triggering mid-paste interpretation.
-func buildExecPayload(prompt string) []byte {
-	return []byte(ctrlU + pasteStart + prompt + pasteEnd + submitKey)
-}
-
-// ============================================================
 // Arg builders
 // ============================================================
 
@@ -441,7 +430,7 @@ func buildExecArgs(prompt, model string, permMode codeagent.PermissionMode, syst
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	if sessionID != "" {
-		args = append(args, "--conversation", sessionID)
+		args = append(args, "--conversation="+sessionID)
 	}
 	return args
 }
@@ -452,7 +441,7 @@ func buildStreamArgs(prompt, model string, permMode codeagent.PermissionMode, sy
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	if sessionID != "" {
-		args = append(args, "--conversation", sessionID)
+		args = append(args, "--conversation="+sessionID)
 	}
 	return args
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
 	connlog "github.com/Shaik-Sirajuddin/memory/connector/codeagent/log"
@@ -94,6 +95,12 @@ type codexAgent struct {
 	registeredHooks []*hooks.HookData
 	resolver        *settings.Resolver
 	ptyClient       codeagent.PTYClient
+	locker          filelock.Locker
+}
+
+func init() {
+	// locker must be initialized; withMCPConfig calls a.locker.Lock which panics on nil.
+	codeagent.GlobalMCPRegistry.Register(Codex, &codexAgent{locker: filelock.New()})
 }
 
 // New returns a CodeAgent backed by the local codex CLI binary.
@@ -128,6 +135,7 @@ func New(workDir, model string, c codeagent.PTYClient, opts ...Option) (codeagen
 		ptyClient: c,
 		info:      codeagent.CodeAgentInfo{Provider: Codex, Name: "codex", Version: ver},
 		resolver:  settings.New(Codex),
+		locker:    filelock.New(),
 	}
 	for _, opt := range opts {
 		opt(a)

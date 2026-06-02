@@ -626,7 +626,7 @@ type promptPayload struct {
 
 var warmUpInstruction = map[message.RequestType]string{
 	reqTypeExecute: "Execute the following task. Call `update_message` or `update_messages` after completing the task.",
-	reqTypeQuery:   "Answer the following queries. Use the tunnel_mcp query_result tool (or query_result_batch for multiple) to send your response back, passing the message_id and your answer as the response.",
+	reqTypeQuery:   "Answer the following queries. Use the axolink query_result tool (or query_result_batch for multiple) to send your response back, passing the message_id and your answer as the response.",
 	reqTypeInstant: "Process the following messages",
 }
 
@@ -982,7 +982,7 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 	go e.executeLoop(agentID)
 }
 
-// mandatoryToolNames is the set of tunnel_mcp tool names that confirm delivery.
+// mandatoryToolNames is the set of axolink tool names that confirm delivery.
 var mandatoryToolNames = map[string]bool{
 	"update_message":     true, // execute
 	"update_messages":    true, // execute (batch)

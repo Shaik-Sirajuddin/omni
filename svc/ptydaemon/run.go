@@ -1,18 +1,14 @@
+//go:build linux
+
 package ptydaemon
 
 import (
 	"context"
 	"time"
 
-	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/internal"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/ptyunix"
 )
-
-// DefaultSocketPath returns the per-user Unix socket path for the PTY daemon.
-func DefaultSocketPath() string {
-	return sockpath.PTY()
-}
 
 // Run wires the store, daemon, and unix socket server, then blocks until ctx
 // is cancelled. A 10-second graceful shutdown is attempted before returning.

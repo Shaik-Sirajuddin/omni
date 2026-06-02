@@ -929,6 +929,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 				AgentID:   resolvedID,
 				SessionID: sessionID,
 				Prompt:    prompt,
+				Detached:  resume,
 			}); err != nil {
 				return err
 			}
@@ -1107,8 +1108,8 @@ func (c *DefaultCli) newAgentSandboxSyncCommand() *cobra.Command {
 
 func (c *DefaultCli) newAxoLinkCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "axo-link",
-		Short: "Start the axo-link MCP service (stdio transport)",
+		Use:   "axolink",
+		Short: "Start the axolink MCP service (stdio transport)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := runner.DefaultConfig()
 			cfg.Transport = runner.TransportStdio

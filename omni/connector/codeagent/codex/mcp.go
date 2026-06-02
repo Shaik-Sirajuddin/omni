@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
@@ -24,67 +23,35 @@ func (a *codexAgent) configPathForMCP(global bool) (string, error) {
 	return filepath.Join(a.workDir, ".codex", "config.toml"), nil
 }
 
-// withMCPConfig runs fn under mcpMu, providing the full raw TOML map.
-// It checks the file mtime before writing to detect external modifications,
-// retrying up to 3 times before giving up.
-func withMCPConfig(path string, fn func(raw map[string]interface{}) error) error {
-	for attempt := 0; attempt < 3; attempt++ {
-		mcpMu.Lock()
-
-		fi1, _ := os.Stat(path)
-		raw, err := readConfigTOML(path)
-		if err != nil {
-			mcpMu.Unlock()
-			return err
-		}
-
-		if err := fn(raw); err != nil {
-			mcpMu.Unlock()
-			return err
-		}
-
-		fi2, _ := os.Stat(path)
-		if fi1 != nil && fi2 != nil && fi1.ModTime() != fi2.ModTime() {
-			mcpMu.Unlock()
-			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
-			continue
-		}
-
-		err = writeConfigTOMLAtomic(path, raw)
-		mcpMu.Unlock()
-		return err
-	}
-	return fmt.Errorf("codex: mcp: concurrent modification after 3 retries")
-}
-
-// writeConfigTOMLAtomic encodes cfg as TOML and renames a temp file into path.
-func writeConfigTOMLAtomic(path string, cfg map[string]interface{}) error {
+// withMCPConfig runs fn under the file lock and mcpMu, providing the full raw
+// TOML map. The file lock (via a.locker) serializes external processes; mcpMu
+// serializes goroutines within this process.
+func (a *codexAgent) withMCPConfig(path string, fn func(raw map[string]interface{}) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("codex: mkdir %s: %w", filepath.Dir(path), err)
 	}
+	lockPath := filepath.Join(filepath.Dir(path), ".config.toml.lock")
+	unlock, err := a.locker.Lock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	mcpMu.Lock()
+	defer mcpMu.Unlock()
+
+	raw, err := readConfigTOML(path)
+	if err != nil {
+		return err
+	}
+	if err := fn(raw); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
 		return fmt.Errorf("codex: encode config.toml: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.toml.tmp")
-	if err != nil {
-		return fmt.Errorf("codex: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("codex: write temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("codex: close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("codex: rename config: %w", err)
-	}
-	return nil
+	return a.locker.WriteAtomic(path, buf.Bytes())
 }
 
 // mcpServerToRaw converts MCPServer → map[string]interface{} using JSON as
@@ -111,6 +78,9 @@ func mcpServerToRaw(s codeagent.MCPServer) (map[string]interface{}, error) {
 	}
 	if len(s.Headers) > 0 {
 		cfg.HttpHeaders = RawMcpServerConfigHttpHeaders(s.Headers)
+	}
+	if len(s.EnvHeaders) > 0 {
+		cfg.EnvHttpHeaders = RawMcpServerConfigEnvHttpHeaders(s.EnvHeaders)
 	}
 	if s.Timeout > 0 {
 		ms := s.Timeout
@@ -154,6 +124,9 @@ func rawToMCPServer(name string, v interface{}) (codeagent.MCPServer, error) {
 	if len(cfg.HttpHeaders) > 0 {
 		s.Headers = map[string]string(cfg.HttpHeaders)
 	}
+	if len(cfg.EnvHttpHeaders) > 0 {
+		s.EnvHeaders = map[string]string(cfg.EnvHttpHeaders)
+	}
 	if cfg.StartupTimeoutMs != nil {
 		s.Timeout = *cfg.StartupTimeoutMs
 	}
@@ -178,7 +151,7 @@ func (a *codexAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult, 
 	if err != nil {
 		return nil, err
 	}
-	err = withMCPConfig(path, func(raw map[string]interface{}) error {
+	err = a.withMCPConfig(path, func(raw map[string]interface{}) error {
 		servers := getMCPServersRaw(raw)
 		entry, err := mcpServerToRaw(p.Server)
 		if err != nil {
@@ -201,9 +174,15 @@ func (a *codexAgent) ListMCP(p codeagent.ListMCPParams) (*codeagent.ListMCPResul
 		return nil, err
 	}
 
+	lockPath := filepath.Join(filepath.Dir(path), ".config.toml.lock")
+	runlock, err := a.locker.RLock(lockPath)
+	if err != nil {
+		return nil, err
+	}
 	mcpMu.RLock()
 	raw, err := readConfigTOML(path)
 	mcpMu.RUnlock()
+	runlock()
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +205,7 @@ func (a *codexAgent) DeleteMCP(p codeagent.DeleteMCPParams) (*codeagent.DeleteMC
 	if err != nil {
 		return nil, err
 	}
-	err = withMCPConfig(path, func(raw map[string]interface{}) error {
+	err = a.withMCPConfig(path, func(raw map[string]interface{}) error {
 		servers := getMCPServersRaw(raw)
 		delete(servers, p.Name)
 		raw["mcp_servers"] = servers
@@ -244,7 +223,7 @@ func (a *codexAgent) SetMCPToolPrompt(p codeagent.SetMCPToolPromptParams) (*code
 	if err != nil {
 		return nil, err
 	}
-	err = withMCPConfig(path, func(raw map[string]interface{}) error {
+	err = a.withMCPConfig(path, func(raw map[string]interface{}) error {
 		servers := getMCPServersRaw(raw)
 		srv, _ := servers[p.Prompt.ServerName].(map[string]interface{})
 		if srv == nil {

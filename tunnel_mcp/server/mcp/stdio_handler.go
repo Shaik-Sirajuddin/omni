@@ -36,8 +36,8 @@ func NewStdioHandler(ps *proxy.ProxyServer, opts ...StdioOption) *StdioHandler {
 }
 
 func (h *StdioHandler) StdioServer() *mcpserver.StdioServer {
-	logger.Info("mcp stdio handler initializing", "service", "tunnel-mcp", "version", h.serviceVersion)
-	mcpSrv := mcpserver.NewMCPServer("tunnel-mcp", h.serviceVersion, mcpserver.WithToolCapabilities(true))
+	logger.Info("mcp stdio handler initializing", "service", "axolink", "version", h.serviceVersion)
+	mcpSrv := mcpserver.NewMCPServer("axolink", h.serviceVersion, mcpserver.WithToolCapabilities(true))
 	h.registerTools(mcpSrv)
 	s := mcpserver.NewStdioServer(mcpSrv)
 	sender := h.sender

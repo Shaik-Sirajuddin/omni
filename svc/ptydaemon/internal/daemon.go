@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/creack/pty"
+	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
 )
 
 var ErrNotFound = errors.New("terminal not found")
@@ -85,10 +85,11 @@ func (d *defaultDaemon) Create(p PTYCreateParams) (*PTYTerminalInfo, error) {
 	cmd.Env = append(os.Environ(), p.Env...)
 	cmd.Dir = p.Dir
 
-	master, err := pty.Start(cmd)
+	ptm, err := pkgpty.StartCmd(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("pty start: %w", err)
 	}
+	master := ptm.Master()
 
 	info := PTYTerminalInfo{
 		AgentID:   p.AgentID,
