@@ -9,6 +9,7 @@ require (
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/config_sync v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 )
@@ -66,6 +67,7 @@ require (
 replace (
 	github.com/Shaik-Sirajuddin/memory => ../../omni
 	github.com/Shaik-Sirajuddin/memory/mcp => ../../tunnel_mcp
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../../pkg/filelock
 	github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
 	github.com/Shaik-Sirajuddin/memory/pkg/pty => ../../pkg/pty
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
