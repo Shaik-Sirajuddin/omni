@@ -213,7 +213,7 @@ func TestMCPQueryResult(t *testing.T) {
 		assert.Equal(t, "query-1", got.RespondedTo, "Query response should link original message")
 		assert.Equal(t, "query answer", got.Prompt, "Query response text should be stored as message body")
 		assert.Equal(t, message.StatusInQueue, got.Status, "Query response should be queued")
-		assert.JSONEq(t, `{"author":"tunnel-mcp","author_agent_id":"sender-1","reply_to_message_id":"query-1","original_sender":"agent-1"}`, got.Refs, "Query response refs should include reply metadata")
+		assert.JSONEq(t, `{"author":"axolink","author_agent_id":"sender-1","reply_to_message_id":"query-1","original_sender":"agent-1"}`, got.Refs, "Query response refs should include reply metadata")
 
 		original, err := msgStore.GetMessage(ctx, "query-1")
 		require.NoError(t, err, "Original query message should be retrievable")

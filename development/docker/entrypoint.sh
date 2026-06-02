@@ -105,7 +105,7 @@ seed_mcp_json() {
   cat > "$path" <<EOF
 {
   "mcpServers": {
-    "tunnel-mcp": {
+    "axolink": {
       "type": "http",
       "url": "${url}",
       "headers": {
@@ -236,8 +236,8 @@ PYEOF
   # if os.path.exists(path):
   #     try: cfg = json.load(open(path))
   #     except Exception: cfg = {}
-  # cfg.setdefault("enabledMcpjsonServers", ["tunnel-mcp"])
-  # cfg.setdefault("permissions", {}).setdefault("allow", ["mcp__tunnel-mcp__*"])
+  # cfg.setdefault("enabledMcpjsonServers", ["axolink"])
+  # cfg.setdefault("permissions", {}).setdefault("allow", ["mcp__axolink__*"])
   # env = cfg.setdefault("env", {})
   # for var in ["AXO_LINK_MCP_AUTH_TOKEN","AXO_LINK_MCP_SENDER_ID","AXO_LINK_MCP_SENDER_TYPE","AXO_LINK_MCP_AGENT_WORKSPACE"]:
   #     val = os.environ.get(var, "")
@@ -258,7 +258,7 @@ PYEOF
   #   cat > "$agy_mcp_config" <<'EOF'
   # {
   #   "mcpServers": {
-  #     "tunnel-mcp": {
+  #     "axolink": {
   #       "command": "omni",
   #       "args": ["axo-link"],
   #       "env": {
