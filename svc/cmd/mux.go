@@ -110,7 +110,7 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 						Name:      "axolink",
 						Transport: codeagent.MCPTransportStdio,
 						Command:   omniPath,
-						Args:      []string{"axo-link"},
+						Args:      []string{"axolink"},
 					},
 					Global: true,
 				}); err != nil {
@@ -120,7 +120,7 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 						log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
 					}
 				} else {
-					log.Info("axolink-mcp: registered with connector", "provider", provider, "command", omniPath, "args", []string{"axo-link"})
+					log.Info("axolink-mcp: registered with connector", "provider", provider, "command", omniPath, "args", []string{"axolink"})
 				}
 			}
 		}
