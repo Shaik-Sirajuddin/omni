@@ -33,11 +33,6 @@ const (
 	// carrySize must cover the longest escape sequence we detect (7 bytes for CSI-u shift-enter).
 	carrySize = 8
 
-	// pasteSettle is the pause between clear, paste, and submit so the TUI
-	// applies each step in order. Without it the submit key races ahead of the
-	// bracketed paste and lands on stale user input.
-	pasteSettle = 40 * time.Millisecond
-
 	// drainReadTimeout bounds each idle-drain read so the drainer periodically
 	// re-checks pause/close state even when the child is silent.
 	drainReadTimeout = 200 * time.Millisecond
@@ -290,18 +285,25 @@ func (t *PTYTerminal) readLastInput() []byte {
 }
 
 // execPrompt sends a bot prompt while preserving the user's partial input.
-// Each step is a separate PTY write so the TUI applies them in order — a single
-// concatenated write lets the submit key race ahead of the paste and submit
-// stale user input instead of the prompt.
 //
-//  1. ctrlU                          clear the user's partial line
-//  2. inject(prompt)                 bracketed-paste the prompt; paste mode
-//     (DECSET 2004) assumed active (no submit yet)
-//  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
-//  4. user input (once, no submit)  restore what the user was typing
+// The clear+paste+submit is a SINGLE atomic write: a PTY is an ordered byte
+// stream, so the child reads ctrlU → \x1b[200~ → prompt → \x1b[201~ → submit in
+// exactly that order and parses them sequentially (201~ closes the paste before
+// the submit byte, so the submit is a real keypress, not pasted text). One write
+// means there is no inter-write gap for the child's own render output to
+// interleave with the half-injected paste — the split-with-sleeps version let
+// the paste land at a stale cursor / in the output area.
 //
-// execMu is held across the whole sequence (including the settle/retry sleeps)
-// so concurrent exec calls cannot interleave their writes.
+//  1. ctrlU + \x1b[200~ prompt \x1b[201~ + submit   one atomic write
+//  2. submit [+ retries]                            bare resubmit if the TUI swallowed it
+//  3. user input (once, no submit)                  restore what the user was typing
+//
+// paste mode (DECSET 2004) is assumed active — every supported TUI enables it at
+// startup. Connectors must send the RAW prompt (no pre-wrap) or it double-frames;
+// newline / multi-line intent is the prompt sender's responsibility.
+//
+// execMu is held across the whole sequence (including the retry sleeps) so
+// concurrent exec calls cannot interleave their writes.
 func (t *PTYTerminal) execPrompt(prompt string) error {
 	// Snapshot the user's partial input up front; restored at the end. Never pops.
 	user := t.readLastInput()
@@ -309,43 +311,23 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	t.execMu.Lock()
 	defer t.execMu.Unlock()
 
-	// Step-level trace so a "prompt visible in TUI but not submitted / shown as
-	// literal escape codes" report can be pinned to a specific stage. The prompt
-	// must arrive raw here (no caller-side bracketed-paste/submit framing): this
-	// method is the single owner of framing — see handleExec.
+	// The prompt must arrive raw here (no caller-side bracketed-paste/submit
+	// framing): this method is the single owner of framing — see handleExec.
 	ptylog.Debug("ptydaemon: execPrompt begin", "session_id", t.SessionID,
 		"submit_key", t.submitKey, "prompt_len", len(prompt),
 		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "user_carry", len(user))
 
-	// 1. Clear the user's partial line, then let the TUI apply it before we
-	//    paste — otherwise the clear races behind the paste/submit.
-	if err := t.write([]byte(ctrlU)); err != nil {
-		return err
-	}
-	time.Sleep(pasteSettle)
-
-	// 2. Inject the prompt as its own write and let it settle. The submit must
-	//    not share this write or it races the paste.
-	//
-	//    The prompt is always bracketed-paste framed (\x1b[200~ … \x1b[201~):
-	//    paste mode (DECSET 2004) is assumed active — every supported TUI enables
-	//    it at startup. Connectors must send the RAW prompt (no pre-wrap) or it
-	//    double-frames. Newline / multi-line intent is the prompt sender's
-	//    responsibility.
-	inject := []byte(pasteStart + prompt + pasteEnd)
-	ptylog.Debug("ptydaemon: execPrompt inject", "session_id", t.SessionID,
-		"prompt_len", len(prompt))
-	if err := t.write(inject); err != nil {
-		return err
-	}
-	time.Sleep(pasteSettle)
-
-	// 3. Submit. Retries send the bare submit key only (no ctrlU) so a prompt
-	//    still sitting in the buffer is pushed through rather than wiped.
+	// 1. One atomic write: clear line, bracketed-paste the prompt, submit. The
+	//    child reads this in order; 201~ closes the paste before the submit byte.
 	submit := submitSeq(t.submitKey)
-	if err := t.write(submit); err != nil {
+	payload := append([]byte(ctrlU+pasteStart+prompt+pasteEnd), submit...)
+	if err := t.write(payload); err != nil {
 		return err
 	}
+
+	// 2. Submit retries: bare submit key only (no ctrlU/paste) so a prompt still
+	//    sitting in the buffer is pushed through if the TUI swallowed the first
+	//    submit, rather than wiped.
 	for i, delay := range submitRetryDelays {
 		time.Sleep(delay)
 		werr := t.write(submit)
@@ -355,7 +337,7 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 		}
 	}
 
-	// 4. Restore the user's partial input (no submit) so they see it again.
+	// 3. Restore the user's partial input (no submit) so they see it again.
 	if len(user) > 0 {
 		if err := t.write(user); err != nil {
 			return err
