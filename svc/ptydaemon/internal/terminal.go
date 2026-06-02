@@ -3,12 +3,20 @@ package internal
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 )
+
+// dbgBytes renders a byte slice for debug logs: a Go-quoted form (control and
+// escape bytes visible as \x1b, \r, …) plus a raw hex dump. Use to inspect what
+// actually lands on the PTY master so a malformed/duplicated chunk is obvious.
+func dbgBytes(b []byte) string {
+	return fmt.Sprintf("%q hex=% x", b, b)
+}
 
 type Status string
 
@@ -117,8 +125,14 @@ func (t *PTYTerminal) write(p []byte) error {
 // corrupt the prompt line). The keystrokes are deferred while exec runs, not
 // dropped: they flush once the lock is released and surface after the prompt.
 func (t *PTYTerminal) writeUser(chunk []byte) error {
+	// Time the wait on execMu separately from the write: a large wait means a
+	// keystroke was stalled behind an in-flight exec (no echo until it lands).
+	waitStart := time.Now()
 	t.execMu.Lock()
+	waited := time.Since(waitStart)
 	defer t.execMu.Unlock()
+	ptylog.Debug("ptydaemon: writeUser", "session_id", t.SessionID,
+		"chunk", dbgBytes(chunk), "len", len(chunk), "execmu_wait_ms", waited.Milliseconds())
 	return t.write(chunk)
 }
 
@@ -321,6 +335,8 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	//    child reads this in order; 201~ closes the paste before the submit byte.
 	submit := submitSeq(t.submitKey)
 	payload := append([]byte(ctrlU+pasteStart+prompt+pasteEnd), submit...)
+	ptylog.Debug("ptydaemon: execPrompt payload", "session_id", t.SessionID,
+		"payload", dbgBytes(payload), "len", len(payload))
 	if err := t.write(payload); err != nil {
 		return err
 	}
@@ -339,6 +355,8 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 
 	// 3. Restore the user's partial input (no submit) so they see it again.
 	if len(user) > 0 {
+		ptylog.Debug("ptydaemon: execPrompt reinject user", "session_id", t.SessionID,
+			"user", dbgBytes(user), "len", len(user))
 		if err := t.write(user); err != nil {
 			return err
 		}
@@ -427,6 +445,9 @@ func (t *PTYTerminal) trackUserInput(chunk []byte) {
 	if len(t.inputQueue[t.queueLen]) > maxInputBuf {
 		t.inputQueue[t.queueLen] = t.inputQueue[t.queueLen][len(t.inputQueue[t.queueLen])-maxInputBuf:]
 	}
+	ptylog.Debug("ptydaemon: trackUserInput", "session_id", t.SessionID,
+		"chunk", dbgBytes(chunk), "in_paste", t.inBracketedPaste,
+		"queue_len", t.queueLen, "active", dbgBytes(t.inputQueue[t.queueLen]))
 }
 
 // isSubmitOrClear returns true when b contains a line-submit or clear-line
