@@ -291,26 +291,38 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 	}
 	payload = append(payload, '\n')
 
+	// Pause idle draining BEFORE handing the fd to the client. pauseDrain blocks
+	// until the drainer is provably parked (drainParked), guaranteeing the daemon
+	// is no longer reading the master when the client takes over. If we sent the
+	// fd first, the still-active drainer and the client would race on read() over
+	// the same master for the handoff window — each read() steals bytes from the
+	// other, so the client receives torn escape sequences and the whole UI renders
+	// corrupted. Pausing first is strictly safe: the kernel PTY buffer simply
+	// accumulates during the tiny window until the client begins reading.
+	if aw, ok := d.inner.(attachAware); ok {
+		aw.OnAttach(req.AgentID, req.SessionID)
+	}
+
 	if _, _, err := conn.WriteMsgUnix(payload, rights, nil); err != nil {
 		ptylog.Error("SCM_RIGHTS send failed", "err", err, "session_id", req.SessionID)
+		// Roll back the drain pause so the child does not stall on a full buffer
+		// now that no client will read the master.
+		if aw, ok := d.inner.(attachAware); ok {
+			aw.OnDetach(req.AgentID, req.SessionID)
+		}
 		return
 	}
 
 	if clientPID > 0 {
 		d.attachedPIDs.Store(req.SessionID, clientPID)
 	}
-	// Pause idle draining (client is now the sole reader) and repaint so the
-	// client sees the current screen. repaint covers the brief handoff window.
-	if aw, ok := d.inner.(attachAware); ok {
-		aw.OnAttach(req.AgentID, req.SessionID)
-	}
 	ptylog.Info("fd granted to client", "session_id", req.SessionID, "client_pid", clientPID)
 }
 
 // handleStdinRelay acknowledges the request then enters a raw streaming loop,
 // forwarding every chunk from the client to the PTY master via
-// inner.StdinRelay — which calls trackHumanInput before each write so that
-// ExecInSession can serialise around human-typed input.
+// inner.StdinRelay — which calls trackUserInput before each write so that
+// ExecInSession can serialise around user-typed input.
 //
 // br must be the bufio.Reader wrapping conn from handleConn; it carries any
 // bytes the JSON decoder pre-buffered after reading the request envelope.
@@ -376,8 +388,8 @@ func (d *Daemon) handlePipe(conn *net.UnixConn, req Request) {
 
 // handleExec delivers a bot prompt into a live session. Connectors send the raw
 // prompt text; the daemon's execPrompt owns all input framing — clearing the
-// human's partial line, bracketed-pasting the prompt, submitting (with retries to
-// absorb terminal timing races), then reinjecting the human's partial input.
+// user's partial line, bracketed-pasting the prompt, submitting (with retries to
+// absorb terminal timing races), then reinjecting the user's partial input.
 // Connectors must NOT pre-wrap the prompt or it gets double-framed and the inner
 // paste/submit bytes render as literal text in the TUI.
 func (d *Daemon) handleExec(conn *net.UnixConn, req Request) {
