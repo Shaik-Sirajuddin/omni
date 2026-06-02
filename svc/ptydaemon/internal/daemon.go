@@ -219,11 +219,19 @@ func (d *defaultDaemon) Stop(agentID, sessionID string) error {
 		return ErrNotFound
 	}
 	if t.cmd == nil {
-		// adopted session — process not owned by daemon; just mark stopped and remove
+		// Adopted session: use t.AgentID/t.SessionID (not the caller's agentID param,
+		// which may be "" when the caller scanned by sessionID only). Using the params
+		// targets the wrong DB row and the wrong in-memory key when agentID == "".
 		t.setStatus(StatusStopped)
-		_ = d.store.UpdateStatus(agentID, sessionID, StatusStopped)
-		t.closeMaster() // release the master fd we opened for the adopted pid
-		d.removeTerminal(agentID, sessionID)
+		_ = d.store.UpdateStatus(t.AgentID, t.SessionID, StatusStopped)
+		t.closeMaster()
+		d.removeTerminal(t.AgentID, t.SessionID)
+		if t.proc != nil {
+			_ = t.proc.Kill()
+		}
+		// Also remove any Start-path (agentID="") terminal for the same sessionID so
+		// Create does not falsely report "already exists" on the next Resume.
+		d.removeAllBySessionID(sessionID)
 		return nil
 	}
 	// Remove from the in-memory map immediately so a concurrent Create for the
@@ -231,7 +239,28 @@ func (d *defaultDaemon) Stop(agentID, sessionID string) error {
 	// watchTerminal will call removeTerminal again after cmd.Wait() — that is a
 	// no-op since the key is already gone.
 	d.removeTerminal(t.AgentID, t.SessionID)
+	// Also synchronously mark stopped in the store so that List (which queries the DB)
+	// reflects the correct state before watchTerminal's async UpdateStatus fires.
+	_ = d.store.UpdateStatus(t.AgentID, t.SessionID, StatusStopped)
 	return t.kill()
+}
+
+// removeAllBySessionID removes every terminal whose SessionID matches,
+// regardless of AgentID. Used after stopping one terminal to sweep up any
+// duplicate entries for the same session (e.g. a Start-path "" AgentID entry
+// that coexists with an Adopt-path entry).
+func (d *defaultDaemon) removeAllBySessionID(sessionID string) {
+	d.mu.Lock()
+	var keys []string
+	for k, t := range d.terminals {
+		if t.SessionID == sessionID {
+			keys = append(keys, k)
+		}
+	}
+	for _, k := range keys {
+		delete(d.terminals, k)
+	}
+	d.mu.Unlock()
 }
 
 func (d *defaultDaemon) List() ([]*PTYTerminalInfo, error) {
