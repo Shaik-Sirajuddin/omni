@@ -11,9 +11,36 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 )
 
-// mcpFileMu guards all reads and writes to claude settings.json for MCP state.
-// It coordinates goroutines within this process; mtime checks handle cross-process races.
-var mcpFileMu sync.RWMutex
+// mcpPathMu maps an absolute settings.json path to its own RWMutex so that
+// agents in different worktrees don't block each other.
+var mcpPathMu sync.Map // map[string]*sync.RWMutex
+
+func mcpMutexFor(path string) *sync.RWMutex {
+	v, _ := mcpPathMu.LoadOrStore(path, &sync.RWMutex{})
+	return v.(*sync.RWMutex)
+}
+
+// NOTE: MCP path resolution below is based on the Claude Code scope table and has
+// NOT been tested against a live Claude installation. Verify that ~/.claude.json
+// and <workDir>/.mcp.json match the actual files Claude Code reads before relying
+// on AddMCP/ListMCP/DeleteMCP in production.
+
+// mcpUserSettingsPath returns the path to the user-global MCP config file.
+// Claude Code stores user-scoped MCP servers in ~/.claude.json.
+func mcpUserSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("mcp: resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// mcpWorkspaceSettingsPath returns the per-worktree MCP config path.
+// Claude Code stores project-scoped MCP servers in .mcp.json at the project root,
+// so each worktree (workDir) gets its own isolated MCP config.
+func mcpWorkspaceSettingsPath(workDir string) string {
+	return filepath.Join(workDir, ".mcp.json")
+}
 
 // rawMCPServer is the JSON shape Claude Code stores in settings.json under mcpServers.
 type rawMCPServer struct {
@@ -37,12 +64,12 @@ var errMtimeChanged = fmt.Errorf("mcp: settings file modified concurrently")
 
 func (a *claudeAgent) mcpSettingsPath(global bool) (string, error) {
 	if global {
-		return claudeUserSettingsPath()
+		return mcpUserSettingsPath()
 	}
 	a.mu.RLock()
 	workDir := a.workDir
 	a.mu.RUnlock()
-	return claudeWorkspaceSettingsPath(workDir), nil
+	return mcpWorkspaceSettingsPath(workDir), nil
 }
 
 // readMCPRaw reads the settings file at path and returns:
@@ -117,14 +144,16 @@ func writeMCPRaw(path string, raw map[string]json.RawMessage, servers map[string
 	return os.Rename(tmpName, path)
 }
 
-// withMCPWrite runs op under mcpFileMu write lock, retrying up to 3 times when
-// writeMCPRaw returns errMtimeChanged (cross-process concurrent write detected).
-func withMCPWrite(op func() error) error {
+// withMCPWrite runs op under the write lock for path, retrying up to 3 times
+// when writeMCPRaw returns errMtimeChanged (cross-process concurrent write).
+// Using a per-path mutex means agents in different worktrees don't block each other.
+func withMCPWrite(path string, op func() error) error {
 	const maxRetries = 3
+	mu := mcpMutexFor(path)
 	for i := 0; i < maxRetries; i++ {
-		mcpFileMu.Lock()
+		mu.Lock()
 		err := op()
-		mcpFileMu.Unlock()
+		mu.Unlock()
 		if err != errMtimeChanged {
 			return err
 		}
@@ -186,7 +215,7 @@ func (a *claudeAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult,
 	if err != nil {
 		return nil, fmt.Errorf("claude: AddMCP: resolve path: %w", err)
 	}
-	if err := withMCPWrite(func() error {
+	if err := withMCPWrite(path, func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
 			return err
@@ -204,9 +233,10 @@ func (a *claudeAgent) ListMCP(p codeagent.ListMCPParams) (*codeagent.ListMCPResu
 	if err != nil {
 		return nil, fmt.Errorf("claude: ListMCP: resolve path: %w", err)
 	}
-	mcpFileMu.RLock()
+	mu := mcpMutexFor(path)
+	mu.RLock()
 	_, servers, _, err := readMCPRaw(path)
-	mcpFileMu.RUnlock()
+	mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("claude: ListMCP: %w", err)
 	}
@@ -222,7 +252,7 @@ func (a *claudeAgent) DeleteMCP(p codeagent.DeleteMCPParams) (*codeagent.DeleteM
 	if err != nil {
 		return nil, fmt.Errorf("claude: DeleteMCP: resolve path: %w", err)
 	}
-	if err := withMCPWrite(func() error {
+	if err := withMCPWrite(path, func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
 			return err
@@ -240,7 +270,7 @@ func (a *claudeAgent) SetMCPToolPrompt(p codeagent.SetMCPToolPromptParams) (*cod
 	if err != nil {
 		return nil, fmt.Errorf("claude: SetMCPToolPrompt: resolve path: %w", err)
 	}
-	if err := withMCPWrite(func() error {
+	if err := withMCPWrite(path, func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
 			return err
