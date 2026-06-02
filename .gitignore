@@ -12,3 +12,4 @@ development/local/.env.docker
 play/
 website/
 dist/generated/
+.envrc
