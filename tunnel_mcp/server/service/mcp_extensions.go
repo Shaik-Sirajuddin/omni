@@ -238,7 +238,7 @@ func (s *Service) ListTasks(ctx context.Context, agentID string) (TaskListRespon
 		ts := seen[key]
 		ts.TotalMessages++
 		switch m.Status {
-		case message.StatusInQueue, "queued", message.StatusProcessing:
+		case message.StatusInQueue, message.StatusQueued, message.StatusProcessing:
 			ts.PendingCount++
 		case message.StatusDelivered:
 			ts.DeliveredCount++
@@ -293,7 +293,7 @@ func (s *Service) ListActiveTask(ctx context.Context, agentID string) (ActiveTas
 		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 		 FROM messages WHERE "to" = ? AND task_id != '' AND status IN (?, ?, ?)
 		 ORDER BY sent_time DESC`,
-		agentID, string(message.StatusInQueue), "queued", string(message.StatusProcessing),
+		agentID, string(message.StatusInQueue), string(message.StatusQueued), string(message.StatusProcessing),
 	)
 	if err != nil {
 		return ActiveTaskResponse{}, InternalError(err)

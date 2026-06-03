@@ -461,36 +461,17 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		return
 	}
 
-	// T3: only an in-flight execute blocks new picks. Queries may bypass when task_id matches (T2).
-	activeExecute, err := e.msgStore.RawQuery(ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
-		 FROM messages WHERE "to" = ? AND status IN (?, ?) AND request_type = ? LIMIT 1`,
-		agentID, string(statusQueued), string(message.StatusProcessing), string(reqTypeExecute),
-	)
-	if err != nil {
-		logger.Error("execute loop: active execute check failed", "agent_id", agentID, "err", err)
-		return
-	}
-
-	// bypassTask is non-nil when a query bypass is allowed for an in-flight execute (T2).
-	var bypassTask *TaskKey
-	if len(activeExecute) > 0 {
-		mux := e.state.GetTaskMux(agentID)
-		if mux == nil || mux.IsZero() {
-			logger.Debug("execute loop: execute in flight, no task mux — skipping", "agent_id", agentID)
-			return
-		}
-		bypassTask = mux
-		logger.Debug("execute loop: execute in flight, checking bypass queries", "agent_id", agentID, "task_id", mux.TaskID)
-	}
-
-	// Preprocessing case (a): check for unacknowledged StatusProcessing messages.
-	// If any exist (non-instant), the agent missed calling send_response in a prior turn.
-	// Recall them first before picking new messages. Instant (steer) messages are exempt
-	// because they don't require a mandatory tool response.
+	// Preprocessing case (a): check for unacknowledged StatusProcessing non-instant messages FIRST.
+	// This must come before the T3 guard — a processing execute would otherwise trigger T3 and
+	// return early before we can recall it. Instant (steer) messages are exempt since they don't
+	// require a mandatory tool response.
 	//
-	// Case (b): once no processing messages remain, fall through to normal pick below.
+	// IMPORTANT: recall prompt must be YAML (buildWarmUpPrompt) not plain text (buildRecallPrompt).
+	// ExecInSession fires OnUserPromptSubmit which runs the stale sweep (StatusProcessing → Failed)
+	// then re-advances message IDs found in the YAML payload back to StatusProcessing.
+	// Plain-text prompts fail the YAML parse and leave messages permanently Failed.
+	//
+	// Case (b): no processing messages — fall through to T3 check + normal pick.
 	processingRecall, procErr := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
 		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
@@ -504,30 +485,53 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	var msgs []*message.Message
 	var recallPrompt string
 	isPreprocessingRecall := false
+	var err error
 	if len(processingRecall) > 0 {
-		// Case (a): deliver a recall for unacknowledged processing messages.
 		msgs = processingRecall
-		recallPrompt = buildRecallPrompt(msgs)
+		recallPrompt = buildWarmUpPrompt(msgs)
 		isPreprocessingRecall = true
 		logger.Warn("execute loop: preprocessing recall — unacknowledged processing messages",
 			"agent_id", agentID, "count", len(msgs))
 	} else {
-		// Case (b): pick fresh messages normally.
-		msgs, err = e.pickNextMessages(agentID, bypassTask)
-	}
-
-	if err != nil {
-		logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
-		return
-	}
-	if len(msgs) == 0 {
-		if bypassTask != nil {
-			logger.Debug("execute loop: no bypass queries for task", "agent_id", agentID, "task_id", bypassTask.TaskID)
-		} else {
-			logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
-			e.state.SetPending(agentID, false)
+		// Case (b): T3: only an in-flight execute blocks new picks. Queries may bypass when task_id matches (T2).
+		var activeExecute []*message.Message
+		activeExecute, err = e.msgStore.RawQuery(ctx,
+			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+			        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+			 FROM messages WHERE "to" = ? AND status IN (?, ?) AND request_type = ? LIMIT 1`,
+			agentID, string(statusQueued), string(message.StatusProcessing), string(reqTypeExecute),
+		)
+		if err != nil {
+			logger.Error("execute loop: active execute check failed", "agent_id", agentID, "err", err)
+			return
 		}
-		return
+
+		// bypassTask is non-nil when a query bypass is allowed for an in-flight execute (T2).
+		var bypassTask *TaskKey
+		if len(activeExecute) > 0 {
+			mux := e.state.GetTaskMux(agentID)
+			if mux == nil || mux.IsZero() {
+				logger.Debug("execute loop: execute in flight, no task mux — skipping", "agent_id", agentID)
+				return
+			}
+			bypassTask = mux
+			logger.Debug("execute loop: execute in flight, checking bypass queries", "agent_id", agentID, "task_id", mux.TaskID)
+		}
+
+		msgs, err = e.pickNextMessages(agentID, bypassTask)
+		if err != nil {
+			logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
+			return
+		}
+		if len(msgs) == 0 {
+			if bypassTask != nil {
+				logger.Debug("execute loop: no bypass queries for task", "agent_id", agentID, "task_id", bypassTask.TaskID)
+			} else {
+				logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
+				e.state.SetPending(agentID, false)
+			}
+			return
+		}
 	}
 
 	if !isPreprocessingRecall {
