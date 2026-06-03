@@ -471,13 +471,13 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	agentState, _ = e.state.GetAgent(agentID)
 
 	// Determine warm-up vs active prompt via PromptSessionStore.
-	// warmupSentinel is a fixed key: once marked, all subsequent deliveries to the
-	// same session use the lean active prompt instead of the full warm-up prompt.
-	const warmupSentinel = "warmup_done"
+	// msgs[0].ID is the promptID for the whole batch: a batch is a single delivery unit,
+	// so the first message ID is a stable key for the warm-up/active decision.
 	sessionID := agentState.CodeSession.SessionID
+	promptID := msgs[0].ID
 	isWarmUp := true
 	if e.promptSessionStore != nil && sessionID != "" {
-		if e.promptSessionStore.IsDelivered(ctx, sessionID, warmupSentinel) {
+		if e.promptSessionStore.IsDelivered(ctx, sessionID, promptID) {
 			isWarmUp = false
 		}
 	}
@@ -485,8 +485,8 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	if isWarmUp {
 		prompt = buildWarmUpPrompt(msgs)
 		if e.promptSessionStore != nil && sessionID != "" {
-			if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, warmupSentinel); err != nil {
-				logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "err", err)
+			if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, promptID); err != nil {
+				logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "prompt_id", promptID, "err", err)
 			}
 		}
 	} else {
