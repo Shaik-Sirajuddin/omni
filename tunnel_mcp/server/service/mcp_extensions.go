@@ -127,7 +127,7 @@ func (s *Service) PauseTask(agentID string, taskKey TaskKey) error {
 	}
 	pauser, ok := s.delivery.(taskPauser)
 	if !ok {
-		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task pause is not available")}
+		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task control not yet implemented — PauseTask requires T1/T2/T3 engine changes")}
 	}
 	pauser.PauseTask(agentID, taskKey)
 	return nil
@@ -145,7 +145,7 @@ func (s *Service) ResumeTask(ctx context.Context, agentID string, taskKey TaskKe
 	}
 	resumer, ok := s.delivery.(taskResumer)
 	if !ok {
-		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task resume is not available")}
+		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task control not yet implemented — ResumeTask requires T1/T2/T3 engine changes")}
 	}
 	resumer.ResumeTask(ctx, agentID, taskKey)
 	return nil

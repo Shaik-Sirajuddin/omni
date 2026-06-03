@@ -46,7 +46,7 @@ type SessionUsage struct {
 type CodeSession struct {
 	IsInterrupted        bool
 	SessionID            string
-	MandatoryToolInvoked bool // set true when a tool that confirms delivery fires (update_message/update_messages for execute, query_result/query_result_batch for query)
+	MandatoryToolInvoked bool // set true when a delivery-confirming tool fires: send_response / send_response_batch (canonical) or legacy aliases query_result, update_message, etc.
 }
 
 type AgentState struct {

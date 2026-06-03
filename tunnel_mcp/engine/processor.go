@@ -857,6 +857,11 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	ctx := e.ctx
 
 	// A new prompt means a new session — any messages still in processing are orphaned from a prior session.
+	// Safety: this hook fires only on the UserPromptSubmit (PrePrompt) event, which Claude Code emits for
+	// user-originated prompts only. systemMessage injections (returned via PostPrompt/Stop hook response) do
+	// NOT fire this hook — they continue the same session and trigger another Stop event instead. The sweep
+	// is therefore safe on the recall path: recall messages stay StatusProcessing across Stop → systemMessage
+	// → Stop turns without being cleared here.
 	stale, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
 		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
