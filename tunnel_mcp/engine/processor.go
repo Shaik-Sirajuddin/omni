@@ -866,9 +866,44 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 // first ExecInSession, so the guard uses <= to get exactly 3 recall attempts.
 const maxMandatoryToolRetries = 3
 
-var recallPrompt = map[message.RequestType]string{
-	reqTypeExecute: "Tool callback not received. Call `update_message` after completing the task. Do not use send_message to reply.",
-	reqTypeQuery:   "Tool callback not received. Call `query_result` or `query_result_batch` to respond. Do not use send_message.",
+// buildRecallPrompt builds a minimal recall systemMessage that includes the message ID(s)
+// so the agent can call the correct tool without re-reading context.
+func buildRecallPrompt(msgs []*message.Message) string {
+	if len(msgs) == 0 {
+		return "Tool callback not received. Please use the appropriate tool to respond."
+	}
+	rt := msgs[0].RequestType
+
+	ids := make([]string, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.ID
+	}
+
+	switch rt {
+	case reqTypeExecute:
+		if len(msgs) == 1 {
+			return fmt.Sprintf("Tool callback not received. Call `update_message` with message_id=%s after completing the task. Do not use send_message to reply.", ids[0])
+		}
+		return fmt.Sprintf("Tool callback not received. Call `update_messages` for message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
+	case reqTypeQuery:
+		if len(msgs) == 1 {
+			return fmt.Sprintf("Tool callback not received. Call `query_result` or `query_result_batch` with message_id=%s. Do not use send_message.", ids[0])
+		}
+		return fmt.Sprintf("Tool callback not received. Call `query_result_batch` for message_ids: [%s]. Do not use send_message.", joinIDs(ids))
+	default:
+		return fmt.Sprintf("Tool callback not received. Please respond using the appropriate tool for message_id=%s.", ids[0])
+	}
+}
+
+func joinIDs(ids []string) string {
+	result := ""
+	for i, id := range ids {
+		if i > 0 {
+			result += ", "
+		}
+		result += id
+	}
+	return result
 }
 
 // OnStop is called by HookHandler on Stop / PostPrompt events.
@@ -929,22 +964,13 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	if len(msgs) > 0 && !mandatoryToolInvoked {
 		retries := msgs[0].Retries
 		if retries <= maxMandatoryToolRetries {
-			recall, ok := recallPrompt[msgs[0].RequestType]
-			if !ok {
-				recall = "Tool callback not received. Please use the appropriate tool to respond."
-			}
+			recall := buildRecallPrompt(msgs)
 			logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
 				"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
-			for _, msg := range msgs {
-				msg.Status = message.StatusFailed
-				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("hook: mark failed for recall error", "message_id", msg.ID, "err", err)
-				}
-			}
+			// Keep messages as StatusProcessing — the agent continues the same session.
+			// The next PostPrompt (after the agent calls the tool) will find them and mark delivered.
 			agentState.Status = AgentStatusReady
 			e.state.SetAgent(agentID, agentState)
-			e.state.ClearSession(sessionID)
-			go e.executeLoop(agentID)
 			return &recall
 		}
 		// Max retries exceeded — fire status callback and fall through to deliver.
