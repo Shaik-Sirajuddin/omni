@@ -485,19 +485,37 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		logger.Debug("execute loop: execute in flight, checking bypass queries", "agent_id", agentID, "task_id", mux.TaskID)
 	}
 
-	// TODO: re-enable once omni agent prompt-state subcommand is stable.
-	// Skipping prompt-state check for now — messages are sent directly.
-	// promptState, err := e.omni.GetPromptState(ctx, agentID)
-	// if err != nil {
-	// 	logger.Error("execute loop: get prompt state failed", "agent_id", agentID, "err", err)
-	// 	return
-	// }
-	// if promptState != "" {
-	// 	logger.Debug("execute loop: agent has pending prompt, skipping", "agent_id", agentID)
-	// 	return
-	// }
+	// Preprocessing case (a): check for unacknowledged StatusProcessing messages.
+	// If any exist (non-instant), the agent missed calling send_response in a prior turn.
+	// Recall them first before picking new messages. Instant (steer) messages are exempt
+	// because they don't require a mandatory tool response.
+	//
+	// Case (b): once no processing messages remain, fall through to normal pick below.
+	processingRecall, procErr := e.msgStore.RawQuery(ctx,
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		 FROM messages WHERE "to" = ? AND status = ? AND request_type != ?`,
+		agentID, string(message.StatusProcessing), string(reqTypeInstant),
+	)
+	if procErr != nil {
+		logger.Error("execute loop: preprocessing recall check failed", "agent_id", agentID, "err", procErr)
+		return
+	}
+	var msgs []*message.Message
+	var recallPrompt string
+	isPreprocessingRecall := false
+	if len(processingRecall) > 0 {
+		// Case (a): deliver a recall for unacknowledged processing messages.
+		msgs = processingRecall
+		recallPrompt = buildRecallPrompt(msgs)
+		isPreprocessingRecall = true
+		logger.Warn("execute loop: preprocessing recall — unacknowledged processing messages",
+			"agent_id", agentID, "count", len(msgs))
+	} else {
+		// Case (b): pick fresh messages normally.
+		msgs, err = e.pickNextMessages(agentID, bypassTask)
+	}
 
-	msgs, err := e.pickNextMessages(agentID, bypassTask)
 	if err != nil {
 		logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
 		return
@@ -512,64 +530,71 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		return
 	}
 
-	// T1/T2: update TaskMux on every execute pick.
-	// Cleared on untagged execute to prevent stale task from enabling bypass injection.
-	// Retained after execute completes (not cleared in markDelivered) for T1 next-loop priority.
-	if msgs[0].RequestType == reqTypeExecute {
-		if msgs[0].TaskID != "" {
-			e.state.SetTaskMux(agentID, &TaskKey{TaskID: msgs[0].TaskID, CreatorAgentID: msgs[0].CreatorAgentID})
-		} else {
-			e.state.SetTaskMux(agentID, nil)
+	if !isPreprocessingRecall {
+		// T1/T2: update TaskMux on every execute pick.
+		// Cleared on untagged execute to prevent stale task from enabling bypass injection.
+		// Retained after execute completes (not cleared in markDelivered) for T1 next-loop priority.
+		if msgs[0].RequestType == reqTypeExecute {
+			if msgs[0].TaskID != "" {
+				e.state.SetTaskMux(agentID, &TaskKey{TaskID: msgs[0].TaskID, CreatorAgentID: msgs[0].CreatorAgentID})
+			} else {
+				e.state.SetTaskMux(agentID, nil)
+			}
 		}
-	}
 
-	// Populate workspace from message if not yet set on agent state.
-	if agentState.Agent.Workspace == "" && msgs[0].Workspace != "" {
-		agentState.Agent.Workspace = msgs[0].Workspace
-		e.state.SetAgent(agentID, agentState)
-	}
-
-	queueTime := time.Now().UnixMilli()
-	for _, msg := range msgs {
-		msg.Status = statusQueued
-		msg.Retries++
-		msg.QueueTime = queueTime
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-			logger.Error("execute loop: update message to queued failed", "message_id", msg.ID, "err", err)
+		// Populate workspace from message if not yet set on agent state.
+		if agentState.Agent.Workspace == "" && msgs[0].Workspace != "" {
+			agentState.Agent.Workspace = msgs[0].Workspace
+			e.state.SetAgent(agentID, agentState)
 		}
-	}
 
-	// T5: checkpoint execute delivery so it can be resumed on restart.
-	if e.taskDelivery != nil && msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
-		if err := e.taskDelivery.StartDelivery(ctx, msgs[0].TaskID, agentID, msgs[0].ID); err != nil {
-			logger.Warn("execute loop: task delivery checkpoint failed", "task_id", msgs[0].TaskID, "err", err)
+		queueTime := time.Now().UnixMilli()
+		for _, msg := range msgs {
+			msg.Status = statusQueued
+			msg.Retries++
+			msg.QueueTime = queueTime
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("execute loop: update message to queued failed", "message_id", msg.ID, "err", err)
+			}
+		}
+
+		// T5: checkpoint execute delivery so it can be resumed on restart.
+		if e.taskDelivery != nil && msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
+			if err := e.taskDelivery.StartDelivery(ctx, msgs[0].TaskID, agentID, msgs[0].ID); err != nil {
+				logger.Warn("execute loop: task delivery checkpoint failed", "task_id", msgs[0].TaskID, "err", err)
+			}
 		}
 	}
 
 	agentState, _ = e.state.GetAgent(agentID)
 
-	// Determine warm-up vs active prompt via PromptSessionStore.
-	// warmupSentinel is a fixed key: once marked, all subsequent deliveries to the
-	// same session use the lean active prompt instead of the full warm-up prompt.
-	const warmupSentinel = "warmup_done"
-	sessionID := agentState.CodeSession.SessionID
-	isWarmUp := true
-	if e.promptSessionStore != nil && sessionID != "" {
-		if e.promptSessionStore.IsDelivered(ctx, sessionID, warmupSentinel) {
-			isWarmUp = false
-		}
-	}
+	// Build the prompt: recall (preprocessing case a) takes precedence over warm-up/active.
 	var prompt string
-	if isWarmUp {
-		prompt = buildWarmUpPrompt(msgs)
+	if isPreprocessingRecall {
+		prompt = recallPrompt
+	} else {
+		// Determine warm-up vs active prompt via PromptSessionStore.
+		// warmupSentinel is a fixed key: once marked, all subsequent deliveries to the
+		// same session use the lean active prompt instead of the full warm-up prompt.
+		const warmupSentinel = "warmup_done"
+		sessionID := agentState.CodeSession.SessionID
+		isWarmUp := true
 		if e.promptSessionStore != nil && sessionID != "" {
-			if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, warmupSentinel); err != nil {
-				logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "err", err)
+			if e.promptSessionStore.IsDelivered(ctx, sessionID, warmupSentinel) {
+				isWarmUp = false
 			}
 		}
-	} else {
-		senderName := senderNameFromRefs(msgs[0].Refs)
-		prompt = buildActivePrompt(msgs, senderName)
+		if isWarmUp {
+			prompt = buildWarmUpPrompt(msgs)
+			if e.promptSessionStore != nil && sessionID != "" {
+				if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, warmupSentinel); err != nil {
+					logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "err", err)
+				}
+			}
+		} else {
+			senderName := senderNameFromRefs(msgs[0].Refs)
+			prompt = buildActivePrompt(msgs, senderName)
+		}
 	}
 
 	agentState.Status = AgentStatusRunning
@@ -1174,10 +1199,10 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 			recall := buildRecallPrompt(msgs)
 			logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
 				"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
-			// Keep messages as StatusProcessing — agent continues the same session.
-			// Next PostPrompt (after agent calls the tool) finds them and marks delivered.
-			agentState.Status = AgentStatusReady
-			e.state.SetAgent(agentID, agentState)
+			// Keep messages as StatusProcessing and status as Running — the agent continues the
+			// same session. Changing status to Ready here would allow the watchdog or the
+			// post-loop retry to dispatch new messages into a concurrent second session.
+			e.state.SetAgent(agentID, agentState) // persists MandatoryToolInvoked=false only
 			return &recall
 		}
 		// Max retries exceeded — fire status callback and fall through to deliver.

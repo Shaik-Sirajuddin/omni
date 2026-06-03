@@ -173,6 +173,143 @@ func (s *Service) buildSendResponseMessageForResolvedSender(ctx context.Context,
 	return msg, original, resp, nil
 }
 
+// TaskSummary is a lightweight task record returned by ListTasks.
+type TaskSummary struct {
+	TaskID         string `json:"task_id"`
+	CreatorAgentID string `json:"creator_agent_id"`
+	TotalMessages  int    `json:"total_messages"`
+	PendingCount   int    `json:"pending_count"`   // in_queue + queued + processing
+	DeliveredCount int    `json:"delivered_count"` // delivered
+	FailedCount    int    `json:"failed_count"`    // failed
+}
+
+// TaskListResponse is returned by ListTasks.
+type TaskListResponse struct {
+	Tasks []TaskSummary `json:"tasks"`
+	Count int           `json:"count"`
+}
+
+// TaskDetailResponse is returned by GetTask.
+type TaskDetailResponse struct {
+	TaskID         string             `json:"task_id"`
+	CreatorAgentID string             `json:"creator_agent_id"`
+	Messages       []*message.Message `json:"messages"`
+	Count          int                `json:"count"`
+}
+
+// ActiveTaskSummary holds info about a currently in-flight task.
+type ActiveTaskSummary struct {
+	TaskID         string `json:"task_id"`
+	CreatorAgentID string `json:"creator_agent_id"`
+	Status         string `json:"status"` // queued or processing
+	MessageID      string `json:"message_id"`
+}
+
+// ActiveTaskResponse is returned by ListActiveTask.
+type ActiveTaskResponse struct {
+	Tasks []ActiveTaskSummary `json:"tasks"`
+	Count int                 `json:"count"`
+}
+
+// ListTasks returns a summary of all tasks (by distinct task_id) received by agentID.
+// If agentID is empty, it defaults to the sender's agent ID (self).
+func (s *Service) ListTasks(ctx context.Context, agentID string) (TaskListResponse, error) {
+	if strings.TrimSpace(agentID) == "" {
+		return TaskListResponse{}, BadRequest("agent_id is required")
+	}
+	msgs, err := s.msgStore.RawQuery(ctx,
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		 FROM messages WHERE "to" = ? AND task_id != '' ORDER BY sent_time DESC`,
+		agentID,
+	)
+	if err != nil {
+		return TaskListResponse{}, InternalError(err)
+	}
+	// Aggregate by task_id.
+	seen := make(map[string]*TaskSummary)
+	order := make([]string, 0)
+	for _, m := range msgs {
+		key := m.TaskID
+		if _, ok := seen[key]; !ok {
+			seen[key] = &TaskSummary{TaskID: m.TaskID, CreatorAgentID: m.CreatorAgentID}
+			order = append(order, key)
+		}
+		ts := seen[key]
+		ts.TotalMessages++
+		switch m.Status {
+		case message.StatusInQueue, "queued", message.StatusProcessing:
+			ts.PendingCount++
+		case message.StatusDelivered:
+			ts.DeliveredCount++
+		case message.StatusFailed:
+			ts.FailedCount++
+		}
+	}
+	tasks := make([]TaskSummary, 0, len(order))
+	for _, k := range order {
+		tasks = append(tasks, *seen[k])
+	}
+	return TaskListResponse{Tasks: tasks, Count: len(tasks)}, nil
+}
+
+// GetTask returns all messages for the given task_id received by agentID.
+func (s *Service) GetTask(ctx context.Context, agentID, taskID string) (TaskDetailResponse, error) {
+	if strings.TrimSpace(agentID) == "" {
+		return TaskDetailResponse{}, BadRequest("agent_id is required")
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return TaskDetailResponse{}, BadRequest("task_id is required")
+	}
+	msgs, err := s.msgStore.RawQuery(ctx,
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		 FROM messages WHERE "to" = ? AND task_id = ? ORDER BY sent_time ASC`,
+		agentID, taskID,
+	)
+	if err != nil {
+		return TaskDetailResponse{}, InternalError(err)
+	}
+	var creatorAgentID string
+	if len(msgs) > 0 {
+		creatorAgentID = msgs[0].CreatorAgentID
+	}
+	return TaskDetailResponse{
+		TaskID:         taskID,
+		CreatorAgentID: creatorAgentID,
+		Messages:       msgs,
+		Count:          len(msgs),
+	}, nil
+}
+
+// ListActiveTask returns currently in-flight (queued or processing) task messages for agentID.
+// Defaults to self when agentID is empty.
+func (s *Service) ListActiveTask(ctx context.Context, agentID string) (ActiveTaskResponse, error) {
+	if strings.TrimSpace(agentID) == "" {
+		return ActiveTaskResponse{}, BadRequest("agent_id is required")
+	}
+	msgs, err := s.msgStore.RawQuery(ctx,
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		 FROM messages WHERE "to" = ? AND task_id != '' AND status IN (?, ?, ?)
+		 ORDER BY sent_time DESC`,
+		agentID, string(message.StatusInQueue), "queued", string(message.StatusProcessing),
+	)
+	if err != nil {
+		return ActiveTaskResponse{}, InternalError(err)
+	}
+	tasks := make([]ActiveTaskSummary, 0, len(msgs))
+	for _, m := range msgs {
+		tasks = append(tasks, ActiveTaskSummary{
+			TaskID:         m.TaskID,
+			CreatorAgentID: m.CreatorAgentID,
+			Status:         string(m.Status),
+			MessageID:      m.ID,
+		})
+	}
+	return ActiveTaskResponse{Tasks: tasks, Count: len(tasks)}, nil
+}
+
 func validateResponseSchema(schemaText, response string) error {
 	schemaText = strings.TrimSpace(schemaText)
 	if schemaText == "" {

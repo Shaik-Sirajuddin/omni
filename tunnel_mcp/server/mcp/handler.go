@@ -364,7 +364,24 @@ func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 		mcp.WithDescription("Fetch agent status."),
 		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
 	), h.handleMCPCheckStatus)
-	logger.Info("mcp tools registered", "count", 18)
+
+	mcpServer.AddTool(mcp.NewTool("list_tasks",
+		mcp.WithDescription("List all tasks (by task_id) received by an agent. Defaults to the caller's own agent_id when omitted."),
+		mcp.WithString("agent_id", mcp.Description("Agent id; defaults to self.")),
+	), h.handleMCPListTasks)
+
+	mcpServer.AddTool(mcp.NewTool("get_task",
+		mcp.WithDescription("Get all messages for a specific task received by an agent."),
+		mcp.WithString("agent_id", mcp.Description("Agent id; defaults to self.")),
+		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
+	), h.handleMCPGetTask)
+
+	mcpServer.AddTool(mcp.NewTool("list_active_tasks",
+		mcp.WithDescription("List currently in-flight (queued or processing) task messages for an agent. Defaults to self."),
+		mcp.WithString("agent_id", mcp.Description("Agent id; defaults to self.")),
+	), h.handleMCPListActiveTasks)
+
+	logger.Info("mcp tools registered", "count", 21)
 }
 
 func (h *Handler) handleMCPHealth(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -646,6 +663,67 @@ func (h *Handler) handleMCPCheckStatus(ctx context.Context, request mcp.CallTool
 		logger.Error("mcp tool service call failed", "err", err, "tool", "check_status", "agent_id", agentID)
 	} else {
 		logger.Debug("mcp tool call succeeded", "tool", "check_status", "agent_id", agentID, "status", resp.Status)
+	}
+	return resultJSON(resp, err)
+}
+
+func (h *Handler) handleMCPListTasks(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	logger.Debug("mcp tool call received", "tool", "list_tasks")
+	agentID := request.GetString("agent_id", "")
+	if agentID == "" {
+		sender, err := senderFromContext(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		agentID = sender.ID
+	}
+	resp, err := h.service.ListTasks(ctx, agentID)
+	if err != nil {
+		logger.Error("mcp tool service call failed", "err", err, "tool", "list_tasks", "agent_id", agentID)
+	} else {
+		logger.Debug("mcp tool call succeeded", "tool", "list_tasks", "agent_id", agentID, "count", resp.Count)
+	}
+	return resultJSON(resp, err)
+}
+
+func (h *Handler) handleMCPGetTask(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	logger.Debug("mcp tool call received", "tool", "get_task")
+	agentID := request.GetString("agent_id", "")
+	if agentID == "" {
+		sender, err := senderFromContext(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		agentID = sender.ID
+	}
+	taskID, err := request.RequireString("task_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	resp, err := h.service.GetTask(ctx, agentID, taskID)
+	if err != nil {
+		logger.Error("mcp tool service call failed", "err", err, "tool", "get_task", "agent_id", agentID, "task_id", taskID)
+	} else {
+		logger.Debug("mcp tool call succeeded", "tool", "get_task", "agent_id", agentID, "task_id", taskID, "count", resp.Count)
+	}
+	return resultJSON(resp, err)
+}
+
+func (h *Handler) handleMCPListActiveTasks(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	logger.Debug("mcp tool call received", "tool", "list_active_tasks")
+	agentID := request.GetString("agent_id", "")
+	if agentID == "" {
+		sender, err := senderFromContext(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		agentID = sender.ID
+	}
+	resp, err := h.service.ListActiveTask(ctx, agentID)
+	if err != nil {
+		logger.Error("mcp tool service call failed", "err", err, "tool", "list_active_tasks", "agent_id", agentID)
+	} else {
+		logger.Debug("mcp tool call succeeded", "tool", "list_active_tasks", "agent_id", agentID, "count", resp.Count)
 	}
 	return resultJSON(resp, err)
 }
