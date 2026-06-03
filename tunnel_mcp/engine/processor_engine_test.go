@@ -116,7 +116,7 @@ func TestWarmupSentinel(t *testing.T) {
 
 		prompts1 := cli.capturedPrompts()
 		require.Len(t, prompts1, 1)
-		assert.Contains(t, prompts1[0], "warm_up: true", "first delivery to a session must be a warm-up prompt")
+		assert.Contains(t, prompts1[0], "Execute the following task", "first delivery to a session must use the warm-up instruction")
 		close(e1.relCh)
 
 		time.Sleep(10 * time.Millisecond)
@@ -132,7 +132,7 @@ func TestWarmupSentinel(t *testing.T) {
 		e2 := cli.waitForExec(t)
 		prompts2 := cli.capturedPrompts()
 		require.Len(t, prompts2, 2)
-		assert.NotContains(t, prompts2[1], "warm_up:", "second delivery to same session must use active prompt, not warm-up")
+		assert.Contains(t, prompts2[1], "Continue from", "second delivery to same session must use the active (lean) instruction")
 		close(e2.relCh)
 	})
 
@@ -158,7 +158,7 @@ func TestWarmupSentinel(t *testing.T) {
 
 		prompts := cli.capturedPrompts()
 		require.Len(t, prompts, 1)
-		assert.Contains(t, prompts[0], "warm_up: true", "no session ID must always produce a warm-up prompt")
+		assert.Contains(t, prompts[0], "Execute the following task", "no session ID must always produce a warm-up instruction")
 		close(e1.relCh)
 	})
 
@@ -188,7 +188,7 @@ func TestWarmupSentinel(t *testing.T) {
 
 		prompts := cli.capturedPrompts()
 		require.Len(t, prompts, 1)
-		assert.Contains(t, prompts[0], "warm_up: true", "new session must receive warm-up regardless of other sessions")
+		assert.Contains(t, prompts[0], "Execute the following task", "new session must receive warm-up instruction regardless of other sessions")
 		close(e1.relCh)
 	})
 }
