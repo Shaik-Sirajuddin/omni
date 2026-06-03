@@ -13,7 +13,7 @@ import (
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 )
 
-var logger = pkglog.NewLogger("component", "ptydaemon")
+var logger = pkglog.NewLogger("component", "ptydaemon", pkglog.WithStderr())
 
 func main() {
 	socketPath := ptydaemon.DefaultSocketPath()
