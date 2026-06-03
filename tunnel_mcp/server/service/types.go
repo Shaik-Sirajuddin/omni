@@ -16,13 +16,16 @@ type TargetSpec struct {
 }
 
 type PayloadMessage struct {
-	To          TargetSpec      `json:"to"`
-	Workspace   string          `json:"workspace,omitempty"`
-	Prompt      string          `json:"prompt"`
-	Refs        json.RawMessage `json:"refs,omitempty"`
-	Async       bool            `json:"async,omitempty"`
-	RequestType string          `json:"request_type,omitempty"`
-	ShouldReply *bool           `json:"should_reply,omitempty"`
+	To             TargetSpec      `json:"to"`
+	Workspace      string          `json:"workspace,omitempty"`
+	Prompt         string          `json:"prompt"`
+	Refs           json.RawMessage `json:"refs,omitempty"`
+	Schema         string          `json:"schema,omitempty"`
+	TaskID         string          `json:"task_id,omitempty"`
+	CreatorAgentID string          `json:"creator_agent_id,omitempty"`
+	Async          bool            `json:"async,omitempty"`
+	RequestType    string          `json:"request_type,omitempty"`
+	ShouldReply    *bool           `json:"should_reply,omitempty"`
 }
 
 type SendMessageRequest struct {
@@ -47,6 +50,8 @@ type QueryResultItem struct {
 	Response  string `json:"response"`
 }
 
+type SendResponseItem = QueryResultItem
+
 type QueryResultRequest struct {
 	Item QueryResultItem `json:"item"`
 }
@@ -65,6 +70,17 @@ type QueryResultBatchResponse struct {
 	Count   int                   `json:"count"`
 	GroupID string                `json:"group_id,omitempty"`
 }
+
+type SendResponseRequest struct {
+	Item SendResponseItem `json:"item"`
+}
+
+type SendResponseBatchRequest struct {
+	Items []SendResponseItem `json:"results"`
+}
+
+type SendResponseResponse = QueryResultResponse
+type SendResponseBatchResponse = QueryResultBatchResponse
 
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -105,6 +121,16 @@ type DeleteMessageResponse struct {
 
 type AgentControlRequest struct {
 	AgentID string `json:"agent_id"`
+}
+
+type TaskKey struct {
+	TaskID         string `json:"task_id"`
+	CreatorAgentID string `json:"creator_agent_id"`
+}
+
+type TaskControlRequest struct {
+	AgentID string `json:"agent_id"`
+	TaskKey
 }
 
 type AgentStatusResponse struct {

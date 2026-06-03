@@ -23,9 +23,13 @@ CREATE TABLE IF NOT EXISTS messages (
     delivery_time INTEGER,
     sent_time     INTEGER NOT NULL DEFAULT 0,
     group_id      TEXT NOT NULL DEFAULT '',
+    task_id       TEXT NOT NULL DEFAULT '',
+    creator_agent_id TEXT NOT NULL DEFAULT '',
+    schema        TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (group_id) REFERENCES message_groups(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_group  ON messages(group_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conv   ON messages("to", "from");
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+CREATE INDEX IF NOT EXISTS idx_messages_task   ON messages("to", task_id, creator_agent_id, status, sent_time);

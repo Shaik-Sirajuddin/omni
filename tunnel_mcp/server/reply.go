@@ -1,4 +1,5 @@
 package server
+
 import (
 	"context"
 	"encoding/json"
@@ -9,7 +10,6 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/google/uuid"
 )
-
 
 type replyService struct {
 	msgStore     message.MessageStore
@@ -64,7 +64,7 @@ func replyRefs(msg *message.Message, fromAgentID, fromAgentName string) string {
 	if fields == nil {
 		fields = map[string]json.RawMessage{}
 	}
-	putReplyRef(fields, "author", "axolink")
+	putReplyRef(fields, "author", "tunnel-mcp")
 	putReplyRef(fields, "author_agent_id", fromAgentID)
 	putReplyRef(fields, "author_agent_name", fromAgentName)
 	putReplyRef(fields, "reply_to_message_id", msg.ID)
@@ -73,7 +73,7 @@ func replyRefs(msg *message.Message, fromAgentID, fromAgentName string) string {
 
 	out, err := json.Marshal(fields)
 	if err != nil {
-		return `{"author":"axolink"}`
+		return `{"author":"tunnel-mcp"}`
 	}
 	return string(out)
 }

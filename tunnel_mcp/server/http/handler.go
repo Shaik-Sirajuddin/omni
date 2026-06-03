@@ -61,8 +61,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/message", h.handleMessage)
 	mux.HandleFunc("/query-result", h.handleQueryResult)
 	mux.HandleFunc("/query-result-batch", h.handleQueryResultBatch)
+	mux.HandleFunc("/send-response", h.handleSendResponse)
+	mux.HandleFunc("/send-response-batch", h.handleSendResponseBatch)
 	mux.HandleFunc("/agent-interrupt", h.handleAgentInterrupt)
 	mux.HandleFunc("/agent-resume", h.handleAgentResume)
+	mux.HandleFunc("/pause-task", h.handlePauseTask)
+	mux.HandleFunc("/resume-task", h.handleResumeTask)
 	mux.HandleFunc("/check-status", h.handleCheckStatus)
 	if h.hooks != nil {
 		h.hooks.RegisterHookRoutes(mux)
@@ -72,7 +76,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, service.HealthResponse{
 		Status:  "ok",
-		Service: "axolink",
+		Service: "tunnel-mcp",
 		Version: h.serviceVersion,
 	})
 }
@@ -91,7 +95,7 @@ func (h *Handler) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	resp, err := h.service.SendMessage(r.Context(), sender, req.Payload)
+	resp, err := h.service.SendMessageWithMetadata(r.Context(), sender, req.Payload)
 	if err != nil {
 		writeError(w, service.StatusFromError(err), err.Error())
 		return
@@ -113,7 +117,7 @@ func (h *Handler) handleSendGroupMessage(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	resp, err := h.service.SendGroupMessage(r.Context(), sender, req.Messages)
+	resp, err := h.service.SendGroupMessageWithMetadata(r.Context(), sender, req.Messages)
 	if err != nil {
 		writeError(w, service.StatusFromError(err), err.Error())
 		return
@@ -235,6 +239,10 @@ func (h *Handler) handleMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleQueryResult(w http.ResponseWriter, r *http.Request) {
+	h.handleSendResponse(w, r)
+}
+
+func (h *Handler) handleSendResponse(w http.ResponseWriter, r *http.Request) {
 	sender, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -243,12 +251,12 @@ func (h *Handler) handleQueryResult(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var req service.QueryResultRequest
+	var req service.SendResponseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	resp, err := h.service.QueryResult(r.Context(), sender, req.Item)
+	resp, err := h.service.SendResponse(r.Context(), sender, req.Item)
 	if err != nil {
 		writeError(w, service.StatusFromError(err), err.Error())
 		return
@@ -257,6 +265,10 @@ func (h *Handler) handleQueryResult(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleQueryResultBatch(w http.ResponseWriter, r *http.Request) {
+	h.handleSendResponseBatch(w, r)
+}
+
+func (h *Handler) handleSendResponseBatch(w http.ResponseWriter, r *http.Request) {
 	sender, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -265,12 +277,12 @@ func (h *Handler) handleQueryResultBatch(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var req service.QueryResultBatchRequest
+	var req service.SendResponseBatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	resp, err := h.service.QueryResultBatch(r.Context(), sender, req.Items)
+	resp, err := h.service.SendResponseBatch(r.Context(), sender, req.Items)
 	if err != nil {
 		writeError(w, service.StatusFromError(err), err.Error())
 		return
@@ -332,6 +344,46 @@ func (h *Handler) handleCheckStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) handlePauseTask(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authenticate(w, r); !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req service.TaskControlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := h.service.PauseTask(req.AgentID, req.TaskKey); err != nil {
+		writeError(w, service.StatusFromError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "paused"})
+}
+
+func (h *Handler) handleResumeTask(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authenticate(w, r); !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req service.TaskControlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := h.service.ResumeTask(r.Context(), req.AgentID, req.TaskKey); err != nil {
+		writeError(w, service.StatusFromError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resumed"})
 }
 
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (service.SenderSpec, bool) {

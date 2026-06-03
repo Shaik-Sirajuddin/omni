@@ -36,8 +36,8 @@ func NewStdioHandler(ps *proxy.ProxyServer, opts ...StdioOption) *StdioHandler {
 }
 
 func (h *StdioHandler) StdioServer() *mcpserver.StdioServer {
-	logger.Info("mcp stdio handler initializing", "service", "axolink", "version", h.serviceVersion)
-	mcpSrv := mcpserver.NewMCPServer("axolink", h.serviceVersion, mcpserver.WithToolCapabilities(true))
+	logger.Info("mcp stdio handler initializing", "service", "tunnel-mcp", "version", h.serviceVersion)
+	mcpSrv := mcpserver.NewMCPServer("tunnel-mcp", h.serviceVersion, mcpserver.WithToolCapabilities(true))
 	h.registerTools(mcpSrv)
 	s := mcpserver.NewStdioServer(mcpSrv)
 	sender := h.sender
@@ -67,6 +67,9 @@ func (h *StdioHandler) registerTools(s *mcpserver.MCPServer) {
 		mcp.WithString("workspace", mcp.Description("Target agent workspace.")),
 		mcp.WithString("prompt", mcp.Required(), mcp.Description("Prompt to send.")),
 		mcp.WithString("refs", mcp.Description("Optional JSON refs object.")),
+		mcp.WithString("schema", mcp.Description("Optional JSON schema that validates the eventual response.")),
+		mcp.WithString("task_id", mcp.Description("Optional task id to persist on the message.")),
+		mcp.WithString("creator_agent_id", mcp.Description("Optional creator agent id to persist on the message.")),
 		mcp.WithString("request_type", mcp.Description("Request type: query, instant, execute.")),
 	), h.handleSendMessage)
 
@@ -91,11 +94,33 @@ func (h *StdioHandler) registerTools(s *mcpserver.MCPServer) {
 		mcp.WithNumber("limit", mcp.Description("Pagination limit.")),
 	), h.handleListMessages)
 
+	s.AddTool(mcp.NewTool("send_response",
+		mcp.WithDescription("Send a response for one query or execute message."),
+		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original message id.")),
+		mcp.WithString("response", mcp.Required(), mcp.Description("Response text. If the original message stored a schema, this must be valid JSON matching it.")),
+	), h.handleSendResponse)
+
+	s.AddTool(mcp.NewTool("send_response_batch",
+		mcp.WithDescription("Send responses for multiple query or execute messages."),
+		mcp.WithArray("results",
+			mcp.Required(),
+			mcp.Description("Array of response objects."),
+			mcp.Items(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"message_id": map[string]any{"type": "string"},
+					"response":   map[string]any{"type": "string"},
+				},
+				"required": []string{"message_id", "response"},
+			}),
+		),
+	), h.handleSendResponseBatch)
+
 	s.AddTool(mcp.NewTool("query_result",
 		mcp.WithDescription("Send a response for one query message."),
 		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original query message id.")),
 		mcp.WithString("response", mcp.Required(), mcp.Description("Response text.")),
-	), h.handleQueryResult)
+	), h.handleSendResponse)
 
 	s.AddTool(mcp.NewTool("query_result_batch",
 		mcp.WithDescription("Send responses for multiple query messages."),
@@ -111,7 +136,29 @@ func (h *StdioHandler) registerTools(s *mcpserver.MCPServer) {
 				"required": []string{"message_id", "response"},
 			}),
 		),
-	), h.handleQueryResultBatch)
+	), h.handleSendResponseBatch)
+
+	s.AddTool(mcp.NewTool("update_message",
+		mcp.WithDescription("Alias for send_response."),
+		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original message id.")),
+		mcp.WithString("response", mcp.Required(), mcp.Description("Response text.")),
+	), h.handleSendResponse)
+
+	s.AddTool(mcp.NewTool("update_messages",
+		mcp.WithDescription("Alias for send_response_batch."),
+		mcp.WithArray("results",
+			mcp.Required(),
+			mcp.Description("Array of response objects."),
+			mcp.Items(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"message_id": map[string]any{"type": "string"},
+					"response":   map[string]any{"type": "string"},
+				},
+				"required": []string{"message_id", "response"},
+			}),
+		),
+	), h.handleSendResponseBatch)
 
 	s.AddTool(mcp.NewTool("list_agents",
 		mcp.WithDescription("List agents in the sender workspace."),
@@ -130,6 +177,20 @@ func (h *StdioHandler) registerTools(s *mcpserver.MCPServer) {
 		mcp.WithDescription("Resume agent delivery."),
 		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
 	), h.handleAgentResume)
+
+	s.AddTool(mcp.NewTool("pause_task",
+		mcp.WithDescription("Pause delivery for a specific task owned by a creator agent."),
+		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
+		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
+		mcp.WithString("creator_agent_id", mcp.Required(), mcp.Description("Creator agent id.")),
+	), h.handlePauseTask)
+
+	s.AddTool(mcp.NewTool("resume_task",
+		mcp.WithDescription("Resume delivery for a specific task owned by a creator agent."),
+		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
+		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
+		mcp.WithString("creator_agent_id", mcp.Required(), mcp.Description("Creator agent id.")),
+	), h.handleResumeTask)
 
 	s.AddTool(mcp.NewTool("check_status",
 		mcp.WithDescription("Fetch agent status."),
@@ -208,6 +269,10 @@ func (h *StdioHandler) handleListMessages(ctx context.Context, req mcp.CallToolR
 }
 
 func (h *StdioHandler) handleQueryResult(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return h.handleSendResponse(ctx, req)
+}
+
+func (h *StdioHandler) handleSendResponse(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sender, err := senderFromContext(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -220,21 +285,25 @@ func (h *StdioHandler) handleQueryResult(ctx context.Context, req mcp.CallToolRe
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resp, err := h.proxy.QueryResult(ctx, sender, service.QueryResultItem{MessageID: messageID, Response: response})
-	return resultJSON(resp, err)
+	resp, err := h.proxy.SendResponse(ctx, sender, service.SendResponseItem{MessageID: messageID, Response: response})
+	return toolResultJSON(resp, err)
 }
 
 func (h *StdioHandler) handleQueryResultBatch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return h.handleSendResponseBatch(ctx, req)
+}
+
+func (h *StdioHandler) handleSendResponseBatch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sender, err := senderFromContext(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	items, err := queryResultItemsFromToolRequest(req)
+	items, err := sendResponseItemsFromToolRequest(req)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	resp, err := h.proxy.QueryResultBatch(ctx, sender, items)
-	return resultJSON(resp, err)
+	resp, err := h.proxy.SendResponseBatch(ctx, sender, items)
+	return toolResultJSON(resp, err)
 }
 
 func (h *StdioHandler) handleListAgents(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -300,10 +369,51 @@ func (h *StdioHandler) handleCheckStatus(ctx context.Context, req mcp.CallToolRe
 	return resultJSON(resp, err)
 }
 
+func (h *StdioHandler) handlePauseTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sender, err := senderFromContext(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	agentID, err := req.RequireString("agent_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	taskID, err := req.RequireString("task_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	creatorAgentID, err := req.RequireString("creator_agent_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	err = h.proxy.PauseTask(ctx, sender, service.TaskControlRequest{AgentID: agentID, TaskKey: service.TaskKey{TaskID: taskID, CreatorAgentID: creatorAgentID}})
+	return resultJSON(map[string]string{"status": "paused"}, err)
+}
+
+func (h *StdioHandler) handleResumeTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sender, err := senderFromContext(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	agentID, err := req.RequireString("agent_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	taskID, err := req.RequireString("task_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	creatorAgentID, err := req.RequireString("creator_agent_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	err = h.proxy.ResumeTask(ctx, sender, service.TaskControlRequest{AgentID: agentID, TaskKey: service.TaskKey{TaskID: taskID, CreatorAgentID: creatorAgentID}})
+	return resultJSON(map[string]string{"status": "resumed"}, err)
+}
+
 func nonNilMessagePtrs(msgs []*service.MessageResponse) []*service.MessageResponse {
 	if msgs == nil {
 		return []*service.MessageResponse{}
 	}
 	return msgs
 }
-
