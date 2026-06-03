@@ -705,11 +705,11 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
 				if info != nil && info.AgentID == agent.ID && info.SessionID == sessionID && info.Status == "active" {
-					if params.Detached {
-						logger.Info("ResumeAgent: PTY terminal already active, leaving detached", "agentID", agent.ID, "sessionID", sessionID)
-						return nil
-					}
-					return fmt.Errorf("operator: session %q already has an active PTY terminal", sessionID)
+					// Terminal is already running — leave it as-is regardless of Detached flag.
+					// Callers that need to write a prompt should use ExecInSession (Exec/Pipe,
+					// no attachment), keeping the PTY available for an interactive attach.
+					logger.Info("ResumeAgent: PTY terminal already active, leaving running", "agentID", agent.ID, "sessionID", sessionID, "detached", params.Detached)
+					return nil
 				}
 			}
 		} else {
