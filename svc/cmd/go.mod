@@ -7,6 +7,7 @@ require (
 	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
+	github.com/Shaik-Sirajuddin/memory/svc/agentpool v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/config_sync v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0
@@ -72,6 +73,7 @@ replace (
 	github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
 	github.com/Shaik-Sirajuddin/memory/pkg/pty => ../../pkg/pty
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath
+	github.com/Shaik-Sirajuddin/memory/svc/agentpool => ../agentpool
 	github.com/Shaik-Sirajuddin/memory/svc/config_sync => ../config_sync
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator => ../hook-operator
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../ptydaemon

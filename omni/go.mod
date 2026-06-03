@@ -7,6 +7,7 @@ require (
 	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/memory/svc/agentpool v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0 // indirect
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 	github.com/adrg/xdg v0.5.3
@@ -94,3 +95,5 @@ replace github.com/Shaik-Sirajuddin/memory/pkg/pty => ../pkg/pty
 replace github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../svc/ptydaemon
 
 replace github.com/Shaik-Sirajuddin/memory/svc/hook-operator => ../svc/hook-operator
+
+replace github.com/Shaik-Sirajuddin/memory/svc/agentpool => ../svc/agentpool

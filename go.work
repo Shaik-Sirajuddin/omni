@@ -5,6 +5,7 @@ use (
 	./pkg/log
 	./pkg/pty
 	./pkg/sockpath
+	./svc/agentpool
 	./svc/cmd
 	./svc/config_sync
 	./svc/hook-operator

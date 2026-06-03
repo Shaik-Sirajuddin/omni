@@ -22,6 +22,7 @@ func main() {
 	disableHook       := flag.Bool("disable-hook-operator", false, "Disable the hook operator service")
 	disableMCP        := flag.Bool("disable-axolink-mcp", false, "Disable the Axolink MCP service")
 	disableConfigSync := flag.Bool("disable-config-sync", false, "Disable the config sync service")
+	enableAgentPool   := flag.Bool("enable-agent-pool", false, "Enable the agent pool daemon service")
 	printVersion      := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -51,6 +52,12 @@ func main() {
 			ServiceConfig: ServiceConfig{Enabled: !*disableConfigSync},
 			WorkspaceDir:  envOr("CONFIG_SYNC_AGY_WORKSPACE_DIR", ""),
 			WatchSettings: true,
+		},
+		// AgentPool is disabled until CreateAgentFunc is wired to the operator.
+		// Enable with --enable-agent-pool once the operator socket is available.
+		AgentPool: AgentPoolConfig{
+			ServiceConfig: ServiceConfig{Enabled: *enableAgentPool},
+			SocketPath:    sockpath.AgentPool(),
 		},
 	}
 
