@@ -379,6 +379,61 @@ func TestOnStopRecall(t *testing.T) {
 	})
 }
 
+// ─── TestOnStopInterrupted ────────────────────────────────────────────────────
+
+func TestOnStopInterrupted(t *testing.T) {
+	// When the agent is interrupted, OnStop must reset all processing messages to
+	// StatusInQueue and return nil (no recall injection).
+	t.Run("Processing Messages Reset To InQueue When Interrupted", func(t *testing.T) {
+		ctx := context.Background()
+		msgStore := message.WithTestDB(t)
+		proc := engine.New(msgStore, engine.WithTestBinary(newBlockingOmniCLI()))
+		engine.StartForTest(proc, ctx)
+		engine.RegisterAgentForTest(proc, "ag-int", "ag-int", "/ws", "team")
+
+		proc.Interrupt("ag-int")
+		engine.SetSessionForTest(proc, "ag-int", "sess-int")
+
+		msg1 := processingMessage("int-msg-1", "ag-int", "sender", message.RequestTypeExecute, 1)
+		msg2 := processingMessage("int-msg-2", "ag-int", "sender", message.RequestType("query"), 1)
+		require.NoError(t, msgStore.InsertMessage(ctx, msg1))
+		require.NoError(t, msgStore.InsertMessage(ctx, msg2))
+
+		recall := proc.OnStop(ctx, "ag-int", "sess-int")
+
+		require.Nil(t, recall, "interrupted OnStop must return nil — no recall injection")
+
+		for _, id := range []string{"int-msg-1", "int-msg-2"} {
+			got, err := msgStore.GetMessage(ctx, id)
+			require.NoError(t, err)
+			assert.Equal(t, message.StatusInQueue, got.Status,
+				"interrupted OnStop must reset processing message %s to StatusInQueue", id)
+		}
+	})
+
+	// Interrupted path must not deliver or mark messages as failed.
+	t.Run("Interrupted Does Not Deliver Or Fail Messages", func(t *testing.T) {
+		ctx := context.Background()
+		msgStore := message.WithTestDB(t)
+		proc := engine.New(msgStore, engine.WithTestBinary(newBlockingOmniCLI()))
+		engine.StartForTest(proc, ctx)
+		engine.RegisterAgentForTest(proc, "ag-int2", "ag-int2", "/ws", "team")
+
+		proc.Interrupt("ag-int2")
+		engine.SetSessionForTest(proc, "ag-int2", "sess-int2")
+
+		msg := processingMessage("int2-msg", "ag-int2", "sender", message.RequestTypeExecute, 2)
+		require.NoError(t, msgStore.InsertMessage(ctx, msg))
+
+		proc.OnStop(ctx, "ag-int2", "sess-int2")
+
+		got, err := msgStore.GetMessage(ctx, "int2-msg")
+		require.NoError(t, err)
+		assert.NotEqual(t, message.StatusDelivered, got.Status, "interrupted path must not deliver the message")
+		assert.NotEqual(t, message.StatusFailed, got.Status, "interrupted path must not fail the message")
+	})
+}
+
 // ─── TestUserPromptSubmit_StaleOrphanSweep ────────────────────────────────────
 
 func TestUserPromptSubmit_StaleOrphanSweep(t *testing.T) {

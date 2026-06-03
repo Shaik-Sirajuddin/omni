@@ -178,8 +178,12 @@ func validateResponseSchema(schemaText, response string) error {
 	if schemaText == "" {
 		return nil
 	}
+	var schemaDoc any
+	if err := json.Unmarshal([]byte(schemaText), &schemaDoc); err != nil {
+		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, "invalid stored schema: "+err.Error())
+	}
 	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource("response-schema.json", strings.NewReader(schemaText)); err != nil {
+	if err := compiler.AddResource("response-schema.json", schemaDoc); err != nil {
 		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, "invalid stored schema: "+err.Error())
 	}
 	schema, err := compiler.Compile("response-schema.json")

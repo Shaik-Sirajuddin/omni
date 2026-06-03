@@ -3,10 +3,12 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ─── TestIsMixedBatch ─────────────────────────────────────────────────────────
@@ -124,5 +126,135 @@ func TestBuildRecallPrompt(t *testing.T) {
 			// NOT do is recommend it as the action to take.
 			assert.NotContains(t, recall, "Call `send_message`", "recall must not instruct the agent to call send_message")
 		}
+	})
+}
+
+// ─── TestBuildWarmUpPrompt ────────────────────────────────────────────────────
+
+func TestBuildWarmUpPrompt(t *testing.T) {
+	t.Run("nil returns empty", func(t *testing.T) {
+		assert.Empty(t, buildWarmUpPrompt(nil))
+	})
+
+	t.Run("empty slice returns empty", func(t *testing.T) {
+		assert.Empty(t, buildWarmUpPrompt([]*message.Message{}))
+	})
+
+	t.Run("warm_up true present", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task", Refs: "{}"}}
+		assert.Contains(t, buildWarmUpPrompt(msgs), "warm_up: true")
+	})
+
+	t.Run("instruction is last field after messages", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task", Refs: "{}"}}
+		out := buildWarmUpPrompt(msgs)
+		warmIdx := strings.Index(out, "warm_up:")
+		msgIdx := strings.Index(out, "messages:")
+		instrIdx := strings.Index(out, "instruction:")
+		require.Greater(t, msgIdx, warmIdx, "messages must come after warm_up")
+		require.Greater(t, instrIdx, msgIdx, "instruction must be last — after messages section")
+	})
+
+	t.Run("homogeneous execute: no per-item request_type, execute instruction", func(t *testing.T) {
+		msgs := []*message.Message{
+			{ID: "e1", RequestType: reqTypeExecute, Prompt: "task 1", Refs: "{}"},
+			{ID: "e2", RequestType: reqTypeExecute, Prompt: "task 2", Refs: "{}"},
+		}
+		out := buildWarmUpPrompt(msgs)
+		assert.NotContains(t, out, "request_type:", "homogeneous batch must not set per-item request_type")
+		assert.Contains(t, out, "send_response", "execute instruction must reference send_response tool")
+	})
+
+	t.Run("homogeneous query: query-specific instruction, no per-item request_type", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "q1", RequestType: reqTypeQuery, Prompt: "what?", Refs: "{}"}}
+		out := buildWarmUpPrompt(msgs)
+		assert.NotContains(t, out, "request_type:", "homogeneous query batch must not set per-item request_type")
+		assert.Contains(t, out, "send_response", "query instruction must reference send_response tool")
+	})
+
+	t.Run("mixed batch: per-item request_type set, unified instruction", func(t *testing.T) {
+		msgs := []*message.Message{
+			{ID: "exec-m", RequestType: reqTypeExecute, Prompt: "task", Refs: "{}"},
+			{ID: "query-m", RequestType: reqTypeQuery, Prompt: "question", Refs: "{}"},
+		}
+		out := buildWarmUpPrompt(msgs)
+		assert.Contains(t, out, "request_type:", "mixed batch must set per-item request_type")
+		assert.Contains(t, out, warmUpMixedInstruction, "mixed batch must use the unified mixed instruction")
+	})
+
+	t.Run("mixed batch: instruction is last after messages", func(t *testing.T) {
+		msgs := []*message.Message{
+			{ID: "exec-m2", RequestType: reqTypeExecute, Prompt: "task", Refs: "{}"},
+			{ID: "query-m2", RequestType: reqTypeQuery, Prompt: "question", Refs: "{}"},
+		}
+		out := buildWarmUpPrompt(msgs)
+		msgIdx := strings.Index(out, "messages:")
+		instrIdx := strings.Index(out, "instruction:")
+		require.Greater(t, instrIdx, -1, "instruction must be present in mixed batch")
+		assert.Greater(t, instrIdx, msgIdx, "instruction must come after messages section in mixed batch")
+	})
+}
+
+// ─── TestBuildActivePrompt ────────────────────────────────────────────────────
+
+func TestBuildActivePrompt(t *testing.T) {
+	t.Run("nil returns empty", func(t *testing.T) {
+		assert.Empty(t, buildActivePrompt(nil, "sender"))
+	})
+
+	t.Run("warm_up field absent", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task"}}
+		assert.NotContains(t, buildActivePrompt(msgs, "sender-x"), "warm_up:", "active prompt must not contain warm_up field")
+	})
+
+	t.Run("instruction is last field after messages", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task"}}
+		out := buildActivePrompt(msgs, "sender-x")
+		msgIdx := strings.Index(out, "messages:")
+		instrIdx := strings.Index(out, "instruction:")
+		require.Greater(t, instrIdx, -1, "active prompt must contain instruction")
+		assert.Greater(t, instrIdx, msgIdx, "instruction must come after messages section")
+	})
+
+	t.Run("sender name embedded in instruction", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task"}}
+		assert.Contains(t, buildActivePrompt(msgs, "my-sender"), "my-sender", "active prompt instruction must embed sender name")
+	})
+
+	t.Run("empty sender defaults to 'sender'", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task"}}
+		assert.Contains(t, buildActivePrompt(msgs, ""), "sender", "empty sender name should default to 'sender'")
+	})
+
+	t.Run("refs omitted to reduce tokens", func(t *testing.T) {
+		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "task", Refs: `{"author":"test"}`}}
+		assert.NotContains(t, buildActivePrompt(msgs, "s"), "refs:", "active prompt must omit refs to reduce token usage")
+	})
+
+	t.Run("homogeneous: no per-item request_type", func(t *testing.T) {
+		msgs := []*message.Message{
+			{ID: "q1", RequestType: reqTypeQuery, Prompt: "q1"},
+			{ID: "q2", RequestType: reqTypeQuery, Prompt: "q2"},
+		}
+		assert.NotContains(t, buildActivePrompt(msgs, "s"), "request_type:", "homogeneous active batch must not set per-item request_type")
+	})
+
+	t.Run("mixed batch: per-item request_type set", func(t *testing.T) {
+		msgs := []*message.Message{
+			{ID: "exec-a", RequestType: reqTypeExecute, Prompt: "task"},
+			{ID: "query-a", RequestType: reqTypeQuery, Prompt: "question"},
+		}
+		assert.Contains(t, buildActivePrompt(msgs, "some-sender"), "request_type:", "mixed active batch must set per-item request_type")
+	})
+
+	t.Run("mixed batch: instruction is last", func(t *testing.T) {
+		msgs := []*message.Message{
+			{ID: "exec-b", RequestType: reqTypeExecute, Prompt: "task"},
+			{ID: "query-b", RequestType: reqTypeQuery, Prompt: "question"},
+		}
+		out := buildActivePrompt(msgs, "s")
+		msgIdx := strings.Index(out, "messages:")
+		instrIdx := strings.Index(out, "instruction:")
+		assert.Greater(t, instrIdx, msgIdx, "instruction must come after messages in mixed active batch")
 	})
 }

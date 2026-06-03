@@ -79,7 +79,7 @@ func (s *sqlTaskDeliveryStore) GetInProgress(ctx context.Context, agentID string
 	}
 	defer rows.Close()
 
-	var deliveries []TaskDelivery
+	deliveries := make([]TaskDelivery, 0)
 	for rows.Next() {
 		var d TaskDelivery
 		if err := rows.Scan(&d.TaskID, &d.AgentID, &d.LastMessageID, &d.Status, &d.UpdatedAt); err != nil {
