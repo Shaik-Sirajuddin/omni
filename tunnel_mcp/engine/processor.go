@@ -936,9 +936,9 @@ func buildRecallPrompt(msgs []*message.Message) string {
 		ids[i] = m.ID
 	}
 	if len(msgs) == 1 {
-		return fmt.Sprintf("Tool callback not received. Call `send_response` with message_id=%s. Do not use send_message to reply.", ids[0])
+		return fmt.Sprintf("Tool callback not received. Call `send_response` with message_id=%s, or `send_response_batch` with a single-item array. Do not use send_message to reply.", ids[0])
 	}
-	return fmt.Sprintf("Tool callback not received. Call `send_response_batch` for message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
+	return fmt.Sprintf("Tool callback not received. Call `send_response` for each or `send_response_batch` for all message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
 }
 
 func joinIDs(ids []string) string {
