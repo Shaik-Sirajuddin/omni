@@ -199,7 +199,7 @@ func (h *StdioHandler) registerTools(s *mcpserver.MCPServer) {
 }
 
 func (h *StdioHandler) handleHealth(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return resultJSON(service.HealthResponse{Status: "ok", Service: "tunnel-mcp", Version: h.serviceVersion, Transport: "stdio"}, nil)
+	return resultJSON(service.HealthResponse{Status: "ok", Service: "axolink", Version: h.serviceVersion, Transport: "stdio"}, nil)
 }
 
 func (h *StdioHandler) handleSendMessage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

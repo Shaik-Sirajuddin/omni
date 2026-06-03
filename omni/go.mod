@@ -7,9 +7,10 @@ require (
 	github.com/Shaik-Sirajuddin/memory/mcp v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0
 	github.com/Shaik-Sirajuddin/memory/pkg/log v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0 // indirect
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 	github.com/adrg/xdg v0.5.3
-	github.com/creack/pty v1.1.24
+	github.com/creack/pty v1.1.24 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
@@ -26,6 +27,7 @@ require (
 )
 
 require (
+	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0 // indirect
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
@@ -70,7 +72,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.42.0
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
@@ -83,7 +85,11 @@ replace github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../pkg/filelock
 
 replace github.com/Shaik-Sirajuddin/memory/pkg/log => ../pkg/log
 
+replace github.com/Shaik-Sirajuddin/memory/pkg/pty => ../pkg/pty
+
 replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../pkg/sockpath
+
+replace github.com/Shaik-Sirajuddin/memory/pkg/pty => ../pkg/pty
 
 replace github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../svc/ptydaemon
 

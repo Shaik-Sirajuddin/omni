@@ -15,7 +15,7 @@ import (
 const mcpServerURL = "http://127.0.0.1:18062/mcp"
 
 // defaultMCPToken matches runner.DefaultConfig().AuthToken (used when AXO_LINK_MCP_AUTH_TOKEN is unset).
-const defaultMCPToken = "tunnel-mcp-dev-token"
+const defaultMCPToken = "axolink-dev-token"
 
 // ─── TestMCPManagerRoundTrip ─────────────────────────────────────────────────
 
@@ -35,15 +35,15 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 	const claudeGlobalCfg = "/root/.claude.json"
 	const testServerName = "e2e-mcp-roundtrip-test"
 
-	// ── Step 1: precondition — tunnel-mcp present ────────────────────────────
-	t.Log("step 1: verify tunnel-mcp pre-seeded by entrypoint")
+	// ── Step 1: precondition — axolink present ───────────────────────────────
+	t.Log("step 1: verify axolink pre-seeded by entrypoint")
 	preCheck := readMCPServers(t, cfg, claudeGlobalCfg)
 	if _, ok := preCheck[testServerName]; ok {
 		t.Logf("pre-test cleanup: removing leftover %q", testServerName)
 		deleteMCPEntry(t, cfg, claudeGlobalCfg, testServerName)
 	}
-	if _, ok := preCheck["tunnel-mcp"]; !ok {
-		t.Fatalf("precondition failed: tunnel-mcp not in %s (entrypoint seeding broken)", claudeGlobalCfg)
+	if _, ok := preCheck["axolink"]; !ok {
+		t.Fatalf("precondition failed: axolink not in %s (entrypoint seeding broken)", claudeGlobalCfg)
 	}
 	t.Logf("precondition OK: mcpServers keys=%v", mapKeys(preCheck))
 
@@ -57,8 +57,8 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 	// ── Step 3: ListMCP — read back, assert both entries present ─────────────
 	t.Log("step 3: ListMCP — verify both entries present")
 	afterAdd := readMCPServers(t, cfg, claudeGlobalCfg)
-	if _, ok := afterAdd["tunnel-mcp"]; !ok {
-		t.Errorf("ListMCP: tunnel-mcp missing after AddMCP")
+	if _, ok := afterAdd["axolink"]; !ok {
+		t.Errorf("ListMCP: axolink missing after AddMCP")
 	}
 	if entry, ok := afterAdd[testServerName]; !ok {
 		t.Errorf("ListMCP: %q not found after AddMCP", testServerName)
@@ -88,8 +88,8 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 	if _, ok := afterDelete[testServerName]; ok {
 		t.Errorf("DeleteMCP: %q still present after delete", testServerName)
 	}
-	if _, ok := afterDelete["tunnel-mcp"]; !ok {
-		t.Errorf("DeleteMCP: tunnel-mcp was removed — delete affected wrong entry")
+	if _, ok := afterDelete["axolink"]; !ok {
+		t.Errorf("DeleteMCP: axolink was removed — delete affected wrong entry")
 	}
 	t.Logf("DeleteMCP OK: keys after delete=%v", mapKeys(afterDelete))
 
