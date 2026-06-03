@@ -18,44 +18,6 @@ func dbgBytes(b []byte) string {
 	return fmt.Sprintf("%q hex=% x", b, b)
 }
 
-// modesOfInterest maps private DEC mode numbers we care about to a label. These
-// are the screen modes a persistent TUI sets once at startup and never re-emits;
-// scanning for their h(set)/l(reset) toggles lets us prove or disprove the
-// attach/detach desync hypothesis from real logs instead of prediction.
-var modesOfInterest = map[string]string{
-	"1049": "alt", "1047": "alt", "47": "alt",
-	"1000": "mouse", "1002": "mouse-drag", "1003": "mouse-any",
-	"1006": "mouse-sgr", "2004": "paste", "25": "cursor",
-}
-
-// scanModes extracts private-mode toggles (ESC [ ? <params> h|l) of interest
-// from b and returns a compact summary like "1049h(alt) 2004h(paste)", or ""
-// when none are present. Debug-only: it does not stitch a sequence split across
-// two reads (rare and acceptable for diagnostics).
-func scanModes(b []byte) string {
-	var out []string
-	for i := 0; i+2 < len(b); i++ {
-		if b[i] != 0x1b || b[i+1] != '[' || b[i+2] != '?' {
-			continue
-		}
-		j := i + 3
-		for j < len(b) && (b[j] == ';' || (b[j] >= '0' && b[j] <= '9')) {
-			j++
-		}
-		if j >= len(b) || (b[j] != 'h' && b[j] != 'l') {
-			continue
-		}
-		set := b[j] // 'h' = set, 'l' = reset
-		for _, p := range strings.Split(string(b[i+3:j]), ";") {
-			if name, ok := modesOfInterest[p]; ok {
-				out = append(out, fmt.Sprintf("%s%c(%s)", p, set, name))
-			}
-		}
-		i = j
-	}
-	return strings.Join(out, " ")
-}
-
 type Status string
 
 const (
@@ -180,14 +142,8 @@ func (t *PTYTerminal) writePipe(data []byte) error {
 // corrupt the prompt line). The keystrokes are deferred while exec runs, not
 // dropped: they flush once the lock is released and surface after the prompt.
 func (t *PTYTerminal) writeUser(chunk []byte) error {
-	// Time the wait on execMu separately from the write: a large wait means a
-	// keystroke was stalled behind an in-flight exec (no echo until it lands).
-	waitStart := time.Now()
 	t.execMu.Lock()
-	waited := time.Since(waitStart)
 	defer t.execMu.Unlock()
-	ptylog.Debug("ptydaemon: writeUser", "session_id", t.SessionID,
-		"chunk", dbgBytes(chunk), "len", len(chunk), "execmu_wait_ms", waited.Milliseconds())
 	return t.write(chunk)
 }
 
@@ -265,20 +221,14 @@ func (t *PTYTerminal) drainLoop() {
 		// Bounded deadline so a paused/closed transition is noticed even when
 		// the child is silent.
 		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
-		n, err := m.Read(buf)
+		_, err := m.Read(buf)
 		if err != nil {
 			if os.IsTimeout(err) {
 				continue
 			}
 			return // EOF / EIO / closed — master is gone
 		}
-		// bytes discarded; keep draining. But first peek for screen-mode toggles
-		// the child emits while DETACHED — if the agent never re-emits ?1049h here
-		// after startup, that confirms the re-attach alt-screen desync.
-		if modes := scanModes(buf[:n]); modes != "" {
-			ptylog.Debug("ptydaemon: drainLoop modes (DETACHED, daemon is sole reader)",
-				"session_id", t.SessionID, "modes", modes)
-		}
+		// bytes discarded; keep draining
 	}
 }
 
@@ -542,9 +492,6 @@ func (t *PTYTerminal) trackUserInput(chunk []byte) {
 	if len(t.activeInput) > maxInputBuf {
 		t.activeInput = t.activeInput[len(t.activeInput)-maxInputBuf:]
 	}
-	ptylog.Debug("ptydaemon: trackUserInput", "session_id", t.SessionID,
-		"chunk", dbgBytes(chunk), "in_paste", t.inBracketedPaste,
-		"active", dbgBytes(t.activeInput))
 }
 
 // isSubmitOrClear returns true when b contains a line-submit or clear-line

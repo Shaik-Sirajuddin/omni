@@ -10,25 +10,50 @@ package log
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // NewLogger returns a structured logger tagged with the given key/value pair.
-// Writes to stderr always; also fans out to any OTLP targets registered via InitOtel.
+// Writes to the base sink (stderr by default, or OMNI_LOG_FILE if set); also fans
+// out to any OTLP targets registered via InitOtel.
 func NewLogger(key, component string) *slog.Logger {
 	level := resolveLevel()
 	opts := &slog.HandlerOptions{Level: level, AddSource: level == slog.LevelDebug}
-	handlers := append([]slog.Handler{slog.NewTextHandler(os.Stderr, opts)}, activeHandlers()...)
+	handlers := append([]slog.Handler{slog.NewTextHandler(logSink(), opts)}, activeHandlers()...)
 	return slog.New(multiHandler{handlers}).With(key, component)
 }
 
 // NewLoggerWithLevel is like NewLogger but forces a minimum log level regardless of env/config.
 func NewLoggerWithLevel(key, component string, level slog.Level) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: level, AddSource: level == slog.LevelDebug}
-	handlers := append([]slog.Handler{slog.NewTextHandler(os.Stderr, opts)}, activeHandlers()...)
+	handlers := append([]slog.Handler{slog.NewTextHandler(logSink(), opts)}, activeHandlers()...)
 	return slog.New(multiHandler{handlers}).With(key, component)
+}
+
+var (
+	sinkOnce sync.Once
+	sink     io.Writer
+)
+
+// logSink returns the base log destination. Default is stderr (captured by
+// journald for the systemd-run daemon). When OMNI_LOG_FILE is set, logs are
+// appended to that file instead — so interactive clients (e.g. `omni agent
+// attach`) never render debug output over the user's terminal. Resolved once.
+func logSink() io.Writer {
+	sinkOnce.Do(func() {
+		sink = os.Stderr
+		if path := strings.TrimSpace(os.Getenv("OMNI_LOG_FILE")); path != "" {
+			if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				sink = f
+			}
+		}
+	})
+	return sink
 }
 
 func resolveLevel() slog.Level {
