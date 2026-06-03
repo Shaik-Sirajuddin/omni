@@ -2,7 +2,11 @@
 
 package engine
 
-import "context"
+import (
+	"context"
+
+	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
+)
 
 // RegisterAgentForTest pre-seeds agent state so executeLoop does not need a
 // real agent store to resolve the agent.
@@ -24,4 +28,18 @@ func RegisterAgentForTest(e *ProcessingEngine, agentID, name, workspace, team st
 // a full Run().
 func StartForTest(e *ProcessingEngine, ctx context.Context) {
 	e.ctx = ctx
+}
+
+// SetSessionForTest seeds a CodeSession.SessionID on agentID so warmup sentinel
+// tests can simulate an agent that has already started a session.
+func SetSessionForTest(e *ProcessingEngine, agentID, sessionID string) {
+	state, _ := e.state.GetAgent(agentID)
+	state.CodeSession.SessionID = sessionID
+	e.state.SetAgent(agentID, state)
+}
+
+// PickNextMessagesForTest exposes pickNextMessages for direct whitebox tests of
+// the message-batching and mixed-type bundling logic.
+func PickNextMessagesForTest(e *ProcessingEngine, agentID string) ([]*message.Message, error) {
+	return e.pickNextMessages(agentID)
 }

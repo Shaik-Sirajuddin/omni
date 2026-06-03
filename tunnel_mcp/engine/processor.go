@@ -326,7 +326,7 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 			cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
 			stale, err := e.msgStore.RawQuery(ctx,
 				`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-				        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+				        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 				 FROM messages WHERE status = ? AND queue_time > 0 AND queue_time < ?`,
 				string(statusQueued), cutoff,
 			)
@@ -416,7 +416,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// Guard: skip if a queued or processing delivery is already in flight for this agent.
 	activeDelivery, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 		 FROM messages WHERE "to" = ? AND status IN (?, ?) LIMIT 1`,
 		agentID, string(statusQueued), string(message.StatusProcessing),
 	)
@@ -582,7 +582,7 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message, error) {
 	msgs, err := e.msgStore.RawQuery(e.ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 		 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
 		agentID, string(message.StatusInQueue),
 	)
@@ -859,7 +859,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	// A new prompt means a new session — any messages still in processing are orphaned from a prior session.
 	stale, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 		 FROM messages WHERE "to" = ? AND status = ?`,
 		agentID, string(message.StatusProcessing),
 	)
@@ -880,7 +880,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
 	staleQueued, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 		 FROM messages WHERE "to" = ? AND status = ? AND queue_time > 0 AND queue_time < ?`,
 		agentID, string(statusQueued), cutoff,
 	)
@@ -967,7 +967,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 
 	msgs, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
 		 FROM messages WHERE "to" = ? AND status = ?`,
 		agentID, string(message.StatusProcessing),
 	)
