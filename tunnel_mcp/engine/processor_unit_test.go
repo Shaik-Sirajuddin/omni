@@ -140,18 +140,16 @@ func TestBuildWarmUpPrompt(t *testing.T) {
 		assert.Empty(t, buildWarmUpPrompt([]*message.Message{}))
 	})
 
-	t.Run("warm_up true present", func(t *testing.T) {
+	t.Run("warm_up field absent — removed from payload", func(t *testing.T) {
 		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task", Refs: "{}"}}
-		assert.Contains(t, buildWarmUpPrompt(msgs), "warm_up: true")
+		assert.NotContains(t, buildWarmUpPrompt(msgs), "warm_up:")
 	})
 
 	t.Run("instruction is last field after messages", func(t *testing.T) {
 		msgs := []*message.Message{{ID: "m1", RequestType: reqTypeExecute, Prompt: "do task", Refs: "{}"}}
 		out := buildWarmUpPrompt(msgs)
-		warmIdx := strings.Index(out, "warm_up:")
 		msgIdx := strings.Index(out, "messages:")
 		instrIdx := strings.Index(out, "instruction:")
-		require.Greater(t, msgIdx, warmIdx, "messages must come after warm_up")
 		require.Greater(t, instrIdx, msgIdx, "instruction must be last — after messages section")
 	})
 

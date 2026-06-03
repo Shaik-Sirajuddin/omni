@@ -313,6 +313,20 @@ func (e *ProcessingEngine) hydrateState(ctx context.Context) {
 
 		e.state.SetAgent(agentID, state)
 		e.state.SetPending(agentID, true)
+
+		// T5: restore TaskMux for any in-progress task deliveries so the next pick
+		// prioritises the interrupted task (last writer wins if multiple in-progress).
+		if e.taskDelivery != nil {
+			deliveries, err := e.taskDelivery.GetInProgress(ctx, agentID)
+			if err != nil {
+				logger.Warn("hydrate state: task delivery lookup failed", "agent_id", agentID, "err", err)
+			}
+			for _, d := range deliveries {
+				e.state.SetTaskMux(agentID, &TaskKey{TaskID: d.TaskID})
+				logger.Info("hydrate state: restoring in-progress task delivery", "agent_id", agentID, "task_id", d.TaskID, "last_message_id", d.LastMessageID)
+			}
+		}
+
 		logger.Debug("hydrate state: agent loaded", "agent_id", agentID, "status", state.Status)
 	}
 }
@@ -470,10 +484,15 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		return
 	}
 
-	// T1/T2: set TaskMux when an execute is picked (or update if task_id changed).
-	// Retained after execute completes for next-loop priority (not cleared in markDelivered).
-	if msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
-		e.state.SetTaskMux(agentID, &TaskKey{TaskID: msgs[0].TaskID, CreatorAgentID: msgs[0].CreatorAgentID})
+	// T1/T2: update TaskMux on every execute pick.
+	// Cleared on untagged execute to prevent stale task from enabling bypass injection.
+	// Retained after execute completes (not cleared in markDelivered) for T1 next-loop priority.
+	if msgs[0].RequestType == reqTypeExecute {
+		if msgs[0].TaskID != "" {
+			e.state.SetTaskMux(agentID, &TaskKey{TaskID: msgs[0].TaskID, CreatorAgentID: msgs[0].CreatorAgentID})
+		} else {
+			e.state.SetTaskMux(agentID, nil)
+		}
 	}
 
 	// Populate workspace from message if not yet set on agent state.
@@ -532,7 +551,6 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		"agent_id", agentID,
 		"message_count", len(msgs),
 		"first_message_id", msgs[0].ID,
-		"warm_up", isWarmUp,
 	)
 
 	if e.statusCallback != nil {
@@ -706,8 +724,9 @@ type promptItem struct {
 }
 
 // promptPayload — messages first, instruction last (stronger influence at bottom of prompt).
+// warm_up detection is embedded in each item's refs JSON (key "warm_up": true) rather than
+// as a top-level field, so the agent reads it from the same refs object as sender identity.
 type promptPayload struct {
-	WarmUp      bool         `yaml:"warm_up,omitempty"`
 	Messages    []promptItem `yaml:"messages"`
 	Instruction string       `yaml:"instruction"`
 }
@@ -773,7 +792,6 @@ func buildWarmUpPrompt(msgs []*message.Message) string {
 		}
 	}
 	payload := promptPayload{
-		WarmUp:      true,
 		Messages:    items,
 		Instruction: instruction,
 	}
