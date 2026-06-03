@@ -573,12 +573,17 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 }
 
 // pickNextMessages selects the next batch of messages for agentID.
-// Groups by sender (msg.From): execute picks exactly 1; query/instant accumulate up to 5.
+//
+// Execute: picks 1 execute message; if it carries a group_id, also appends any
+// pending query/instant messages in the same group (co-task queries delivered together).
+// group_id acts as a task_id proxy until migration 5 adds the task_id column.
+//
+// Query/instant: accumulate up to 5 from the same sender, stop before execute.
 func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message, error) {
 	msgs, err := e.msgStore.RawQuery(e.ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
 		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 10`,
+		 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
 		agentID, string(message.StatusInQueue),
 	)
 	if err != nil {
@@ -590,7 +595,20 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 
 	first := msgs[0]
 	if first.RequestType == reqTypeExecute {
-		return msgs[:1], nil
+		picked := []*message.Message{first}
+		// Bundle co-task queries: same group_id, non-execute type.
+		if first.GroupID != "" {
+			for _, msg := range msgs[1:] {
+				if msg.GroupID != first.GroupID {
+					continue
+				}
+				if msg.RequestType == reqTypeExecute {
+					continue
+				}
+				picked = append(picked, msg)
+			}
+		}
+		return picked, nil
 	}
 
 	// Accumulate query/instant from the same sender, up to 5, stop before execute.
@@ -612,53 +630,83 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 }
 
 type promptItem struct {
-	MessageID string `yaml:"message_id"`
-	Refs      string `yaml:"refs,omitempty"`
-	Prompt    string `yaml:"prompt"`
+	MessageID   string `yaml:"message_id"`
+	RequestType string `yaml:"request_type,omitempty"` // per-item; set in mixed-type batches
+	Refs        string `yaml:"refs,omitempty"`
+	Prompt      string `yaml:"prompt"`
 }
 
+// promptPayload — messages first, instruction last (stronger influence at bottom of prompt).
 type promptPayload struct {
 	WarmUp      bool         `yaml:"warm_up,omitempty"`
-	RequestType string       `yaml:"request_type"`
-	Instruction string       `yaml:"instruction"`
 	Messages    []promptItem `yaml:"messages"`
+	Instruction string       `yaml:"instruction"`
+}
+
+// isMixedBatch reports whether msgs contains more than one distinct request type.
+func isMixedBatch(msgs []*message.Message) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+	rt := msgs[0].RequestType
+	for _, m := range msgs[1:] {
+		if m.RequestType != rt {
+			return true
+		}
+	}
+	return false
 }
 
 var warmUpInstruction = map[message.RequestType]string{
-	reqTypeExecute: "Execute the following task. Call `update_message` or `update_messages` after completing the task.",
-	reqTypeQuery:   "Answer the following queries. Use the axolink query_result tool (or query_result_batch for multiple) to send your response back, passing the message_id and your answer as the response.",
-	reqTypeInstant: "Process the following messages",
+	reqTypeExecute: "Execute the following task. Call `send_response(message_id, ...)` after completing.",
+	reqTypeQuery:   "Answer the following queries. Call `send_response(message_id, response)` for each.",
+	reqTypeInstant: "Process the following messages.",
 }
 
+const warmUpMixedInstruction = "Complete the task and answer all queries. Call `send_response(message_id, ...)` for each message_id."
+
 var activeInstruction = map[message.RequestType]string{
-	reqTypeExecute: "Continue the task from %s. Call `update_message` when done.",
-	reqTypeQuery:   "Reply to %s using query_result or query_result_batch.",
+	reqTypeExecute: "Continue from %s. Call `send_response` when done.",
+	reqTypeQuery:   "Reply to %s using `send_response` or `send_response_batch`.",
 	reqTypeInstant: "Process the following from %s.",
 }
 
+const activeMixedInstruction = "Continue from %s. Call `send_response` for each message_id."
+
 // buildWarmUpPrompt builds a full prompt for a first delivery to a session.
-// Includes warm_up=true and full type-specific instructions with all message fields.
+// Supports mixed-type batches (execute + co-task queries): per-item request_type is set,
+// instruction is unified and appended last.
 func buildWarmUpPrompt(msgs []*message.Message) string {
 	if len(msgs) == 0 {
 		return ""
 	}
-	rt := msgs[0].RequestType
-	instruction, ok := warmUpInstruction[rt]
-	if !ok {
-		instruction = "Process the following"
+	mixed := isMixedBatch(msgs)
+	var instruction string
+	if mixed {
+		instruction = warmUpMixedInstruction
+	} else {
+		rt := msgs[0].RequestType
+		var ok bool
+		instruction, ok = warmUpInstruction[rt]
+		if !ok {
+			instruction = "Process the following."
+		}
 	}
-	payload := promptPayload{
-		WarmUp:      true,
-		RequestType: string(rt),
-		Instruction: instruction,
-		Messages:    make([]promptItem, len(msgs)),
-	}
+	items := make([]promptItem, len(msgs))
 	for i, msg := range msgs {
-		payload.Messages[i] = promptItem{
+		items[i] = promptItem{
 			MessageID: msg.ID,
 			Refs:      msg.Refs,
 			Prompt:    msg.Prompt,
 		}
+		if mixed {
+			items[i].RequestType = string(msg.RequestType)
+		}
+	}
+	payload := promptPayload{
+		WarmUp:      true,
+		Messages:    items,
+		Instruction: instruction,
 	}
 	out, err := yaml.Marshal(payload)
 	if err != nil {
@@ -670,6 +718,7 @@ func buildWarmUpPrompt(msgs []*message.Message) string {
 
 // buildActivePrompt builds a lean prompt for subsequent deliveries to an already-warm session.
 // References sender name in the instruction; omits refs to reduce token usage.
+// Supports mixed-type batches with per-item request_type and unified instruction.
 func buildActivePrompt(msgs []*message.Message, senderName string) string {
 	if len(msgs) == 0 {
 		return ""
@@ -677,21 +726,31 @@ func buildActivePrompt(msgs []*message.Message, senderName string) string {
 	if senderName == "" {
 		senderName = "sender"
 	}
-	rt := msgs[0].RequestType
-	tmpl, ok := activeInstruction[rt]
-	if !ok {
-		tmpl = "Process the following from %s."
+	mixed := isMixedBatch(msgs)
+	var instruction string
+	if mixed {
+		instruction = fmt.Sprintf(activeMixedInstruction, senderName)
+	} else {
+		rt := msgs[0].RequestType
+		tmpl, ok := activeInstruction[rt]
+		if !ok {
+			tmpl = "Process the following from %s."
+		}
+		instruction = fmt.Sprintf(tmpl, senderName)
 	}
-	payload := promptPayload{
-		RequestType: string(rt),
-		Instruction: fmt.Sprintf(tmpl, senderName),
-		Messages:    make([]promptItem, len(msgs)),
-	}
+	items := make([]promptItem, len(msgs))
 	for i, msg := range msgs {
-		payload.Messages[i] = promptItem{
+		items[i] = promptItem{
 			MessageID: msg.ID,
 			Prompt:    msg.Prompt,
 		}
+		if mixed {
+			items[i].RequestType = string(msg.RequestType)
+		}
+	}
+	payload := promptPayload{
+		Messages:    items,
+		Instruction: instruction,
 	}
 	out, err := yaml.Marshal(payload)
 	if err != nil {
@@ -872,25 +931,14 @@ func buildRecallPrompt(msgs []*message.Message) string {
 	if len(msgs) == 0 {
 		return "Tool callback not received. Please use the appropriate tool to respond."
 	}
-	rt := msgs[0].RequestType
 	ids := make([]string, len(msgs))
 	for i, m := range msgs {
 		ids[i] = m.ID
 	}
-	switch rt {
-	case reqTypeExecute:
-		if len(msgs) == 1 {
-			return fmt.Sprintf("Tool callback not received. Call `update_message` with message_id=%s after completing the task. Do not use send_message to reply.", ids[0])
-		}
-		return fmt.Sprintf("Tool callback not received. Call `update_messages` for message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
-	case reqTypeQuery:
-		if len(msgs) == 1 {
-			return fmt.Sprintf("Tool callback not received. Call `query_res` or `query_res_batch` with message_id=%s. Do not use send_message.", ids[0])
-		}
-		return fmt.Sprintf("Tool callback not received. Call `query_res_batch` for message_ids: [%s]. Do not use send_message.", joinIDs(ids))
-	default:
-		return fmt.Sprintf("Tool callback not received. Please respond using the appropriate tool for message_id=%s.", ids[0])
+	if len(msgs) == 1 {
+		return fmt.Sprintf("Tool callback not received. Call `send_response` with message_id=%s. Do not use send_message to reply.", ids[0])
 	}
+	return fmt.Sprintf("Tool callback not received. Call `send_response_batch` for message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
 }
 
 func joinIDs(ids []string) string {
@@ -1007,11 +1055,15 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 }
 
 // mandatoryToolNames is the set of axolink tool names that confirm delivery.
+// send_response / send_response_batch are the canonical names (T7).
+// Legacy names kept as aliases until all agents migrate.
 var mandatoryToolNames = map[string]bool{
-	"update_message":     true, // execute
-	"update_messages":    true, // execute (batch)
-	"query_result":       true, // query
-	"query_result_batch": true, // query (batch)
+	"send_response":      true, // canonical
+	"send_response_batch": true, // canonical batch
+	"update_message":     true, // legacy execute alias
+	"update_messages":    true, // legacy execute batch alias
+	"query_result":       true, // legacy query alias
+	"query_result_batch": true, // legacy query batch alias
 }
 
 // OnPreToolUse is called by HookHandler on PreToolUse events.
