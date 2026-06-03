@@ -11,6 +11,8 @@ import (
 
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
+	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
+	agentpoolclient "github.com/Shaik-Sirajuddin/memory/svc/agentpool/client"
 )
 
 var Version = "dev"
@@ -53,12 +55,21 @@ func main() {
 			WorkspaceDir:  envOr("CONFIG_SYNC_AGY_WORKSPACE_DIR", ""),
 			WatchSettings: true,
 		},
-		// AgentPool is disabled until CreateAgentFunc is wired to the operator.
-		// Enable with --enable-agent-pool once the operator socket is available.
-		AgentPool: AgentPoolConfig{
-			ServiceConfig: ServiceConfig{Enabled: *enableAgentPool},
-			SocketPath:    sockpath.AgentPool(),
-		},
+	}
+
+	if *enableAgentPool {
+		poolSocketPath := sockpath.AgentPool()
+		op, err := operatorimpl.NewDefault()
+		if err != nil {
+			log.Error("agent-pool: operator init failed", "err", err)
+			os.Exit(1)
+		}
+		op.SetPoolClient(agentpoolclient.New(poolSocketPath))
+		mux.AgentPool = AgentPoolConfig{
+			ServiceConfig: ServiceConfig{Enabled: true},
+			SocketPath:    poolSocketPath,
+			CreateAgent:   op.CreateAgentForPool,
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

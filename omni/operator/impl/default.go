@@ -907,6 +907,16 @@ func New() (operator.Operator, error) {
 	return op, nil
 }
 
+// NewDefault returns the concrete *DefaultOperator, exposing methods like
+// SetPoolClient and CreateAgentForPool that are not on the Operator interface.
+func NewDefault() (*DefaultOperator, error) {
+	op, err := New()
+	if err != nil {
+		return nil, err
+	}
+	return op.(*DefaultOperator), nil
+}
+
 // memoryEnabled reports whether the agentMemory module should be invoked.
 // Both the module and the feature flag must be active.
 func (o *DefaultOperator) memoryEnabled() bool {
