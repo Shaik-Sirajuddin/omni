@@ -76,6 +76,7 @@ type ProcessingEngine struct {
 	reply               ReplyService
 	statusCallback      StatusCallbackService
 	promptSessionStore  session.PromptSessionStore
+	taskDelivery        session.TaskDeliveryStore // T5: resumable delivery checkpoints
 	deliveryWindow      time.Duration
 	ctx                 context.Context // engine lifetime context, set in Run
 }
@@ -117,6 +118,11 @@ func WithStatusCallback(s StatusCallbackService) Option {
 // WithPromptSessionStore wires a PromptSessionStore for warm-up/active prompt deduplication.
 func WithPromptSessionStore(s session.PromptSessionStore) Option {
 	return func(e *ProcessingEngine) { e.promptSessionStore = s }
+}
+
+// WithTaskDeliveryStore wires a TaskDeliveryStore for resumable delivery checkpointing (T5).
+func WithTaskDeliveryStore(s session.TaskDeliveryStore) Option {
+	return func(e *ProcessingEngine) { e.taskDelivery = s }
 }
 
 // New creates a ProcessingEngine backed by msgStore.
@@ -413,20 +419,28 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		return
 	}
 
-	// Guard: skip if a queued or processing delivery is already in flight for this agent.
-	activeDelivery, err := e.msgStore.RawQuery(ctx,
+	// T3: only an in-flight execute blocks new picks. Queries may bypass when task_id matches (T2).
+	activeExecute, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
 		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
-		 FROM messages WHERE "to" = ? AND status IN (?, ?) LIMIT 1`,
-		agentID, string(statusQueued), string(message.StatusProcessing),
+		 FROM messages WHERE "to" = ? AND status IN (?, ?) AND request_type = ? LIMIT 1`,
+		agentID, string(statusQueued), string(message.StatusProcessing), string(reqTypeExecute),
 	)
 	if err != nil {
-		logger.Error("execute loop: active delivery check failed", "agent_id", agentID, "err", err)
+		logger.Error("execute loop: active execute check failed", "agent_id", agentID, "err", err)
 		return
 	}
-	if len(activeDelivery) > 0 {
-		logger.Debug("execute loop: active delivery in flight, skipping", "agent_id", agentID)
-		return
+
+	// bypassTask is non-nil when a query bypass is allowed for an in-flight execute (T2).
+	var bypassTask *TaskKey
+	if len(activeExecute) > 0 {
+		mux := e.state.GetTaskMux(agentID)
+		if mux == nil || mux.IsZero() {
+			logger.Debug("execute loop: execute in flight, no task mux — skipping", "agent_id", agentID)
+			return
+		}
+		bypassTask = mux
+		logger.Debug("execute loop: execute in flight, checking bypass queries", "agent_id", agentID, "task_id", mux.TaskID)
 	}
 
 	// TODO: re-enable once omni agent prompt-state subcommand is stable.
@@ -441,15 +455,25 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// 	return
 	// }
 
-	msgs, err := e.pickNextMessages(agentID)
+	msgs, err := e.pickNextMessages(agentID, bypassTask)
 	if err != nil {
 		logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
 		return
 	}
 	if len(msgs) == 0 {
-		logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
-		e.state.SetPending(agentID, false)
+		if bypassTask != nil {
+			logger.Debug("execute loop: no bypass queries for task", "agent_id", agentID, "task_id", bypassTask.TaskID)
+		} else {
+			logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
+			e.state.SetPending(agentID, false)
+		}
 		return
+	}
+
+	// T1/T2: set TaskMux when an execute is picked (or update if task_id changed).
+	// Retained after execute completes for next-loop priority (not cleared in markDelivered).
+	if msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
+		e.state.SetTaskMux(agentID, &TaskKey{TaskID: msgs[0].TaskID, CreatorAgentID: msgs[0].CreatorAgentID})
 	}
 
 	// Populate workspace from message if not yet set on agent state.
@@ -465,6 +489,13 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		msg.QueueTime = queueTime
 		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
 			logger.Error("execute loop: update message to queued failed", "message_id", msg.ID, "err", err)
+		}
+	}
+
+	// T5: checkpoint execute delivery so it can be resumed on restart.
+	if e.taskDelivery != nil && msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
+		if err := e.taskDelivery.StartDelivery(ctx, msgs[0].TaskID, agentID, msgs[0].ID); err != nil {
+			logger.Warn("execute loop: task delivery checkpoint failed", "task_id", msgs[0].TaskID, "err", err)
 		}
 	}
 
@@ -574,18 +605,39 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 
 // pickNextMessages selects the next batch of messages for agentID.
 //
-// Execute: picks 1 execute message; if it carries a group_id, also appends any
-// pending query/instant messages in the same group (co-task queries delivered together).
-// group_id acts as a task_id proxy until migration 5 adds the task_id column.
+// bypassTask non-nil: T2 bypass mode — execute in flight, only pick queries for that task.
 //
-// Query/instant: accumulate up to 5 from the same sender, stop before execute.
-func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message, error) {
-	msgs, err := e.msgStore.RawQuery(e.ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
-		 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
-		agentID, string(message.StatusInQueue),
-	)
+// Normal mode (bypassTask nil):
+//   Execute: picks 1 execute; bundles co-task non-execute messages (same task_id, then same group_id fallback).
+//   Query/instant: accumulate up to 5 from same sender, stop before execute.
+//   T1 priority: TaskMux retained from last execute — messages with matching task_id sorted first.
+//   T4: messages for paused tasks are skipped.
+func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey) ([]*message.Message, error) {
+	// T2 bypass: execute in flight — pick only queries for the matching task.
+	if bypassTask != nil && !bypassTask.IsZero() {
+		return e.pickBypassQueries(agentID, *bypassTask)
+	}
+
+	// T1: use TaskMux for task_id-first ordering when available.
+	taskMux := e.state.GetTaskMux(agentID)
+	var msgs []*message.Message
+	var err error
+	if taskMux != nil && !taskMux.IsZero() {
+		msgs, err = e.msgStore.RawQuery(e.ctx,
+			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+			        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+			 FROM messages WHERE "to" = ? AND status = ?
+			 ORDER BY CASE WHEN task_id = ? AND creator_agent_id = ? THEN 0 ELSE 1 END, sent_time ASC LIMIT 20`,
+			agentID, string(message.StatusInQueue), taskMux.TaskID, taskMux.CreatorAgentID,
+		)
+	} else {
+		msgs, err = e.msgStore.RawQuery(e.ctx,
+			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+			        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+			 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
+			agentID, string(message.StatusInQueue),
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -594,17 +646,23 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 	}
 
 	first := msgs[0]
+
+	// T4: skip paused task.
+	if first.TaskID != "" && e.state.IsTaskPaused(agentID, first.TaskID) {
+		logger.Debug("pick: task is paused, skipping", "agent_id", agentID, "task_id", first.TaskID)
+		return nil, nil
+	}
+
 	if first.RequestType == reqTypeExecute {
 		picked := []*message.Message{first}
-		// Bundle co-task queries: same group_id, non-execute type.
-		if first.GroupID != "" {
-			for _, msg := range msgs[1:] {
-				if msg.GroupID != first.GroupID {
-					continue
-				}
-				if msg.RequestType == reqTypeExecute {
-					continue
-				}
+		// Bundle co-task non-execute messages: prefer task_id match, fall back to group_id.
+		for _, msg := range msgs[1:] {
+			if msg.RequestType == reqTypeExecute {
+				continue
+			}
+			if first.TaskID != "" && msg.TaskID == first.TaskID && msg.CreatorAgentID == first.CreatorAgentID {
+				picked = append(picked, msg)
+			} else if first.TaskID == "" && first.GroupID != "" && msg.GroupID == first.GroupID {
 				picked = append(picked, msg)
 			}
 		}
@@ -627,6 +685,17 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 		picked = append(picked, msg)
 	}
 	return picked, nil
+}
+
+// pickBypassQueries picks pending queries for the given task when an execute is in flight (T2).
+func (e *ProcessingEngine) pickBypassQueries(agentID string, key TaskKey) ([]*message.Message, error) {
+	return e.msgStore.RawQuery(e.ctx,
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		 FROM messages WHERE "to" = ? AND status = ? AND task_id = ? AND creator_agent_id = ? AND request_type = ?
+		 ORDER BY sent_time ASC LIMIT 5`,
+		agentID, string(message.StatusInQueue), key.TaskID, key.CreatorAgentID, string(reqTypeQuery),
+	)
 }
 
 type promptItem struct {
@@ -1048,6 +1117,12 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 			logger.Error("hook: deliver message failed", "message_id", msg.ID, "err", err)
 			continue
 		}
+		// T5: complete delivery checkpoint for execute messages.
+		if e.taskDelivery != nil && msg.RequestType == reqTypeExecute && msg.TaskID != "" {
+			if err := e.taskDelivery.CompleteDelivery(ctx, msg.TaskID, agentID); err != nil {
+				logger.Warn("hook: task delivery complete checkpoint failed", "task_id", msg.TaskID, "err", err)
+			}
+		}
 		if msg.RequestType != reqTypeQuery && e.reply != nil {
 			if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
 				logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
@@ -1056,6 +1131,27 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 	}
 	agentState.Status = AgentStatusReady
 	e.state.SetAgent(agentID, agentState)
+	go e.executeLoop(agentID)
+}
+
+// PauseTask pauses delivery of messages for the given task to agentID (T4).
+// Signature matches the service.taskPauser interface (plain strings, no cross-package type).
+func (e *ProcessingEngine) PauseTask(agentID, taskID, creatorAgentID string) {
+	if taskID == "" {
+		return
+	}
+	e.state.PauseTask(agentID, taskID)
+	logger.Info("engine: task paused", "agent_id", agentID, "task_id", taskID)
+}
+
+// ResumeTask clears the paused flag and triggers delivery for agentID (T4).
+// Signature matches the service.taskResumer interface.
+func (e *ProcessingEngine) ResumeTask(ctx context.Context, agentID, taskID, creatorAgentID string) {
+	if taskID == "" {
+		return
+	}
+	e.state.ResumeTask(agentID, taskID)
+	logger.Info("engine: task resumed", "agent_id", agentID, "task_id", taskID)
 	go e.executeLoop(agentID)
 }
 

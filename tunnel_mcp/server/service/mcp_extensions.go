@@ -13,11 +13,11 @@ import (
 )
 
 type taskPauser interface {
-	PauseTask(string, TaskKey)
+	PauseTask(agentID, taskID, creatorAgentID string)
 }
 
 type taskResumer interface {
-	ResumeTask(context.Context, string, TaskKey)
+	ResumeTask(ctx context.Context, agentID, taskID, creatorAgentID string)
 }
 
 func (s *Service) SendMessageWithMetadata(ctx context.Context, sender SenderSpec, payload PayloadMessage) (SendMessageResponse, error) {
@@ -129,7 +129,7 @@ func (s *Service) PauseTask(agentID string, taskKey TaskKey) error {
 	if !ok {
 		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task control not yet implemented — PauseTask requires T1/T2/T3 engine changes")}
 	}
-	pauser.PauseTask(agentID, taskKey)
+	pauser.PauseTask(agentID, taskKey.TaskID, taskKey.CreatorAgentID)
 	return nil
 }
 
@@ -147,7 +147,7 @@ func (s *Service) ResumeTask(ctx context.Context, agentID string, taskKey TaskKe
 	if !ok {
 		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task control not yet implemented — ResumeTask requires T1/T2/T3 engine changes")}
 	}
-	resumer.ResumeTask(ctx, agentID, taskKey)
+	resumer.ResumeTask(ctx, agentID, taskKey.TaskID, taskKey.CreatorAgentID)
 	return nil
 }
 

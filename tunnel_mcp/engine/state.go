@@ -2,6 +2,24 @@ package engine
 
 import "sync"
 
+// TaskKey identifies a task by its ID and the agent that created it.
+// Any agent may reference the same task by passing the same pair.
+// Empty TaskID means no task grouping — no bypass or priority applies.
+type TaskKey struct {
+	TaskID         string
+	CreatorAgentID string
+}
+
+// IsZero reports whether k is unset (empty TaskID).
+func (k TaskKey) IsZero() bool {
+	return k.TaskID == ""
+}
+
+// taskState tracks per-task flags (e.g. paused) within an agent's scope.
+type taskState struct {
+	Paused bool
+}
+
 // Agent identifies an agent by its ID, workspace, and team.
 // Team is for filtering only — it is not part of the agent key.
 type Agent struct {
@@ -59,17 +77,21 @@ type AgentState struct {
 
 // EngineState holds the in-memory view of all agent and delivery state.
 type EngineState struct {
-	mu       sync.RWMutex
-	agents   map[string]*AgentState
-	pending  map[string]bool   // agentID → has undelivered messages
-	sessions map[string]string // sessionID → agentID
+	mu           sync.RWMutex
+	agents       map[string]*AgentState
+	pending      map[string]bool              // agentID → has undelivered messages
+	sessions     map[string]string            // sessionID → agentID
+	taskMux      map[string]*TaskKey          // agentID → active task (nil = none); retained after execute for T1 priority
+	taskRegistry map[string]map[string]*taskState // agentID → taskID → state (paused flag)
 }
 
 func newEngineState() *EngineState {
 	return &EngineState{
-		agents:   make(map[string]*AgentState),
-		pending:  make(map[string]bool),
-		sessions: make(map[string]string),
+		agents:       make(map[string]*AgentState),
+		pending:      make(map[string]bool),
+		sessions:     make(map[string]string),
+		taskMux:      make(map[string]*TaskKey),
+		taskRegistry: make(map[string]map[string]*taskState),
 	}
 }
 
@@ -147,4 +169,50 @@ func (s *EngineState) IsPending(agentID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.pending[agentID]
+}
+
+// SetTaskMux records the active TaskKey for agentID (T1/T2).
+// Pass nil to clear; retained after execute completes for T1 priority picking.
+func (s *EngineState) SetTaskMux(agentID string, key *TaskKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.taskMux[agentID] = key
+}
+
+// GetTaskMux returns the active TaskKey for agentID, or nil if none.
+func (s *EngineState) GetTaskMux(agentID string) *TaskKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.taskMux[agentID]
+}
+
+// PauseTask marks the task identified by (agentID, taskID) as paused (T4).
+func (s *EngineState) PauseTask(agentID, taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.taskRegistry[agentID] == nil {
+		s.taskRegistry[agentID] = make(map[string]*taskState)
+	}
+	s.taskRegistry[agentID][taskID] = &taskState{Paused: true}
+}
+
+// ResumeTask clears the paused flag for the task (T4).
+func (s *EngineState) ResumeTask(agentID, taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m := s.taskRegistry[agentID]; m != nil {
+		delete(m, taskID)
+	}
+}
+
+// IsTaskPaused reports whether the task is currently paused.
+func (s *EngineState) IsTaskPaused(agentID, taskID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if m := s.taskRegistry[agentID]; m != nil {
+		if ts := m[taskID]; ts != nil {
+			return ts.Paused
+		}
+	}
+	return false
 }
