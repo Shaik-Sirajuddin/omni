@@ -28,6 +28,41 @@ type UnixSocketClient struct {
 	socketPath string
 }
 
+// clientModesOfInterest mirrors the daemon's modesOfInterest: private DEC modes
+// whose set/reset we surface in debug logs to diagnose attach/detach screen-mode
+// desync from the client (attached, sole-reader) side.
+var clientModesOfInterest = map[string]string{
+	"1049": "alt", "1047": "alt", "47": "alt",
+	"1000": "mouse", "1002": "mouse-drag", "1003": "mouse-any",
+	"1006": "mouse-sgr", "2004": "paste", "25": "cursor",
+}
+
+// scanModes extracts private-mode toggles (ESC [ ? <params> h|l) of interest
+// from b, e.g. "1049h(alt) 2004h(paste)", or "" when none. Debug-only.
+func scanModes(b []byte) string {
+	var out []string
+	for i := 0; i+2 < len(b); i++ {
+		if b[i] != 0x1b || b[i+1] != '[' || b[i+2] != '?' {
+			continue
+		}
+		j := i + 3
+		for j < len(b) && (b[j] == ';' || (b[j] >= '0' && b[j] <= '9')) {
+			j++
+		}
+		if j >= len(b) || (b[j] != 'h' && b[j] != 'l') {
+			continue
+		}
+		set := b[j]
+		for _, p := range strings.Split(string(b[i+3:j]), ";") {
+			if name, ok := clientModesOfInterest[p]; ok {
+				out = append(out, fmt.Sprintf("%s%c(%s)", p, set, name))
+			}
+		}
+		i = j
+	}
+	return strings.Join(out, " ")
+}
+
 type unixRequest struct {
 	Op        string   `json:"op"`
 	AgentID   string   `json:"agent_id,omitempty"`
@@ -398,7 +433,9 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 		_ = ptmx.Close()
 		return err
 	}
+	ptylog.Debug("client: attach begin (client takes over master, drain pausing)")
 	defer func() {
+		ptylog.Debug("client: detach (releasing master, writing termResetSeq, drain resuming)")
 		_ = term.Restore(int(os.Stdin.Fd()), oldState)
 		// Undo the private DEC modes the child may have set (mouse tracking,
 		// bracketed paste, alt screen, cursor). MakeRaw restores termios but not
@@ -450,8 +487,11 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 	go func() {
 		select {
 		case <-sigterm:
+			ptylog.Debug("client: SIGTERM (restoring terminal, writing termResetSeq)")
 			_ = term.Restore(int(os.Stdin.Fd()), oldState)
-			_, _ = os.Stdout.WriteString("\033[?25h\033[?1049l\033[0m\r\n")
+			// Same full reset as the normal detach path so mouse/paste modes are
+			// undone too, not just cursor/alt-screen.
+			_, _ = os.Stdout.WriteString(termResetSeq)
 			os.Exit(0)
 		case <-ctx.Done():
 		}
@@ -501,6 +541,14 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 					case painted <- struct{}{}:
 					default:
 					}
+				}
+				// Peek for screen-mode toggles the child emits while ATTACHED
+				// (client is sole reader). Compare against the daemon's
+				// drainLoop modes: a mode set once at startup but absent here on
+				// re-attach is the desync that pushes redraws onto the main screen.
+				if modes := scanModes(buf[:n]); modes != "" {
+					ptylog.Debug("client: attach modes (ATTACHED, client is sole reader)",
+						"modes", modes)
 				}
 				if _, werr := os.Stdout.Write(buf[:n]); werr != nil {
 					break
