@@ -398,11 +398,14 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 		_ = ptmx.Close()
 		return err
 	}
+	ptylog.Debug("client: attach begin (client takes over master, drain pausing)")
 	defer func() {
+		ptylog.Debug("client: detach (releasing master, writing termResetSeq, drain resuming)")
 		_ = term.Restore(int(os.Stdin.Fd()), oldState)
-		// Undo any cursor/screen escape codes the child may have emitted.
-		// MakeRaw restores termios but not escape-code state.
-		_, _ = os.Stdout.WriteString("\033[?25h\033[?1049l\033[0m\r\n")
+		// Undo the private DEC modes the child may have set (mouse tracking,
+		// bracketed paste, alt screen, cursor). MakeRaw restores termios but not
+		// these escape-code modes.
+		_, _ = os.Stdout.WriteString(termResetSeq)
 		_ = ptmx.Close()
 	}()
 
@@ -449,8 +452,11 @@ func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) er
 	go func() {
 		select {
 		case <-sigterm:
+			ptylog.Debug("client: SIGTERM (restoring terminal, writing termResetSeq)")
 			_ = term.Restore(int(os.Stdin.Fd()), oldState)
-			_, _ = os.Stdout.WriteString("\033[?25h\033[?1049l\033[0m\r\n")
+			// Same full reset as the normal detach path so mouse/paste modes are
+			// undone too, not just cursor/alt-screen.
+			_, _ = os.Stdout.WriteString(termResetSeq)
 			os.Exit(0)
 		case <-ctx.Done():
 		}
@@ -535,6 +541,21 @@ const redrawSettle = 40 * time.Millisecond
 // detachKey is the byte that detaches the interactive client (Ctrl+\). Ctrl+C
 // is intentionally NOT used — it is forwarded to the agent.
 const detachKey = 0x1c
+
+// termResetSeq undoes the private DEC modes a full-screen agent (claude/codex/…)
+// turns on, so the user's outer terminal is handed back in a sane state on
+// detach. term.Restore only fixes termios (echo/canon) — it does NOT touch these
+// app-set output modes, so we must emit the disables ourselves. Omitting the
+// mouse resets leaves the terminal in mouse-tracking mode after detach, which
+// breaks native click/drag text selection ("mouse copy"); omitting 2004 leaves
+// bracketed paste on, so later pastes show stray \x1b[200~ markers.
+//
+//	?1000/1002/1003/1006 l  disable mouse click/drag/any-motion/SGR reporting
+//	?2004 l                 disable bracketed paste
+//	?25 h                   show cursor
+//	?1049 l                 leave alternate screen
+//	0 m                     reset SGR (colors/attrs)
+const termResetSeq = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0m\r\n"
 
 // Repaint pump cadence: poke a resumed TUI with a forced repaint on these beats
 // until it paints (or the beats run out and the user can press a key).
