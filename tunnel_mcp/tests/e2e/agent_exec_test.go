@@ -86,7 +86,7 @@ func TestAgentResumeDetached(t *testing.T) {
 	}
 }
 
-// TestCodexAgentDelivery verifies a claude agent delivers a tunnel-mcp send_message
+// TestCodexAgentDelivery verifies a claude agent delivers an axolink send_message
 // to a codex-provider receiver. Validates sender (claude) calls the tool successfully.
 func TestCodexAgentDelivery(t *testing.T) {
 	cfg := newConfig(t)
@@ -113,7 +113,7 @@ func TestCodexAgentDelivery(t *testing.T) {
 	runOmni(t, cfg, "agent", "resume", sender, "--detach", "--workspace", cfg.workspace)
 	time.Sleep(execStartWait)
 
-	prompt := "Use the tunnel-mcp send_message tool to send 'hi from claude' to the agent named '" + receiver + "'. Call the tool now."
+	prompt := "Use the axolink send_message tool to send 'hi from claude' to the agent named '" + receiver + "'. Call the tool now."
 	runOmni(t, cfg, "agent", "exec", sender, "--prompt", prompt)
 
 	if !logBuf.WaitFor("tool=send_message", sendMessageWait) {

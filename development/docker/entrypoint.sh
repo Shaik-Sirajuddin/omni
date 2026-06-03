@@ -161,7 +161,7 @@ sys.exit(0 if stale & set(d.get('hooks',{})) else 1)
     "UserPromptSubmit": [{"hooks": [{"type": "command","command": "omni hook --event UserPromptSubmit"}]}]
   },
   "permissions": {
-    "allow": ["mcp__tunnel-mcp__*"]
+    "allow": ["mcp__axolink__*"]
   },
   "theme": "dark"
 }
@@ -297,18 +297,18 @@ PYEOF
 
   # ── codex ────────────────────────────────────────────────────────────────────
   # self-MCP wiring: codex resolves AXO_LINK_MCP_* from the container environment at request
-  # time and sends them as HTTP headers to tunnel-mcp (X-Sender-ID, X-Sender-Type, X-Agent-Workspace).
+  # time and sends them as HTTP headers to axolink (X-Sender-ID, X-Sender-Type, X-Agent-Workspace).
   # AXO_LINK_MCP_SENDER_TYPE defaults to "omni_agent" via docker-compose environment block.
   if [[ ! -f /root/.codex/config.toml ]]; then
     echo "==> seeding /root/.codex/config.toml"
     mkdir -p /root/.codex
     cat > /root/.codex/config.toml <<EOF
-[mcp_servers.tunnel_mcp]
+[mcp_servers.axolink]
 url = "${url}"
 enabled = true
 bearer_token_env_var = "AXO_LINK_MCP_AUTH_TOKEN"
 
-[mcp_servers.tunnel_mcp.env_http_headers]
+[mcp_servers.axolink.env_http_headers]
 "X-Sender-ID"       = "AXO_LINK_MCP_SENDER_ID"
 "X-Sender-Type"     = "AXO_LINK_MCP_SENDER_TYPE"
 "X-Agent-Workspace" = "AXO_LINK_MCP_AGENT_WORKSPACE"

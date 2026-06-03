@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// mcpServerURL is where the tunnel_mcp streamable HTTP server listens inside the container.
+// mcpServerURL is where the axolink streamable HTTP server listens inside the container.
 const mcpServerURL = "http://127.0.0.1:18062/mcp"
 
 // defaultMCPToken matches runner.DefaultConfig().AuthToken (used when AXO_LINK_MCP_AUTH_TOKEN is unset).
@@ -22,10 +22,10 @@ const defaultMCPToken = "axolink-dev-token"
 // TestMCPManagerRoundTrip verifies that the MCPManager file-level operations
 // (Add → List → Delete) round-trip cleanly on the claude global config:
 //
-//  1. Precondition: tunnel-mcp entry seeded by entrypoint is present in ~/.claude.json.
+//  1. Precondition: axolink entry seeded by entrypoint is present in ~/.claude.json.
 //  2. Add a test-only server entry directly via the config file (simulates AddMCP).
 //  3. List: read file back and assert both entries are visible (simulates ListMCP).
-//  4. Delete: remove the test entry and assert only tunnel-mcp remains (simulates DeleteMCP).
+//  4. Delete: remove the test entry and assert only axolink remains (simulates DeleteMCP).
 func TestMCPManagerRoundTrip(t *testing.T) {
 	cfg := newConfig(t)
 
@@ -81,7 +81,7 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 	}
 	t.Logf("idempotency OK: still exactly 1 %q entry", testServerName)
 
-	// ── Step 5: DeleteMCP — remove test entry, tunnel-mcp must survive ────────
+	// ── Step 5: DeleteMCP — remove test entry, axolink must survive ──────────
 	t.Log("step 5: DeleteMCP — remove test entry")
 	deleteMCPEntry(t, cfg, claudeGlobalCfg, testServerName)
 	afterDelete := readMCPServers(t, cfg, claudeGlobalCfg)
@@ -102,7 +102,7 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 
 // ─── TestMCPToolsListAvailability ───────────────────────────────────────────
 
-// TestMCPToolsListAvailability verifies that the tunnel_mcp HTTP server registers
+// TestMCPToolsListAvailability verifies that the axolink HTTP server registers
 // exactly 12 tools at startup.
 //
 // Two checks:
@@ -126,7 +126,7 @@ func TestMCPToolsListAvailability(t *testing.T) {
 	t.Logf("tool registration log exit=%d: %s", exitCode, toolRegStr)
 
 	if toolRegStr == "" {
-		t.Errorf("startup log: 'mcp tools registered' not found — tunnel_mcp server may not have initialised")
+		t.Errorf("startup log: 'mcp tools registered' not found — axolink server may not have initialised")
 	} else if !strings.Contains(toolRegStr, "count=12") {
 		t.Errorf("expected count=12 in tool registration line, got: %s", toolRegStr)
 	} else {
@@ -151,9 +151,9 @@ func TestMCPToolsListAvailability(t *testing.T) {
 	statusStr := strings.TrimSpace(string(httpStatus))
 	t.Logf("HTTP reachability: status=%s", statusStr)
 	if statusStr == "000" || statusStr == "" {
-		t.Errorf("tunnel_mcp server not reachable at %s (curl got no response)", mcpServerURL)
+		t.Errorf("axolink server not reachable at %s (curl got no response)", mcpServerURL)
 	} else {
-		t.Logf("PASS: tunnel_mcp server listening (HTTP %s)", statusStr)
+		t.Logf("PASS: axolink server listening (HTTP %s)", statusStr)
 	}
 
 	// ── Check 3: tools/list with valid session (TODO — server-bugs.md #2) ─────

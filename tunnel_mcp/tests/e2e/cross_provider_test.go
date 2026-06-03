@@ -14,11 +14,11 @@ const (
 )
 
 // TestCodexSaysHiToClaude verifies cross-provider message delivery:
-// a codex agent uses tunnel-mcp send_message to greet a claude agent.
+// a codex agent uses axolink send_message to greet a claude agent.
 //
 // MCP identity (env var injection) is confirmed working — codex connects with
 // correct sender_id/sender_type. But codex does not call send_message when prompted.
-// Suspected: tool discovery mismatch (config key "tunnel_mcp" vs tool namespace
+// Suspected: tool discovery mismatch (config key "axolink" vs tool namespace
 // gpt-5.4-mini sees). Tracking with codex-connector team.
 func TestCodexSaysHiToClaude(t *testing.T) {
 	codexAgent := "e2e-codex-hi"

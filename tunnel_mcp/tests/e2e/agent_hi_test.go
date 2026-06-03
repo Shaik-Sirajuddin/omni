@@ -28,7 +28,7 @@ const (
 )
 
 // TestAgentsSayHi launches two claude agents in detached mode, instructs
-// agent-1 to send a greeting to agent-2 via tunnel-mcp send_message, then asserts:
+// agent-1 to send a greeting to agent-2 via axolink send_message, then asserts:
 //   - send_message tool call logged (sender side confirmed)
 //   - exec in session logged for agent-2 (receiver-side delivery confirmed)
 //   - no unexpected ERROR entries in journalctl
@@ -55,7 +55,7 @@ func TestAgentsSayHi(t *testing.T) {
 	time.Sleep(agentStartWait)
 
 	prompt := fmt.Sprintf(
-		"Use the tunnel-mcp MCP server's send_message tool to send the message "+
+		"Use the axolink MCP server's send_message tool to send the message "+
 			"'hi from %s' to the agent named '%s'. "+
 			"Call the tool now and confirm it was sent.",
 		hiAgent1, hiAgent2,
@@ -91,7 +91,7 @@ func TestAgentsSayHi(t *testing.T) {
 //   - author_agent_name = agent name string (not a UUID)
 //   - prompt body = actual message content (not boilerplate)
 //
-// This guards against the bugs in tunnel_mcp/server/reply.go:
+// This guards against the bugs in reply.go:
 //   - replyRefs() setting author_agent_name to agent ID instead of name
 //   - replyPrompt() dropping actual content and emitting boilerplate
 func TestMessageRefsIntegrity(t *testing.T) {
@@ -120,7 +120,7 @@ func TestMessageRefsIntegrity(t *testing.T) {
 	time.Sleep(agentStartWait)
 
 	prompt := fmt.Sprintf(
-		"Use the tunnel-mcp send_message tool to send the message 'integrity-check-payload-xyz' to the agent named '%s'. Call the tool now.",
+		"Use the axolink send_message tool to send the message 'integrity-check-payload-xyz' to the agent named '%s'. Call the tool now.",
 		receiver,
 	)
 	runOmni(t, cfg, "agent", "exec", sender, "--prompt", prompt)
