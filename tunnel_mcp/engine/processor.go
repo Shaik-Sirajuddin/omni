@@ -15,7 +15,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const sessionUsageThrottlePercent = 95.0
+const (
+	sessionUsageThrottlePercent = 95.0
+	hookFireTimeout             = 10 * time.Second // watchdog: OnPreSessionStart must fire within this window
+	staleRetryDelay             = 15 * time.Second // delay before re-queueing a stale message
+	maxQueueRetries             = 3                // max re-queue attempts before permanent failure
+)
 
 // request type shorthands used by pickNextMessages and buildMessage.
 // store agent should expose RequestTypeQuery and RequestTypeInstant as named constants.
@@ -355,13 +360,36 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 				continue
 			}
 			for _, msg := range stale {
-				msg.Status = message.StatusFailed
-				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("queue sweep: mark failed error", "message_id", msg.ID, "err", err)
+				if msg.Retries < maxQueueRetries {
+					// Re-queue so the agent can retry after a short delay.
+					msg.Status = message.StatusInQueue
+					msg.QueueTime = 0 // cleared so the sweep doesn't immediately re-flag it
+					if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+						logger.Error("queue sweep: re-queue failed", "message_id", msg.ID, "err", err)
+						continue
+					}
+					logger.Warn("queue sweep: stale message re-queued with delay",
+						"message_id", msg.ID, "retries", msg.Retries)
+					agentID := msg.To
+					go func() {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(staleRetryDelay):
+						}
+						go e.executeLoop(agentID)
+					}()
+				} else {
+					msg.Status = message.StatusFailed
+					if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+						logger.Error("queue sweep: mark failed error", "message_id", msg.ID, "err", err)
+					}
+					logger.Warn("queue sweep: max retries exceeded, message failed",
+						"message_id", msg.ID, "retries", msg.Retries)
 				}
 			}
 			if len(stale) > 0 {
-				logger.Warn("queue sweep: marked stale queued messages failed", "count", len(stale))
+				logger.Warn("queue sweep: processed stale queued messages", "count", len(stale))
 			}
 		}
 	}
@@ -546,6 +574,10 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 
 	agentState.Status = AgentStatusRunning
 	e.state.SetAgent(agentID, agentState)
+	// Capture generation AFTER marking Running so the watchdog and onSessionEnd can
+	// detect whether a newer session (from markDelivered) has taken over.
+	myGeneration := agentState.CodeSession.SessionGeneration
+	prevSessionID := agentState.CodeSession.SessionID
 
 	logger.Info("execute loop: executing agent",
 		"agent_id", agentID,
@@ -557,6 +589,30 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		e.statusCallback.SendStatusCallback(ctx, msgs[0].ID, agentState.Agent.Name, agentState.Agent.Team)
 	}
 
+	// Watchdog: if OnPreSessionStart doesn't fire within hookFireTimeout (e.g. omni process
+	// failed to start), reset to Ready and re-trigger so pending messages aren't lost.
+	go func(gen int, prevSID string) {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-time.After(hookFireTimeout):
+		}
+		cur, ok := e.state.GetAgent(agentID)
+		if !ok || cur.CodeSession.IsInterrupted {
+			return
+		}
+		// Only intervene when: still Running, our generation is current (no delivery happened),
+		// and SessionID is unchanged (OnPreSessionStart never fired for this exec call).
+		if cur.Status == AgentStatusRunning &&
+			cur.CodeSession.SessionGeneration == gen &&
+			cur.CodeSession.SessionID == prevSID {
+			logger.Warn("execute loop watchdog: hook timeout, resetting to Ready", "agent_id", agentID)
+			cur.Status = AgentStatusReady
+			e.state.SetAgent(agentID, cur)
+			go e.executeLoop(agentID)
+		}
+	}(myGeneration, prevSessionID)
+
 	execErr := e.omni.ExecInSession(ctx, agentID, agentState.Agent.Name, agentState.Agent.Workspace, prompt)
 	if execErr != nil {
 		logger.Error("execute loop: exec failed", "agent_id", agentID, "err", execErr)
@@ -564,7 +620,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 
 	// Session-end guard: hooks (OnStop) fire during the session and should have already
 	// cleaned up status and messages. If they didn't (crash / no PostPrompt), do it here.
-	e.onSessionEnd(agentID, msgs, execErr != nil)
+	e.onSessionEnd(agentID, msgs, execErr != nil, myGeneration)
 
 	// Reset queue_time so the cron sweep doesn't re-flag these messages.
 	now := time.Now().UnixMilli()
@@ -574,12 +630,23 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 			logger.Error("execute loop: reset queue_time failed", "message_id", msg.ID, "err", err)
 		}
 	}
+
+	// Post-loop retry: pick any pending messages that arrived while this session was running.
+	// This is the fallback path for when markDelivered's go-executeLoop fired early but the
+	// agent was still Running at the time and returned without picking anything.
+	// Skipped on interrupt and stopped (exec-failed) states.
+	cur, _ := e.state.GetAgent(agentID)
+	if !cur.CodeSession.IsInterrupted && cur.Status != AgentStatusStopped {
+		go e.executeLoop(agentID)
+	}
 }
 
 // onSessionEnd is called after ExecInSession returns to clean up state that hooks may have missed
 // (e.g. if the omni process crashed before PostPrompt fired).
 // msgs is used only for IDs — status is re-queried from DB to avoid stale overwrites.
-func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message, execFailed bool) {
+// myGeneration is the SessionGeneration captured before ExecInSession was called; it guards
+// against resetting Running status when a newer session (spawned by markDelivered) has taken over.
+func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message, execFailed bool, myGeneration int) {
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
@@ -589,10 +656,12 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	if execFailed {
 		agentState.Status = AgentStatusStopped
 		agentState.StopReason = StopReasonOther
-	} else if agentState.Status == AgentStatusRunning {
-		// Status still Running means PostPrompt never fired — hooks missed.
+	} else if agentState.Status == AgentStatusRunning && agentState.CodeSession.SessionGeneration == myGeneration {
+		// Status still Running AND generation unchanged means PostPrompt never fired for this
+		// session (hooks missed). Safe to reset — no newer session has taken over.
 		agentState.Status = AgentStatusReady
 	}
+	// If generation advanced (markDelivered ran and spawned a new session), leave status as-is.
 
 	e.state.SetAgent(agentID, agentState)
 
@@ -1147,6 +1216,9 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 			}
 		}
 	}
+	// Increment generation so any in-flight onSessionEnd (from the now-finished ExecInSession)
+	// can detect that a new session may start and must not reset its Running status.
+	agentState.CodeSession.SessionGeneration++
 	agentState.Status = AgentStatusReady
 	e.state.SetAgent(agentID, agentState)
 	go e.executeLoop(agentID)

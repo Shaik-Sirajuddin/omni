@@ -65,6 +65,7 @@ type CodeSession struct {
 	IsInterrupted        bool
 	SessionID            string
 	MandatoryToolInvoked bool // set true when a delivery-confirming tool fires: send_response / send_response_batch (canonical) or legacy aliases query_result, update_message, etc.
+	SessionGeneration    int  // incremented by markDelivered; each executeLoop goroutine captures its value before ExecInSession to guard onSessionEnd from resetting a newer session's Running state.
 }
 
 type AgentState struct {
