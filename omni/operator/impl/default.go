@@ -621,7 +621,13 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if agent == nil {
 		if params.InitIfMissing {
 			logger.Info("ResumeAgent: agent missing, creating because init-if-missing is enabled", "workspace", workspace, "name", name)
-			return o.CreateAgent(operator.CreateAgentParams{
+			reportStatus(params.Status, operator.InitPhaseResolving, "Creating agent…")
+			reportStatus(params.Status, operator.InitPhaseStarting, "Starting session…")
+			if !params.Detached {
+				reportReady(params.Status, name, "", "")
+				reportFlush(params.Status)
+			}
+			err := o.CreateAgent(operator.CreateAgentParams{
 				Workspace:      workspace,
 				Name:           name,
 				Provider:       params.Provider,
@@ -630,6 +636,14 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				ResumeIfExists: false,
 				SessionID:      params.SessionID,
 			})
+			if err != nil {
+				reportError(params.Status, err)
+				reportFlush(params.Status)
+			} else if params.Detached {
+				reportReady(params.Status, name, "", "")
+				reportFlush(params.Status)
+			}
+			return err
 		}
 		logger.Error("ResumeAgent: agent not found", "workspace", workspace, "name", name)
 		return fmt.Errorf("operator: agent %q not found in workspace %q", name, workspace)
