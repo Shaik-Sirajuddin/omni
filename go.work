@@ -7,6 +7,7 @@ use (
 	./pkg/sockpath
 	./svc/cmd
 	./svc/config_sync
+	./svc/agentpool
 	./svc/hook-operator
 	./svc/ptydaemon
 	./tunnel_mcp

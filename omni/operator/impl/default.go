@@ -30,6 +30,7 @@ import (
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
+	agentpoolclient "github.com/Shaik-Sirajuddin/memory/svc/agentpool/client"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
 	"github.com/google/uuid"
@@ -58,6 +59,7 @@ type DefaultOperator struct {
 	agentMemory          operator.AgentMemory
 	provisioner          sandbox.SandboxProvisioner // nil = sandboxing disabled
 	ptyDaemon            ptyclients.Client
+	poolClient           *agentpoolclient.Client
 	newCodeAgent         func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	newCodeAgentForAgent func(agentID string, provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 }
@@ -951,6 +953,53 @@ func (o *DefaultOperator) ListCodeAgents(params operator.GetCodeAgentsParams) (*
 
 // CreateAgent creates a new agent entry, auto-creating the workspace when needed.
 // When memory is enabled, the agent's memory directory is seeded with the initial template.
+// SetPoolClient wires a pre-warmed agent pool client into the operator.
+// When set, CreateAgent will attempt to dequeue a warm session before
+// falling through to the normal startAgentSession path.
+func (o *DefaultOperator) SetPoolClient(c *agentpoolclient.Client) {
+	o.poolClient = c
+}
+
+// CreateAgentForPool creates a non-interactive agent and returns its agentID
+// and sessionID. It is called by the pool service to pre-warm sessions.
+func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, workspace string) (agentID string, sessionID string, err error) {
+	_ = ctx
+	createErr := o.CreateAgent(operator.CreateAgentParams{
+		Provider:           codeagent.Provider(provider),
+		Workspace:          sandbox.WorkspaceDir(workspace),
+		Interactive:        false,
+		AllowGeneratedName: true,
+	})
+	if createErr != nil {
+		return "", "", createErr
+	}
+	agents, listErr := o.store.ListAgentsByDir(sandbox.WorkspaceDir(workspace))
+	if listErr != nil {
+		return "", "", fmt.Errorf("operator: pool: list agents: %w", listErr)
+	}
+	// Pick the most-recently-inserted agent (last in list) that belongs to this workspace.
+	var agent *omniagent.AgentInfo
+	for _, a := range agents {
+		agent = a
+	}
+	if agent == nil {
+		return "", "", fmt.Errorf("operator: pool: agent not found after create")
+	}
+	agentID = agent.ID
+	if o.sessionStore != nil {
+		sessions, sErr := o.sessionStore.ListSessions(agentID, &omniagent.CodeSession{IsActive: true})
+		if sErr == nil {
+			for _, s := range sessions {
+				if s.IsActive {
+					sessionID = s.Id
+					break
+				}
+			}
+		}
+	}
+	return agentID, sessionID, nil
+}
+
 func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	if err := params.Validate(); err != nil {
 		logger.Error("CreateAgent: validation failed", "err", err)
@@ -1046,6 +1095,25 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 			return fmt.Errorf("operator: create agent: seed memory: %w", err)
 		}
 		logger.Info("CreateAgent: memory seeded", "agentID", agentID, "memoryDir", memDir)
+	}
+
+	// Pool fast-path: dequeue a pre-warmed session instead of spinning up a new one.
+	if o.poolClient != nil {
+		entry, poolErr := o.poolClient.Get(string(params.Provider), string(workspace))
+		if poolErr != nil {
+			logger.Warn("CreateAgent: pool get failed, falling through to normal path", "agentID", agentID, "err", poolErr)
+		} else if entry != nil {
+			if o.sessionStore != nil && entry.SessionID != "" {
+				if storeErr := o.sessionStore.CreateSession(agentID, &omniagent.CodeSession{
+					Id:       entry.SessionID,
+					IsActive: true,
+				}); storeErr != nil {
+					logger.Warn("CreateAgent: pool session store write failed", "agentID", agentID, "sessionID", entry.SessionID, "err", storeErr)
+				}
+			}
+			logger.Info("CreateAgent: pool hit — reusing pre-warmed session", "agentID", agentID, "sessionID", entry.SessionID)
+			return nil
+		}
 	}
 
 	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID); err != nil {

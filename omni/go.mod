@@ -61,6 +61,7 @@ require (
 )
 
 require (
+	github.com/Shaik-Sirajuddin/memory/svc/agentpool v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -92,5 +93,7 @@ replace github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../pkg/sockpath
 replace github.com/Shaik-Sirajuddin/memory/pkg/pty => ../pkg/pty
 
 replace github.com/Shaik-Sirajuddin/memory/svc/ptydaemon => ../svc/ptydaemon
+
+replace github.com/Shaik-Sirajuddin/memory/svc/agentpool => ../svc/agentpool
 
 replace github.com/Shaik-Sirajuddin/memory/svc/hook-operator => ../svc/hook-operator
