@@ -39,7 +39,7 @@ func resumeAgy(t *testing.T, cfg testConfig, name string) bool {
 
 // ─── agy standalone tests ───────────────────────────────────────────────────
 
-// TestAgySaysHi verifies agy→tunnel-mcp send_message delivery to a claude agent.
+// TestAgySaysHi verifies agy→axolink send_message delivery to a claude agent.
 func TestAgySaysHi(t *testing.T) {
 	const (
 		sender   = "e2e-agy-sender"
@@ -69,7 +69,7 @@ func TestAgySaysHi(t *testing.T) {
 	time.Sleep(agyResumeWait)
 
 	prompt := fmt.Sprintf(
-		"Use the tunnel-mcp send_message tool to send the message 'hi from agy' to the agent named '%s'. "+
+		"Use the axolink send_message tool to send the message 'hi from agy' to the agent named '%s'. "+
 			"Call the tool exactly once then stop.",
 		receiver,
 	)
@@ -94,7 +94,7 @@ func TestAgySaysHi(t *testing.T) {
 }
 
 // TestAgyHookRegistration verifies that the agy global settings file contains
-// the expected omni hook commands and tunnel-mcp permission.
+// the expected omni hook commands and axolink permission.
 func TestAgyHookRegistration(t *testing.T) {
 	cfg := newConfig(t)
 
@@ -118,8 +118,8 @@ func TestAgyHookRegistration(t *testing.T) {
 		assertLogContains(t, settings, hook,
 			"agy settings.json must contain hook command: "+hook)
 	}
-	assertLogContains(t, settings, `"mcp__tunnel-mcp__*"`,
-		"agy settings.json must allow tunnel-mcp tools")
+	assertLogContains(t, settings, `"mcp__axolink__*"`,
+		"agy settings.json must allow axolink tools")
 }
 
 // ─── claude + agy combined tests ────────────────────────────────────────────
@@ -155,7 +155,7 @@ func TestClaudeSaysHiToAgy(t *testing.T) {
 	time.Sleep(agyResumeWait)
 
 	prompt := fmt.Sprintf(
-		"Use the tunnel-mcp send_message tool to send the message 'hi from claude' to the agent named '%s'. "+
+		"Use the axolink send_message tool to send the message 'hi from claude' to the agent named '%s'. "+
 			"Call the tool exactly once then stop.",
 		receiver,
 	)
@@ -213,7 +213,7 @@ func TestAgyAndClaudeConverse(t *testing.T) {
 	// Direction 1: agy → claude
 	t.Log("direction 1: agy → claude")
 	runOmni(t, cfg, "agent", "exec", agyAgent, "--prompt", fmt.Sprintf(
-		"Use the tunnel-mcp send_message tool to send 'hello from agy' to the agent named '%s'. "+
+		"Use the axolink send_message tool to send 'hello from agy' to the agent named '%s'. "+
 			"Call the tool exactly once then stop.",
 		claudeAgent,
 	))
@@ -227,7 +227,7 @@ func TestAgyAndClaudeConverse(t *testing.T) {
 	// Direction 2: claude → agy
 	t.Log("direction 2: claude → agy")
 	runOmni(t, cfg, "agent", "exec", claudeAgent, "--prompt", fmt.Sprintf(
-		"Use the tunnel-mcp send_message tool to send 'hello from claude' to the agent named '%s'. "+
+		"Use the axolink send_message tool to send 'hello from claude' to the agent named '%s'. "+
 			"Call the tool exactly once then stop.",
 		agyAgent,
 	))
@@ -243,7 +243,7 @@ func TestAgyAndClaudeConverse(t *testing.T) {
 	}
 }
 
-// TestAgyRefsIntegrity verifies that when agy sends a message via tunnel-mcp,
+// TestAgyRefsIntegrity verifies that when agy sends a message via axolink,
 // the mcp-handler logs sender_id by agent name (not UUID) — same guard as
 // TestMessageRefsIntegrity but for the agy provider path.
 func TestAgyRefsIntegrity(t *testing.T) {
@@ -275,7 +275,7 @@ func TestAgyRefsIntegrity(t *testing.T) {
 	time.Sleep(agyResumeWait)
 
 	runOmni(t, cfg, "agent", "exec", sender, "--prompt", fmt.Sprintf(
-		"Use the tunnel-mcp send_message tool to send the message 'agy-integrity-check-xyz' to the agent named '%s'. Call the tool now.",
+		"Use the axolink send_message tool to send the message 'agy-integrity-check-xyz' to the agent named '%s'. Call the tool now.",
 		receiver,
 	))
 
