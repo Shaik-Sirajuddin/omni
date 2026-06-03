@@ -719,10 +719,12 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 				return err
 			}
 			var statusReporter operator.StatusReporter
+			var tuiReporter *clitui.Reporter
 			if !detach && clitui.IsTTY() {
-				statusReporter = clitui.NewReporter(os.Stdout)
+				tuiReporter = clitui.NewReporter(os.Stdout)
+				statusReporter = tuiReporter
 			}
-			return c.operator.ResumeAgent(operator.ResumeAgentParams{
+			err := c.operator.ResumeAgent(operator.ResumeAgentParams{
 				Workspace:     sandbox.WorkspaceDir(resolved.Workspace),
 				Name:          args[0],
 				InitIfMissing: resolved.InitIfMissing,
@@ -732,6 +734,10 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 				Detached:      detach,
 				Status:        statusReporter,
 			})
+			if tuiReporter != nil {
+				tuiReporter.Wait()
+			}
+			return err
 		},
 	}
 

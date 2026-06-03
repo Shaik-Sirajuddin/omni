@@ -1,7 +1,5 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
-
 // Phase represents a named stage in agent initialisation.
 type Phase int
 
@@ -31,10 +29,3 @@ type MsgError struct {
 	Err error
 }
 
-func (m MsgPhase) isTeaMsg() {}
-func (m MsgReady) isTeaMsg() {}
-func (m MsgError) isTeaMsg() {}
-
-var _ tea.Msg = MsgPhase{}
-var _ tea.Msg = MsgReady{}
-var _ tea.Msg = MsgError{}

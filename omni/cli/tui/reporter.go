@@ -73,8 +73,6 @@ func opPhase(op operator.InitPhase) Phase {
 		return PhaseStarting
 	case operator.InitPhaseWaiting:
 		return PhaseWaiting
-	case operator.InitPhaseActive:
-		return PhaseActive
 	default:
 		return PhaseInit
 	}

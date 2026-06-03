@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -73,7 +72,7 @@ func (m Model) View() string {
 		body := strings.Join([]string{
 			styleErr.Render("✗ Initialisation failed"),
 			"",
-			styleLabel.Render(fmt.Sprintf("%v", m.err)),
+			styleLabel.Render(errString(m.err)),
 		}, "\n")
 		return styleBoxError.Render(body) + "\n"
 	}
@@ -115,6 +114,13 @@ func phaseLabel(p Phase) string {
 	default:
 		return "Working…"
 	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	return err.Error()
 }
 
 func shortID(id string) string {

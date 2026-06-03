@@ -742,6 +742,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		})
 		if createErr != nil {
 			logger.Error("ResumeAgent: fallback create failed", "agentID", agent.ID, "err", createErr)
+			reportError(params.Status, fmt.Errorf("operator: create session fallback for agent %q: %w", agent.ID, createErr))
 			return fmt.Errorf("operator: create session fallback for agent %q: %w", agent.ID, createErr)
 		}
 		if createResult != nil && createResult.ID != "" {
@@ -760,6 +761,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+			reportError(params.Status, fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err))
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
 		}
 	}
