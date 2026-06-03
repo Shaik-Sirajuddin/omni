@@ -62,6 +62,12 @@ func (r *Reporter) Error(err error) {
 	r.p.Send(MsgError{Err: err})
 }
 
+// Flush implements operator.StatusReporter. Blocks until the bubbletea program
+// has fully exited so the terminal is clean before the PTY takes over.
+func (r *Reporter) Flush() {
+	r.Wait()
+}
+
 // IsTTY returns true when os.Stdout is an interactive terminal.
 func IsTTY() bool {
 	return isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())

@@ -723,6 +723,10 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	defer cancelResume()
 
 	reportStatus(params.Status, operator.InitPhaseStarting, "Starting PTY session…")
+	if !params.Detached {
+		reportReady(params.Status, agent.Name, model, sessionID)
+		reportFlush(params.Status)
+	}
 	envs := mcpSessionEnvs(agent)
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
@@ -798,8 +802,9 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if resumeResult != nil && resumeResult.SessionID != "" {
 		finalSessionID = resumeResult.SessionID
 	}
-	if params.Status != nil {
-		params.Status.Ready(agent.Name, model, finalSessionID)
+	if params.Detached {
+		reportReady(params.Status, agent.Name, model, finalSessionID)
+		reportFlush(params.Status)
 	}
 	logger.Info("ResumeAgent: completed", "agentID", agent.ID, "workspace", workspace, "name", name, "provider", provider, "sessionID", sessionID)
 	return nil
@@ -816,6 +821,21 @@ func reportStatus(s operator.StatusReporter, phase operator.InitPhase, detail st
 func reportError(s operator.StatusReporter, err error) {
 	if s != nil {
 		s.Error(err)
+	}
+}
+
+// reportReady calls Ready on s when s is non-nil.
+func reportReady(s operator.StatusReporter, agentName, model, sessionID string) {
+	if s != nil {
+		s.Ready(agentName, model, sessionID)
+	}
+}
+
+// reportFlush calls Flush on s when s is non-nil, blocking until the reporter
+// has fully exited so the terminal is clean before PTY takes over.
+func reportFlush(s operator.StatusReporter) {
+	if s != nil {
+		s.Flush()
 	}
 }
 

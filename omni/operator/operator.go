@@ -32,6 +32,9 @@ type StatusReporter interface {
 	Ready(agentName, model, sessionID string)
 	// Error is called when initialisation fails (before returning the error).
 	Error(err error)
+	// Flush blocks until all pending output has been rendered and the reporter
+	// has fully exited. Must be called before handing the terminal to the PTY.
+	Flush()
 }
 
 type GetCodeAgentsParams struct {

@@ -47,6 +47,8 @@ func (c *captureReporter) Error(err error) {
 	c.errVal = err
 }
 
+func (c *captureReporter) Flush() {}
+
 // snap returns a consistent copy of all fields without holding the lock to the
 // caller's goroutine — used to avoid lock-order issues when asserting.
 func (c *captureReporter) snap() (phases []operator.InitPhase, readyFired bool, readyName, readySID string, errVal error) {
