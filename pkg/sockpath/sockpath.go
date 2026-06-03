@@ -21,6 +21,7 @@ const (
 	NameHookOperator = "hook-operator.sock"
 	NameService      = "service.sock"
 	NameMCP          = "mcp.sock"
+	NameAgentPool    = "agent-pool.sock"
 )
 
 // Resolve returns the socket path for the given service socket name.
@@ -58,3 +59,6 @@ func HookOperator() string { return Resolve("HOOK_OPERATOR_SOCKET", NameHookOper
 
 // Service returns the omni service socket path, honouring OMNI_SERVICE_SOCKET.
 func Service() string { return Resolve("OMNI_SERVICE_SOCKET", NameService) }
+
+// AgentPool returns the agent-pool daemon socket path, honouring OMNI_AGENT_POOL_SOCKET.
+func AgentPool() string { return Resolve("OMNI_AGENT_POOL_SOCKET", NameAgentPool) }
