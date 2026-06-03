@@ -24,7 +24,7 @@ func main() {
 	disableHook       := flag.Bool("disable-hook-operator", false, "Disable the hook operator service")
 	disableMCP        := flag.Bool("disable-axolink-mcp", false, "Disable the Axolink MCP service")
 	disableConfigSync := flag.Bool("disable-config-sync", false, "Disable the config sync service")
-	enableAgentPool   := flag.Bool("enable-agent-pool", false, "Enable the agent pool daemon service")
+	disableAgentPool  := flag.Bool("disable-agent-pool", false, "Disable the agent pool daemon service")
 	printVersion      := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -57,7 +57,7 @@ func main() {
 		},
 	}
 
-	if *enableAgentPool {
+	if !*disableAgentPool {
 		poolSocketPath := sockpath.AgentPool()
 		op, err := operatorimpl.NewDefault()
 		if err != nil {
