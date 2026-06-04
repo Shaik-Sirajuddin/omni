@@ -844,9 +844,11 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 	}
 
 	// Accumulate query/instant from the same sender, up to 5, stop before execute.
-	// Task context filter: when TaskMux is set, only include messages that belong to
-	// the same task (or have no task_id). Messages for a different task wait until the
-	// current task context changes — they will be re-evaluated by a future executeLoop.
+	// No task filter here — in normal mode (no active execute) all pending messages are
+	// eligible regardless of task_id. Task filtering only applies in T2 bypass mode
+	// (pickBypassQueries) where an execute is actively in flight. Filtering in normal mode
+	// would permanently block task-T2 messages if TaskMux is stuck on T1 with no new
+	// execute arriving to update it.
 	senderID := first.From
 	var picked []*message.Message
 	for _, msg := range msgs {
@@ -858,11 +860,6 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 		}
 		if msg.RequestType == reqTypeExecute {
 			break
-		}
-		if taskMux != nil && !taskMux.IsZero() && msg.TaskID != "" {
-			if msg.TaskID != taskMux.TaskID || msg.CreatorAgentID != taskMux.CreatorAgentID {
-				continue // different task — defer to a future executeLoop
-			}
 		}
 		picked = append(picked, msg)
 	}
