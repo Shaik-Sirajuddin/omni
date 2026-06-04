@@ -29,7 +29,7 @@ func main() {
 	}
 
 	initOtel()
-	log := pkglog.NewLogger("component", "svc")
+	log := pkglog.NewLogger("component", "svc", pkglog.WithStderr())
 	username := currentUsername()
 
 	mux := &ServiceMux{
