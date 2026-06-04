@@ -15,6 +15,7 @@ import (
 	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
 	_ "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
+	agentpool "github.com/Shaik-Sirajuddin/memory/svc/agentpool"
 	configsync "github.com/Shaik-Sirajuddin/memory/svc/config_sync"
 	hookoperator "github.com/Shaik-Sirajuddin/memory/svc/hook-operator"
 	"github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
@@ -44,6 +45,15 @@ type AxolinkMCPConfig struct {
 	ServiceConfig
 }
 
+// AgentPoolConfig configures the agent pool daemon service.
+type AgentPoolConfig struct {
+	ServiceConfig
+	SocketPath string
+	// CreateAgent is the callback the pool daemon uses to spawn detached sessions.
+	// Must be set when Enabled is true.
+	CreateAgent agentpool.CreateAgentFunc
+}
+
 // ConfigSyncConfig configures the config sync service.
 type ConfigSyncConfig struct {
 	ServiceConfig
@@ -55,14 +65,15 @@ type ConfigSyncConfig struct {
 	WatchSettings bool
 }
 
-// ServiceMux runs ptydaemon, hook-operator, axolink-mcp, and config-sync as
-// in-process goroutines under a shared context. Stopping the context is the
-// only shutdown signal needed.
+// ServiceMux runs ptydaemon, hook-operator, axolink-mcp, config-sync, and
+// agent-pool as in-process goroutines under a shared context. Stopping the
+// context is the only shutdown signal needed.
 type ServiceMux struct {
 	PTYDaemon    PTYDaemonConfig
 	HookOperator HookOperatorConfig
 	AxolinkMCP   AxolinkMCPConfig
 	ConfigSync   ConfigSyncConfig
+	AgentPool    AgentPoolConfig
 }
 
 // Run starts all enabled services and blocks until all have exited. The first
@@ -105,30 +116,12 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 			log.Warn("axolink-mcp: omni binary not found in PATH, skipping connector registration", "err", lookErr)
 		} else {
 			for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
-				// Remove stale tunnel_mcp entry left from before the axolink rename.
-				_, _ = mgr.DeleteMCP(codeagent.DeleteMCPParams{Name: "tunnel_mcp", Global: true})
 				if _, err := mgr.AddMCP(codeagent.AddMCPParams{
 					Server: codeagent.MCPServer{
 						Name:      "axolink",
 						Transport: codeagent.MCPTransportStdio,
 						Command:   omniPath,
 						Args:      []string{"axolink"},
-						// Codex clears the parent env before spawning stdio MCP subprocesses
-						// (env_clear in codex-rs). AXO_LINK_MCP_TRANSPORT must be set as a
-						// literal since it is not present in the parent env.
-						Env: map[string]string{
-							"AXO_LINK_MCP_TRANSPORT": "stdio",
-						},
-						// Forward session-specific vars from the codex PTY process env.
-						// The operator injects these via p.Envs on every session; codex
-						// merges them into the PTY env. env_vars tells codex to re-forward
-						// those names into the omni axolink stdio subprocess.
-						EnvVars: []string{
-							"AXO_LINK_MCP_AUTH_TOKEN",
-							"AXO_LINK_MCP_SENDER_ID",
-							"AXO_LINK_MCP_SENDER_TYPE",
-							"AXO_LINK_MCP_AGENT_WORKSPACE",
-						},
 					},
 					Global: true,
 				}); err != nil {
@@ -147,6 +140,17 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 			defer wg.Done()
 			if err := runner.Run(ctx, cfg); err != nil {
 				ch <- result{fmt.Errorf("axolink-mcp: %w", err)}
+			}
+		}()
+	}
+
+	if m.AgentPool.Enabled {
+		d := agentpool.NewDaemon(m.AgentPool.CreateAgent, log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := d.Run(ctx, m.AgentPool.SocketPath); err != nil {
+				ch <- result{fmt.Errorf("agentpool: %w", err)}
 			}
 		}()
 	}
