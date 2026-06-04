@@ -3,12 +3,18 @@ package tui
 import (
 	"io"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-isatty"
 
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
 )
+
+// waitTimeout is a hard deadline for Wait(). If the operator never calls
+// Ready or Error (e.g. goroutine leak), we force-quit the TUI so the
+// process doesn't hang indefinitely.
+const waitTimeout = 30 * time.Second
 
 // Reporter implements operator.StatusReporter and forwards events to a
 // bubbletea Program. Safe to call from any goroutine.
@@ -31,11 +37,18 @@ func NewReporter(w io.Writer) *Reporter {
 }
 
 // Wait blocks until the bubbletea program has exited (after Ready or Error).
+// A hard timeout of waitTimeout guards against operator goroutine leaks that
+// never call Ready or Error; in that case the TUI is force-quit.
 func (r *Reporter) Wait() {
 	if r == nil {
 		return
 	}
-	<-r.done
+	select {
+	case <-r.done:
+	case <-time.After(waitTimeout):
+		r.p.Quit()
+		<-r.done
+	}
 }
 
 // PhaseUpdate implements operator.StatusReporter.
