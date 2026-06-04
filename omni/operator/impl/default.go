@@ -180,6 +180,12 @@ func (o *DefaultOperator) SetPoolClient(c *agentpoolclient.Client) {
 	o.poolClient = c
 }
 
+// HasPoolClient reports whether a pool client has been wired via SetPoolClient.
+// Used in tests to assert that the CLI wiring contract is satisfied.
+func (o *DefaultOperator) HasPoolClient() bool {
+	return o.poolClient != nil
+}
+
 // CreateAgentForPool creates a non-interactive agent and returns its agentID
 // and active sessionID. Intended for the pool daemon to pre-warm sessions.
 func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, workspace string) (agentID string, sessionID string, err error) {

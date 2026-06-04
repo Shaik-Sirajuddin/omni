@@ -171,6 +171,42 @@ else
   fi
 fi
 
+# ─── TEST 6: replenish log appears after register_config with MinReady=1 ──────
+# Proves the pool is actually pre-warming, not just accepting the config.
+# SKIP if journalctl is not available (e.g. non-systemd environments).
+echo ""
+echo "==> [TEST 6] pool replenish log appears (MinReady=1)"
+
+if ! command -v journalctl &>/dev/null; then
+  skip "journalctl not available — cannot verify replenish log"
+else
+  # Register a fresh workspace with MinReady=1 to trigger a replenish cycle.
+  REG6_RESP="$(sock_rpc "$SOCK" '{"op":"register_config","config":{"provider":"claude","workspace":"/agents/e2e-replenish-check","workspace_min":1,"max_parallel":1}}' 10 || true)"
+  echo "    register_config response: $REG6_RESP" | tee -a "$LOG"
+
+  if [[ "$(json_field "$REG6_RESP" "ok")" != "true" ]]; then
+    skip "register_config for replenish check failed — skipping log assertion"
+  else
+    # Poll journalctl for up to 15s for the replenish log line.
+    REPLENISH_FOUND=0
+    REPLENISH_DEADLINE=$((SECONDS + 15))
+    while [[ "$SECONDS" -lt "$REPLENISH_DEADLINE" ]]; do
+      if journalctl -u omni --since "1 minute ago" --no-pager -q 2>/dev/null \
+          | grep -q "agentpool: replenished"; then
+        REPLENISH_FOUND=1
+        break
+      fi
+      sleep 1
+    done
+
+    if [[ "$REPLENISH_FOUND" -eq 1 ]]; then
+      pass "replenish log found within 15s — pool is pre-warming"
+    else
+      fail "replenish log not found within 15s — pool may not be pre-warming after register_config"
+    fi
+  fi
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo "==> Results: PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP  (run $RUN_ID)"
