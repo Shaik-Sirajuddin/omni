@@ -59,6 +59,11 @@ var (
 // UseStderrForAll forces every logger in this process to write to stderr.
 // Call once at daemon startup before any log message is written so that
 // sub-package loggers (constructed at package init) also land in journald.
+//
+// Limitation: a logger that emits a message during package init() (before
+// main() runs) will have already resolved its destination via once.Do and
+// will not be redirected. In practice this is rare — most package-level
+// loggers are constructed but not written to during init.
 func UseStderrForAll() {
 	processWriterMu.Lock()
 	processWriter = os.Stderr
