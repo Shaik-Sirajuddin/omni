@@ -27,6 +27,10 @@ var (
 	procCreatePseudoConsole = modkernel32.NewProc("CreatePseudoConsole")
 	procResizePseudoConsole = modkernel32.NewProc("ResizePseudoConsole")
 	procClosePseudoConsole  = modkernel32.NewProc("ClosePseudoConsole")
+	// UpdateProcThreadAttribute called directly so the PSEUDOCONSOLE lpValue can be
+	// the HPCON VALUE (not a pointer to it) without an unsafe.Pointer(uintptr) cast
+	// that `go vet` flags.
+	procUpdateProcThreadAttribute = modkernel32.NewProc("UpdateProcThreadAttribute")
 )
 
 // hpcon is the opaque HPCON pseudoconsole handle.
@@ -116,17 +120,25 @@ func (w *winConPTY) spawn(commandLine string) error {
 		return fmt.Errorf("NewProcThreadAttributeList: %w", err)
 	}
 	w.attrList = attrList
-	// UpdateProcThreadAttribute copies `size` bytes from `value`; the attribute value
-	// for PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE is the HPCON handle itself, so point at
-	// the handle variable with size == sizeof(HPCON).
-	if err := attrList.Update(
+	// PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE is the classic special-case attribute: its
+	// lpValue must be the HPCON HANDLE VALUE ITSELF, not a pointer to it. Passing
+	// &w.hpc makes the child attach to a bogus pseudoconsole and produce NO output
+	// (the cause of "ConPTY emitted NOTHING"). Every reference impl — Microsoft's
+	// EchoCon, UserExistsError/conpty, aymanbagabas/go-pty — passes the handle value.
+	// Call UpdateProcThreadAttribute directly so lpValue is the handle value as a
+	// plain syscall arg (no unsafe.Pointer(uintptr) cast that `go vet` would flag).
+	if r1, _, e1 := procUpdateProcThreadAttribute.Call(
+		uintptr(unsafe.Pointer(attrList.List())),
+		0, // dwFlags
 		windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-		unsafe.Pointer(&w.hpc),
-		unsafe.Sizeof(w.hpc),
-	); err != nil {
+		uintptr(w.hpc),       // lpValue = the HPCON value itself
+		unsafe.Sizeof(w.hpc), // cbSize = sizeof(HPCON)
+		0,                    // lpPreviousValue
+		0,                    // lpReturnSize
+	); r1 == 0 {
 		attrList.Delete()
 		w.attrList = nil
-		return fmt.Errorf("UpdateProcThreadAttribute(PSEUDOCONSOLE): %w", err)
+		return fmt.Errorf("UpdateProcThreadAttribute(PSEUDOCONSOLE): %w", e1)
 	}
 
 	// Job Object: kill the child tree when the job handle closes (SIGHUP-equiv).
