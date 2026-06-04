@@ -621,7 +621,13 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if agent == nil {
 		if params.InitIfMissing {
 			logger.Info("ResumeAgent: agent missing, creating because init-if-missing is enabled", "workspace", workspace, "name", name)
-			return o.CreateAgent(operator.CreateAgentParams{
+			reportStatus(params.Status, operator.InitPhaseResolving, "Creating agent…")
+			reportStatus(params.Status, operator.InitPhaseStarting, "Starting session…")
+			if !params.Detached {
+				reportReady(params.Status, name, "", "")
+				reportFlush(params.Status)
+			}
+			err := o.CreateAgent(operator.CreateAgentParams{
 				Workspace:      workspace,
 				Name:           name,
 				Provider:       params.Provider,
@@ -630,6 +636,14 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				ResumeIfExists: false,
 				SessionID:      params.SessionID,
 			})
+			if err != nil {
+				reportError(params.Status, err)
+				reportFlush(params.Status)
+			} else if params.Detached {
+				reportReady(params.Status, name, "", "")
+				reportFlush(params.Status)
+			}
+			return err
 		}
 		logger.Error("ResumeAgent: agent not found", "workspace", workspace, "name", name)
 		return fmt.Errorf("operator: agent %q not found in workspace %q", name, workspace)
@@ -666,6 +680,8 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				if info != nil && info.AgentID == agent.ID && info.SessionID == sessionID && info.Status == "active" {
 					if params.Detached {
 						logger.Info("ResumeAgent: PTY terminal already active, leaving running in background", "agentID", agent.ID, "sessionID", sessionID)
+						reportReady(params.Status, agent.Name, model, sessionID)
+						reportFlush(params.Status)
 						return nil
 					}
 					// Guard against double-attach: if a client already holds the session,
@@ -673,10 +689,14 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 					if mac, ok := o.ptyDaemon.(interface{ MetaAttached(string) (int, error) }); ok {
 						if count, err := mac.MetaAttached(sessionID); err == nil && count >= 1 {
 							logger.Info("ResumeAgent: PTY terminal already active and attached, skipping", "agentID", agent.ID, "sessionID", sessionID, "attachedCount", count)
+							reportReady(params.Status, agent.Name, model, sessionID)
+							reportFlush(params.Status)
 							return nil
 						}
 					}
 					logger.Info("ResumeAgent: PTY terminal already active, attaching", "agentID", agent.ID, "sessionID", sessionID)
+					reportReady(params.Status, agent.Name, model, sessionID)
+					reportFlush(params.Status)
 					attachCtx, cancelAttach := newResumeContext()
 					defer cancelAttach()
 					return o.ptyDaemon.Attach(attachCtx, sessionID)
@@ -688,13 +708,17 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		if mac, ok := o.ptyDaemon.(interface{ MetaAttached(string) (int, error) }); ok {
 			if count, err := mac.MetaAttached(sessionID); err == nil && count >= 1 {
 				logger.Info("ResumeAgent: session already attached, skipping resume", "component", "operator", "agentID", agent.ID, "sessionID", sessionID, "attachedCount", count)
+				reportReady(params.Status, agent.Name, model, sessionID)
+				reportFlush(params.Status)
 				return nil
 			}
 		}
 	}
+	reportStatus(params.Status, operator.InitPhaseResolving, "Initialising agent runtime…")
 	ca, err := o.createCodeAgent(agent, provider, string(agent.WorkspaceDir), model)
 	if err != nil {
 		logger.Error("ResumeAgent: init code agent runtime failed", "agentID", agent.ID, "err", err)
+		reportError(params.Status, fmt.Errorf("operator: init code agent runtime: %w", err))
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
 	}
 
@@ -720,11 +744,17 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 
+	reportStatus(params.Status, operator.InitPhaseStarting, "Starting PTY session…")
+	if !params.Detached {
+		reportReady(params.Status, agent.Name, model, sessionID)
+		reportFlush(params.Status)
+	}
 	envs := mcpSessionEnvs(agent)
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
+			reportError(params.Status, fmt.Errorf("operator: resume session for agent %q: %w", agent.ID, err))
 			return fmt.Errorf("operator: resume session for agent %q: %w", agent.ID, err)
 		}
 		logger.Warn("ResumeAgent: no resumable session found, creating a new session", "agentID", agent.ID, "sessionID", sessionID)
@@ -738,6 +768,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		})
 		if createErr != nil {
 			logger.Error("ResumeAgent: fallback create failed", "agentID", agent.ID, "err", createErr)
+			reportError(params.Status, fmt.Errorf("operator: create session fallback for agent %q: %w", agent.ID, createErr))
 			return fmt.Errorf("operator: create session fallback for agent %q: %w", agent.ID, createErr)
 		}
 		if createResult != nil && createResult.ID != "" {
@@ -756,6 +787,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+			reportError(params.Status, fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err))
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
 		}
 	}
@@ -782,12 +814,51 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		}
 	}
 	o.registerPTYSession(agent.ID, sessionID, resumeResult)
+	reportStatus(params.Status, operator.InitPhaseWaiting, "Waiting for session to be ready…")
 	if err := waitResumeLifecycle(resumeCtx, resumeResult); err != nil {
 		logger.Error("ResumeAgent: resume lifecycle ended with error", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+		reportError(params.Status, err)
 		return err
+	}
+	finalSessionID := sessionID
+	if resumeResult != nil && resumeResult.SessionID != "" {
+		finalSessionID = resumeResult.SessionID
+	}
+	if params.Detached {
+		reportReady(params.Status, agent.Name, model, finalSessionID)
+		reportFlush(params.Status)
 	}
 	logger.Info("ResumeAgent: completed", "agentID", agent.ID, "workspace", workspace, "name", name, "provider", provider, "sessionID", sessionID)
 	return nil
+}
+
+// reportStatus calls PhaseUpdate on s when s is non-nil.
+func reportStatus(s operator.StatusReporter, phase operator.InitPhase, detail string) {
+	if s != nil {
+		s.PhaseUpdate(phase, detail)
+	}
+}
+
+// reportError calls Error on s when s is non-nil.
+func reportError(s operator.StatusReporter, err error) {
+	if s != nil {
+		s.Error(err)
+	}
+}
+
+// reportReady calls Ready on s when s is non-nil.
+func reportReady(s operator.StatusReporter, agentName, model, sessionID string) {
+	if s != nil {
+		s.Ready(agentName, model, sessionID)
+	}
+}
+
+// reportFlush calls Flush on s when s is non-nil, blocking until the reporter
+// has fully exited so the terminal is clean before PTY takes over.
+func reportFlush(s operator.StatusReporter) {
+	if s != nil {
+		s.Flush()
+	}
 }
 
 // New returns an Operator with the default embedded AgentMemory module enabled.
@@ -974,6 +1045,8 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	}
 	logger.Info("CreateAgent: start", "workspace", workspace, "name", params.Name, "provider", params.Provider, "model", params.Model, "interactive", params.Interactive, "memoryEnabled", o.memoryEnabled())
 
+	reportStatus(params.Status, operator.InitPhaseResolving, "Initialising agent…")
+
 	if params.ResumeIfExists {
 		agentName := sanitizeAgentName(params.Name)
 		if agentName != "" {
@@ -1059,8 +1132,14 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Info("CreateAgent: memory seeded", "agentID", agentID, "memoryDir", memDir)
 	}
 
-	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID); err != nil {
+	reportStatus(params.Status, operator.InitPhaseStarting, "Launching PTY session…")
+	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID, params.Status); err != nil {
 		logger.Warn("CreateAgent: session bootstrap failed — agent persisted; use 'omni agent resume' to start session", "agentID", agentID, "provider", params.Provider, "model", params.Model, "err", err)
+		reportError(params.Status, err)
+		reportFlush(params.Status)
+	} else if !params.Interactive {
+		reportReady(params.Status, agentName, "", "")
+		reportFlush(params.Status)
 	}
 	logger.Info("CreateAgent: completed", "workspaceID", ws.ID, "agentID", agentID)
 	return nil
@@ -1294,7 +1373,7 @@ func mcpSessionEnvs(agent *omniagent.AgentInfo) []string {
 	return envs
 }
 
-func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) error {
+func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string, status operator.StatusReporter) error {
 	if provider == "" {
 		provider = codeagent.Provider(operator.DefaultProvider)
 	}
@@ -1363,6 +1442,9 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		logger.Info("startAgentSession: interactive session is not attached", "agentID", agent.ID, "provider", provider, "sessionID", sessionID)
 		return nil
 	}
+
+	reportReady(status, agent.Name, model, sessionID)
+	reportFlush(status)
 
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
