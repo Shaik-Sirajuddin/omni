@@ -70,10 +70,11 @@ func UseStderrForAll() {
 	processWriterMu.Unlock()
 }
 
-// InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
-// if it is not already set. Call for commands that attach to an agent session
-// so that all in-process components and child subprocesses share one file.
-// Long-lived daemon processes should NOT call this — use UseStderrForAll().
+// InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log if it
+// is not already set, giving each CLI session its own isolated log file.
+// All in-process components and child subprocesses (code agents, MCP stdio)
+// inherit OMNI_LOG_FILE and write to the same file.
+// Long-lived daemon processes must NOT call this — use UseStderrForAll().
 func InitSessionLog() {
 	if os.Getenv("OMNI_LOG_FILE") != "" {
 		return
@@ -155,9 +156,12 @@ func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Wri
 			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
 		} else {
 			// Info mode: shared persistent log — silent to the terminal.
+			// Auto-cleared (truncated) when it exceeds omniLogMaxBytes.
+			// Per-session files use OMNI_LOG_FILE set by InitSessionLog().
 			logDir := filepath.Join(home, "log")
 			_ = os.MkdirAll(logDir, 0o755)
 			path = filepath.Join(logDir, "omni.log")
+			clearIfNeeded(path)
 		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -166,6 +170,19 @@ func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Wri
 		return os.Stderr
 	}
 	return f
+}
+
+// omniLogMaxBytes is the size threshold at which omni.log is auto-cleared.
+const omniLogMaxBytes = 10 * 1024 * 1024 // 10 MB
+
+// clearIfNeeded truncates path to zero when it exceeds omniLogMaxBytes.
+// Best-effort — failures are silently ignored so logging always continues.
+func clearIfNeeded(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < omniLogMaxBytes {
+		return
+	}
+	_ = os.Truncate(path, 0)
 }
 
 func sanitizeComponent(s string) string {
