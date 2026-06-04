@@ -3,6 +3,8 @@
 package engine
 
 import (
+	"context"
+
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 )
 
@@ -20,4 +22,14 @@ func PickNextMessagesWithBypassForTest(e *ProcessingEngine, agentID string, bypa
 // SetTaskMuxForTest seeds TaskMux state for T1/T2 tests.
 func SetTaskMuxForTest(e *ProcessingEngine, agentID string, key *TaskKey) {
 	e.state.SetTaskMux(agentID, key)
+}
+
+// HydrateStateForTest calls hydrateState so Fix 5 tests can verify TaskMux restoration.
+func HydrateStateForTest(e *ProcessingEngine, ctx context.Context) {
+	e.hydrateState(ctx)
+}
+
+// GetTaskMuxForTest returns the current TaskMux for agentID.
+func GetTaskMuxForTest(e *ProcessingEngine, agentID string) *TaskKey {
+	return e.state.GetTaskMux(agentID)
 }
