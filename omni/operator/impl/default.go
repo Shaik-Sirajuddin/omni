@@ -189,6 +189,7 @@ func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, work
 		Provider:           codeagent.Provider(provider),
 		Interactive:        false,
 		AllowGeneratedName: true,
+		SkipPool:           true, // prevent recursive pool → create → pool deadlock
 	}); err != nil {
 		return "", "", fmt.Errorf("operator: CreateAgentForPool: create: %w", err)
 	}
@@ -208,6 +209,9 @@ func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, work
 		if sErr == nil && session != nil {
 			sessionID = session.Id
 		}
+	}
+	if sessionID == "" {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: session not started for agent %s (provider binary may be missing or not configured)", agentID)
 	}
 	return agentID, sessionID, nil
 }
@@ -1110,7 +1114,8 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	}
 
 	// Pool fast-path: dequeue a pre-warmed session instead of spinning up a new one.
-	if o.poolClient != nil {
+	// Skipped when SkipPool=true to prevent recursive calls from CreateAgentForPool.
+	if o.poolClient != nil && !params.SkipPool {
 		entry, poolErr := o.poolClient.Get(string(params.Provider), string(workspace))
 		if poolErr != nil {
 			logger.Warn("CreateAgent: pool get failed, falling through to normal path", "agentID", agentID, "err", poolErr)
