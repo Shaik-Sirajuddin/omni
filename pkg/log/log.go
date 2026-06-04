@@ -62,7 +62,7 @@ func buildLogger(key, component string, level slog.Level, opts []Option) *slog.L
 var announcedPaths sync.Map
 
 // resolveWriter picks the log destination.
-// Debug + no WithStderr → file (OMNI_LOG_FILE or /tmp/omni-debug-<component>.log).
+// Debug + no WithStderr → file (OMNI_LOG_FILE or ~/.config/omni/debug/<component>.log).
 // Prints the path to stderr the first time a given file is opened.
 func resolveWriter(component string, level slog.Level, o *logOptions) io.Writer {
 	if o.useStderr || level > slog.LevelDebug {
@@ -70,7 +70,13 @@ func resolveWriter(component string, level slog.Level, o *logOptions) io.Writer 
 	}
 	path := os.Getenv("OMNI_LOG_FILE")
 	if path == "" {
-		path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+		if dir, err := xdgConfigHome(); err == nil {
+			debugDir := filepath.Join(dir, "omni", "debug")
+			_ = os.MkdirAll(debugDir, 0o755)
+			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
+		} else {
+			path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
