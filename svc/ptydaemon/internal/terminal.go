@@ -379,8 +379,6 @@ func (t *PTYTerminal) execPrompt(prompt string) error {
 	//    otherwise; the trailing 201~ closes our paste before the submit byte.
 	submit := submitSeq(t.submitKey)
 	payload := append([]byte(pasteEnd+ctrlU+pasteStart+prompt+pasteEnd), submit...)
-	ptylog.Debug("ptydaemon: execPrompt payload", "session_id", t.SessionID,
-		"payload", dbgBytes(payload), "len", len(payload))
 	if err := t.writeLocked(payload); err != nil {
 		return err
 	}

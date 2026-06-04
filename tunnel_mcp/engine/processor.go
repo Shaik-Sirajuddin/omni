@@ -447,7 +447,6 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		return
 	}
 	if len(msgs) == 0 {
-		logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
 		e.state.SetPending(agentID, false)
 		return
 	}

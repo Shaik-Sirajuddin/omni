@@ -105,8 +105,6 @@ func (e *executor) runHTTP(ctx context.Context, payload HookPayload, rawURL stri
 		return hookRunResult{err: err}
 	}
 
-	logger.Debug("hook: http request", "event", payload.EventName, "url", rawURL)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, httpURL, bytes.NewReader(payload.Body))
 	if err != nil {
 		logger.Error("hook: build http request failed", "err", err, "url", rawURL)
@@ -139,7 +137,6 @@ func (e *executor) runHTTP(ctx context.Context, payload HookPayload, rawURL stri
 		return hookRunResult{err: fmt.Errorf("hook-operator: parse http response from %q: %w", rawURL, err)}
 	}
 
-	logger.Debug("hook: http response", "event", payload.EventName, "url", rawURL, "status", resp.StatusCode, "continue", hookResp.Continue)
 	return hookRunResult{resp: hookResp}
 }
 

@@ -28,7 +28,7 @@ func (c *OmniCLI) ExecInSession(ctx context.Context, agentID, agentName, workspa
 		return fmt.Errorf("exec in session %q: %w", agentName, err)
 	}
 
-	logger.Debug("exec in session done", "agent_id", agentID, "agent_name", agentName, "output", string(out))
+	logger.Debug("exec in session done", "agent_id", agentID, "agent_name", agentName)
 	return nil
 }
 

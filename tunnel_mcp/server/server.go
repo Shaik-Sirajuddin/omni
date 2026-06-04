@@ -174,7 +174,6 @@ func (s *Server) RunInference(ctx context.Context) error {
 		case err := <-errCh:
 			return err
 		case <-ticker.C:
-			logger.Debug("mcp inference tick")
 		}
 	}
 }

@@ -97,7 +97,6 @@ func (c *UnixSocketClient) Register(agentID, sessionID, processID string) error 
 }
 
 func (c *UnixSocketClient) List(agentID string) ([]*PTYTerminalInfo, error) {
-	ptylog.Debug("client: list", "agent_id", agentID)
 	resp, conn, err := c.roundtrip(unixRequest{Op: "list"})
 	if conn != nil {
 		conn.Close()
@@ -111,7 +110,6 @@ func (c *UnixSocketClient) List(agentID string) ([]*PTYTerminalInfo, error) {
 		return nil, errors.New(resp.Error)
 	}
 	if agentID == "" {
-		ptylog.Debug("client: list ok", "count", len(resp.Sessions))
 		return resp.Sessions, nil
 	}
 	var filtered []*PTYTerminalInfo
@@ -120,12 +118,10 @@ func (c *UnixSocketClient) List(agentID string) ([]*PTYTerminalInfo, error) {
 			filtered = append(filtered, info)
 		}
 	}
-	ptylog.Debug("client: list ok", "agent_id", agentID, "count", len(filtered))
 	return filtered, nil
 }
 
 func (c *UnixSocketClient) Get(_, sessionID string) (*PTYTerminalInfo, error) {
-	ptylog.Debug("client: get", "session_id", sessionID)
 	resp, conn, err := c.roundtrip(unixRequest{Op: "get", SessionID: sessionID})
 	if conn != nil {
 		conn.Close()
@@ -135,11 +131,9 @@ func (c *UnixSocketClient) Get(_, sessionID string) (*PTYTerminalInfo, error) {
 		return nil, err
 	}
 	if !resp.OK {
-		ptylog.Debug("client: get not found", "session_id", sessionID)
 		return nil, nil // not found
 	}
 	if len(resp.Sessions) > 0 {
-		ptylog.Debug("client: get ok", "session_id", sessionID, "status", resp.Sessions[0].Status)
 		return resp.Sessions[0], nil
 	}
 	return nil, nil
@@ -274,7 +268,6 @@ func (c *UnixSocketClient) openStdinRelay(sessionID string) (net.Conn, error) {
 
 // ListAttached returns all processes holding the PTY master fd of the session.
 func (c *UnixSocketClient) ListAttached(sessionID string) ([]AttachedProcess, error) {
-	ptylog.Debug("client: list-attached", "session_id", sessionID)
 	resp, conn, err := c.roundtrip(unixRequest{Op: "list-attached", SessionID: sessionID})
 	if conn != nil {
 		conn.Close()
@@ -291,13 +284,11 @@ func (c *UnixSocketClient) ListAttached(sessionID string) ([]AttachedProcess, er
 	for _, p := range resp.Processes {
 		procs = append(procs, AttachedProcess{PID: p.PID, Comm: p.Comm, Fd: p.Fd})
 	}
-	ptylog.Debug("client: list-attached ok", "session_id", sessionID, "count", len(procs))
 	return procs, nil
 }
 
 // MetaAttached returns the count of processes holding the PTY master fd.
 func (c *UnixSocketClient) MetaAttached(sessionID string) (int, error) {
-	ptylog.Debug("client: meta-attached", "session_id", sessionID)
 	resp, conn, err := c.roundtrip(unixRequest{Op: "meta-attached", SessionID: sessionID})
 	if conn != nil {
 		conn.Close()
@@ -310,13 +301,11 @@ func (c *UnixSocketClient) MetaAttached(sessionID string) (int, error) {
 		ptylog.Error("client: meta-attached error response", "error", resp.Error, "session_id", sessionID)
 		return 0, errors.New(resp.Error)
 	}
-	ptylog.Debug("client: meta-attached ok", "session_id", sessionID, "count", resp.Count)
 	return resp.Count, nil
 }
 
 // Exec sends a pre-formatted payload to the PTY master. The daemon pipes it as-is and adds submit-key retries.
 func (c *UnixSocketClient) Exec(sessionID, input string) error {
-	ptylog.Debug("client: exec", "session_id", sessionID, "input_len", len(input))
 	if err := c.do(unixRequest{Op: "exec", SessionID: sessionID, Input: input}); err != nil {
 		ptylog.Error("client: exec failed", "err", err, "session_id", sessionID)
 		return err

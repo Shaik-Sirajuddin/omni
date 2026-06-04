@@ -139,7 +139,6 @@ func (s *sqlStore) WorkspaceByDir(dir sandbox.WorkspaceDir) (*operator.TeamInfo,
 }
 
 func (s *sqlStore) ListWorkspaces() ([]*operator.TeamInfo, error) {
-	logger.Debug("ListWorkspaces(store): query")
 	rows, err := s.db.Query(
 		`SELECT w.id, w.name, w.remote, w.workspace_dir,
 		        (SELECT COUNT(*) FROM agents a WHERE a.workspace_dir = w.workspace_dir)
@@ -191,7 +190,6 @@ func (s *sqlStore) DeleteWorkspace(id string) error {
 // --- Agent operations (omniagent's agents table) ---
 
 func (s *sqlStore) ListAgentsByDir(dir sandbox.WorkspaceDir) ([]*omniagent.AgentInfo, error) {
-	logger.Debug("ListAgentsByDir: query", "workspaceDir", dir)
 	rows, err := s.db.Query(
 		`SELECT id, name, workspace_dir, memory_dir FROM agents WHERE workspace_dir = ?`,
 		string(dir),
@@ -220,7 +218,6 @@ func (s *sqlStore) ListAgentsByDir(dir sandbox.WorkspaceDir) ([]*omniagent.Agent
 }
 
 func (s *sqlStore) GetAgent(id string) (*omniagent.AgentInfo, error) {
-	logger.Debug("GetAgent(store): query", "agentID", id)
 	row := s.db.QueryRow(
 		`SELECT id, name, workspace_dir, memory_dir FROM agents WHERE id = ?`, id,
 	)

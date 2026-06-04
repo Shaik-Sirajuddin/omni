@@ -115,8 +115,6 @@ func (d *Daemon) handleConn(conn *net.UnixConn) {
 		return
 	}
 
-	ptylog.Debug("request received", "op", req.Op, "agent_id", req.AgentID, "session_id", req.SessionID)
-
 	switch req.Op {
 	case "start":
 		d.handleStart(conn, req)
@@ -527,7 +525,6 @@ func (d *Daemon) handleList(conn *net.UnixConn, req Request) {
 		for _, r := range records {
 			entries = append(entries, recordToEntry(r))
 		}
-		ptylog.Debug("list response", "count", len(entries))
 		respond(conn, Response{OK: true, Sessions: entries})
 		return
 	}
@@ -598,7 +595,6 @@ func (d *Daemon) handleMetaAttached(conn *net.UnixConn, req Request) {
 			d.attachedPIDs.Delete(req.SessionID)
 		}
 	}
-	ptylog.Debug("meta-attached", "session_id", req.SessionID, "count", count)
 	respond(conn, Response{OK: true, SessionID: req.SessionID, Count: count})
 }
 
