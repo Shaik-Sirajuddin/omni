@@ -53,3 +53,8 @@ func PickNextMessagesWithBypassForTest(e *ProcessingEngine, agentID string, bypa
 func SetTaskMuxForTest(e *ProcessingEngine, agentID string, key *TaskKey) {
 	e.state.SetTaskMux(agentID, key)
 }
+
+// GetAgentStateForTest returns the current AgentState for agentID.
+func GetAgentStateForTest(e *ProcessingEngine, agentID string) (AgentState, bool) {
+	return e.state.GetAgent(agentID)
+}

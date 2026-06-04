@@ -91,10 +91,11 @@ func TestProcessingEngineIntegration(t *testing.T) {
 
 // ─── blockingOmniCLI ─────────────────────────────────────────────────────────
 
-// execEntry carries the agentID and a per-call release channel for one ExecInSession call.
+// execEntry carries the agentID, prompt, and a per-call release channel for one ExecInSession call.
 // The test closes entry.relCh to unblock the blocking call.
 type execEntry struct {
 	agentID string
+	prompt  string
 	relCh   chan struct{}
 }
 
@@ -111,12 +112,12 @@ func newBlockingOmniCLI() *blockingOmniCLI {
 	return &blockingOmniCLI{execCh: make(chan execEntry, 10)}
 }
 
-func (c *blockingOmniCLI) ExecInSession(_ context.Context, agentID, _, _, _ string) error {
+func (c *blockingOmniCLI) ExecInSession(_ context.Context, agentID, _, _, prompt string) error {
 	rel := make(chan struct{}) // per-call release channel
 	c.mu.Lock()
 	c.execs = append(c.execs, agentID)
 	c.mu.Unlock()
-	c.execCh <- execEntry{agentID: agentID, relCh: rel}
+	c.execCh <- execEntry{agentID: agentID, prompt: prompt, relCh: rel}
 	<-rel // block until test closes this channel
 	return nil
 }

@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	sessionUsageThrottlePercent = 95.0
-	hookFireTimeout             = 10 * time.Second // watchdog: OnPreSessionStart must fire within this window
-	staleRetryDelay             = 15 * time.Second // delay before re-queueing a stale message
-	maxQueueRetries             = 3                // max re-queue attempts before permanent failure
+	sessionUsageThrottlePercent  = 95.0
+	defaultHookFireTimeout       = 10 * time.Second // watchdog: OnPreSessionStart must fire within this window
+	staleRetryDelay              = 15 * time.Second // delay before re-queueing a stale message
+	maxQueueRetries              = 3                // max re-queue attempts before permanent failure
 )
 
 // request type shorthands used by pickNextMessages and buildMessage.
@@ -83,6 +83,7 @@ type ProcessingEngine struct {
 	promptSessionStore  session.PromptSessionStore
 	taskDelivery        session.TaskDeliveryStore // T5: resumable delivery checkpoints
 	deliveryWindow      time.Duration
+	hookFireTimeout     time.Duration
 	ctx                 context.Context // engine lifetime context, set in Run
 }
 
@@ -115,6 +116,12 @@ func WithDeliveryWindow(d time.Duration) Option {
 	return func(e *ProcessingEngine) { e.deliveryWindow = d }
 }
 
+// WithHookFireTimeout overrides how long the watchdog waits for OnPreSessionStart to fire.
+// Default is 10s. Use a shorter value in tests.
+func WithHookFireTimeout(d time.Duration) Option {
+	return func(e *ProcessingEngine) { e.hookFireTimeout = d }
+}
+
 // WithStatusCallback wires a StatusCallbackService for delivery lifecycle events.
 func WithStatusCallback(s StatusCallbackService) Option {
 	return func(e *ProcessingEngine) { e.statusCallback = s }
@@ -137,13 +144,14 @@ func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 		logger.Error("engine: failed to init agent store", "err", err)
 	}
 	e := &ProcessingEngine{
-		state:          newEngineState(),
-		msgStore:       msgStore,
-		agentStore:     agentStore,
-		omni:           omnicli.New("omni"),
-		mcp:            newMCPClientRegistry(),
-		socketPath:     DefaultSyncSocketPath,
-		deliveryWindow: 10 * time.Second,
+		state:           newEngineState(),
+		msgStore:        msgStore,
+		agentStore:      agentStore,
+		omni:            omnicli.New("omni"),
+		mcp:             newMCPClientRegistry(),
+		socketPath:      DefaultSyncSocketPath,
+		deliveryWindow:  10 * time.Second,
+		hookFireTimeout: defaultHookFireTimeout,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -633,7 +641,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		select {
 		case <-e.ctx.Done():
 			return
-		case <-time.After(hookFireTimeout):
+		case <-time.After(e.hookFireTimeout):
 		}
 		cur, ok := e.state.GetAgent(agentID)
 		if !ok || cur.CodeSession.IsInterrupted {
