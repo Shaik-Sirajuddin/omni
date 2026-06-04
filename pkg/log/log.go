@@ -15,6 +15,8 @@
 //  3. OMNI_LOG_FILE env var set → that file, all levels
 //  4. Debug mode → ~/.omni/debug/<component>.log
 //  5. Otherwise → ~/.omni/log/omni.log  (silent; no terminal output for CLI users)
+//     All CLI invocations append to this shared file. It is auto-truncated to
+//     zero when it exceeds 10 MB (omniLogMaxBytes) at process startup.
 //
 // OTLP targets registered via InitOtel() always receive records regardless
 // of the text destination above.
