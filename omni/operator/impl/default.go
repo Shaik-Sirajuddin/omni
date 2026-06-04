@@ -183,13 +183,18 @@ func (o *DefaultOperator) SetPoolClient(c *agentpoolclient.Client) {
 // CreateAgentForPool creates a non-interactive agent and returns its agentID
 // and active sessionID. Intended for the pool daemon to pre-warm sessions.
 func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, workspace string) (agentID string, sessionID string, err error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: context: %w", err)
+	}
+	// Use a deterministic unique name so we can find the agent by name after
+	// creation, avoiding the racy last-element heuristic on ListAgentsByDir.
+	poolName := "pool-" + uuid.NewString()[:8]
 	if err := o.CreateAgent(operator.CreateAgentParams{
-		Workspace:          sandbox.WorkspaceDir(workspace),
-		Provider:           codeagent.Provider(provider),
-		Interactive:        false,
-		AllowGeneratedName: true,
-		SkipPool:           true, // prevent recursive pool → create → pool deadlock
+		Workspace: sandbox.WorkspaceDir(workspace),
+		Provider:  codeagent.Provider(provider),
+		Name:      poolName,
+		Interactive: false,
+		SkipPool:  true, // prevent recursive pool → create → pool deadlock
 	}); err != nil {
 		return "", "", fmt.Errorf("operator: CreateAgentForPool: create: %w", err)
 	}
@@ -198,11 +203,15 @@ func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, work
 	if err != nil {
 		return "", "", fmt.Errorf("operator: CreateAgentForPool: list agents: %w", err)
 	}
-	if len(agents) == 0 {
-		return "", "", fmt.Errorf("operator: CreateAgentForPool: no agents found after create")
+	for _, a := range agents {
+		if a.Name == poolName {
+			agentID = a.ID
+			break
+		}
 	}
-	agent := agents[len(agents)-1]
-	agentID = agent.ID
+	if agentID == "" {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: agent %q not found after create", poolName)
+	}
 
 	if o.sessionStore != nil {
 		session, sErr := o.sessionStore.GetSession(agentID)
@@ -1121,6 +1130,13 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 			logger.Warn("CreateAgent: pool get failed, falling through to normal path", "agentID", agentID, "err", poolErr)
 		} else if entry != nil {
 			if o.sessionStore != nil && entry.SessionID != "" {
+				// Deregister the session from the pool agent so only the new
+				// agentID owns it — prevents two agents fighting over the same PTY.
+				if entry.AgentID != "" {
+					_ = o.sessionStore.UpdateSession(entry.AgentID, &omniagent.CodeSession{
+						Id: entry.SessionID, IsActive: false, Status: "transferred",
+					})
+				}
 				if storeErr := o.sessionStore.CreateSession(agentID, &omniagent.CodeSession{
 					Id:       entry.SessionID,
 					IsActive: true,

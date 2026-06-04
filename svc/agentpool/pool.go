@@ -13,7 +13,7 @@ type PoolEntry struct {
 type ProviderPoolConfig struct {
 	Provider    string `json:"provider"`
 	Workspace   string `json:"workspace"`
-	WorkspaceMin int   `json:"workspace_min"`
+	MinReady    int    `json:"workspace_min"` // minimum pre-warmed sessions to maintain
 	// MaxParallel is the internal throttle for concurrent CreateAgent calls
 	// per (provider, workspace) key. Defaults to 5. Callers are never capped.
 	MaxParallel int `json:"max_parallel,omitempty"`

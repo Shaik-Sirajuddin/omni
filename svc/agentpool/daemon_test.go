@@ -192,7 +192,7 @@ func TestGet_AsyncReplenish_RecoverToMin(t *testing.T) {
 	_, client := startDaemon(t, seqCreate(created))
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p3", Workspace: "w3", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "p3", Workspace: "w3", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestRegisterConfig_ReplenishFillsToMin(t *testing.T) {
 	_, client := startDaemon(t, seqCreate(created))
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p4", Workspace: "w4", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "p4", Workspace: "w4", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestSpawnOne_MaxParallel2_Throttle(t *testing.T) {
 	client := agentpoolclient.New(socketPath)
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p7", Workspace: "w7", WorkspaceMin: 0, MaxParallel: maxP,
+		Provider: "p7", Workspace: "w7", MinReady: 0, MaxParallel: maxP,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestCtxCancel_MidSpawn_NoHang(t *testing.T) {
 	// Goroutine A: holds the only semaphore slot (MaxParallel defaults to 5
 	// via lazy config; we use RegisterConfig to cap it at 1).
 	if err := agentpoolclient.New(socketPath).RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p8", Workspace: "w8", WorkspaceMin: 0, MaxParallel: 1,
+		Provider: "p8", Workspace: "w8", MinReady: 0, MaxParallel: 1,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -660,7 +660,7 @@ func TestReplenish_NoOvershoot(t *testing.T) {
 	_, client := startDaemon(t, seqCreate(created))
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p14", Workspace: "w14", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "p14", Workspace: "w14", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -712,7 +712,7 @@ func TestGet_EmptyProviderWorkspace_Error_NoPanic(t *testing.T) {
 
 // ── Speed / throughput tests ─────────────────────────────────────────────────
 
-// Test 16: 100 concurrent Gets against a pre-warmed pool (WorkspaceMin=20) —
+// Test 16: 100 concurrent Gets against a pre-warmed pool (MinReady=20) —
 // p99 of individual Get latencies must be < 50 ms (warm hits skip createFn;
 // the lower bound is Unix socket round-trip overhead, typically 1–30 ms).
 // Note: the design target is 5 ms, but the current client opens a new connection
@@ -740,7 +740,7 @@ func TestGet_Warmpool100_P99Under50ms(t *testing.T) {
 	client := agentpoolclient.New(socketPath)
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p16", Workspace: "w16", WorkspaceMin: min, MaxParallel: 20,
+		Provider: "p16", Workspace: "w16", MinReady: min, MaxParallel: 20,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -823,7 +823,7 @@ func TestGet_PoolVsOnDemand_10xThroughput(t *testing.T) {
 	// ── Warm pool run ─────────────────────────────────────────────────────
 	_, client := startDaemon(t, slowCreate)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p17w", Workspace: "w17w", WorkspaceMin: min, MaxParallel: min,
+		Provider: "p17w", Workspace: "w17w", MinReady: min, MaxParallel: min,
 	}); err != nil {
 		t.Fatalf("RegisterConfig (warm): %v", err)
 	}
@@ -860,7 +860,7 @@ func TestGet_PoolVsOnDemand_10xThroughput(t *testing.T) {
 	// Expected: N × latency = 20 × 5 ms = 100 ms minimum.
 	_, client2 := startDaemon(t, slowCreate)
 	if err := client2.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p17od", Workspace: "w17od", WorkspaceMin: 0, MaxParallel: 1,
+		Provider: "p17od", Workspace: "w17od", MinReady: 0, MaxParallel: 1,
 	}); err != nil {
 		t.Fatalf("RegisterConfig (on-demand): %v", err)
 	}
@@ -892,7 +892,7 @@ func TestGet_PoolVsOnDemand_10xThroughput(t *testing.T) {
 
 // ── Buffer / limit tests ──────────────────────────────────────────────────────
 
-// Test 18: WorkspaceMin=0 is treated as 1 — daemon never underflows the queue.
+// Test 18: MinReady=0 is treated as 1 — daemon never underflows the queue.
 func TestWorkspaceMin0_TreatedAs1(t *testing.T) {
 	t.Parallel()
 
@@ -900,7 +900,7 @@ func TestWorkspaceMin0_TreatedAs1(t *testing.T) {
 	_, client := startDaemon(t, seqCreate(created))
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p18", Workspace: "w18", WorkspaceMin: 0, MaxParallel: 5,
+		Provider: "p18", Workspace: "w18", MinReady: 0, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -929,7 +929,7 @@ func TestWorkspaceMin0_TreatedAs1(t *testing.T) {
 	_ = gotOne // informational only; implementation may legitimately seed 0.
 }
 
-// Test 19: WorkspaceMin=50 — drain all 50 pre-warmed entries; 51st is on-demand;
+// Test 19: MinReady=50 — drain all 50 pre-warmed entries; 51st is on-demand;
 // queue refills to 50 asynchronously without exceeding the limit.
 func TestWorkspaceMin50_DrainAndRefill(t *testing.T) {
 	t.Parallel()
@@ -950,7 +950,7 @@ func TestWorkspaceMin50_DrainAndRefill(t *testing.T) {
 
 	_, client := startDaemon(t, createFn)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p19", Workspace: "w19", WorkspaceMin: min, MaxParallel: min,
+		Provider: "p19", Workspace: "w19", MinReady: min, MaxParallel: min,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1023,7 +1023,7 @@ func TestMaxParallel1_SerialiseCreates(t *testing.T) {
 
 	_, client := startDaemon(t, createFn)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p20", Workspace: "w20", WorkspaceMin: 0, MaxParallel: 1,
+		Provider: "p20", Workspace: "w20", MinReady: 0, MaxParallel: 1,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1054,7 +1054,7 @@ func TestMaxParallel1_SerialiseCreates(t *testing.T) {
 }
 
 // Test 21: Overflow guard — scheduleReplenish never produces more than
-// WorkspaceMin entries (inflight + queued ≤ WorkspaceMin at all times).
+// MinReady entries (inflight + queued ≤ MinReady at all times).
 // We verify by counting total creates over several drain-refill cycles.
 func TestReplenish_NoOvershoot_MultiCycle(t *testing.T) {
 	t.Parallel()
@@ -1078,7 +1078,7 @@ func TestReplenish_NoOvershoot_MultiCycle(t *testing.T) {
 
 	_, client := startDaemon(t, createFn)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p21", Workspace: "w21", WorkspaceMin: min, MaxParallel: 10,
+		Provider: "p21", Workspace: "w21", MinReady: min, MaxParallel: 10,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1116,7 +1116,7 @@ func TestInit_EmptyPool_FirstGetTriggersReplenish(t *testing.T) {
 	created := make(chan string, 20)
 	_, client := startDaemon(t, seqCreate(created))
 
-	// No RegisterConfig → lazy init with WorkspaceMin=1.
+	// No RegisterConfig → lazy init with MinReady=1.
 	entry, err := client.Get("p22", "w22")
 	if err != nil {
 		t.Fatalf("first Get: %v", err)
@@ -1136,7 +1136,7 @@ func TestInit_EmptyPool_FirstGetTriggersReplenish(t *testing.T) {
 	drainN(t, created, 1)
 }
 
-// Test 23: RegisterConfig before any Get seeds the queue to WorkspaceMin
+// Test 23: RegisterConfig before any Get seeds the queue to MinReady
 // immediately; Gets return pre-warmed entries (no additional on-demand create).
 func TestInit_RegisterConfigBeforeGet_SeedsQueue(t *testing.T) {
 	t.Parallel()
@@ -1157,7 +1157,7 @@ func TestInit_RegisterConfigBeforeGet_SeedsQueue(t *testing.T) {
 
 	_, client := startDaemon(t, createFn)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p23", Workspace: "w23", WorkspaceMin: min, MaxParallel: 10,
+		Provider: "p23", Workspace: "w23", MinReady: min, MaxParallel: 10,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1216,7 +1216,7 @@ func TestInit_RegisterConfigTwice_DeltaReplenish(t *testing.T) {
 
 	// First registration → seeds min1 entries.
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p24", Workspace: "w24", WorkspaceMin: min1, MaxParallel: 10,
+		Provider: "p24", Workspace: "w24", MinReady: min1, MaxParallel: 10,
 	}); err != nil {
 		t.Fatalf("RegisterConfig #1: %v", err)
 	}
@@ -1228,7 +1228,7 @@ func TestInit_RegisterConfigTwice_DeltaReplenish(t *testing.T) {
 
 	// Second registration with higher min → must spawn exactly delta=(min2-min1).
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p24", Workspace: "w24", WorkspaceMin: min2, MaxParallel: 10,
+		Provider: "p24", Workspace: "w24", MinReady: min2, MaxParallel: 10,
 	}); err != nil {
 		t.Fatalf("RegisterConfig #2: %v", err)
 	}
@@ -1265,7 +1265,7 @@ func TestDaemonRestart_StaleSocketCleanedAndReseeds(t *testing.T) {
 
 	c1 := agentpoolclient.New(socketPath)
 	if err := c1.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p25", Workspace: "w25", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "p25", Workspace: "w25", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("d1 RegisterConfig: %v", err)
 	}
@@ -1294,7 +1294,7 @@ func TestDaemonRestart_StaleSocketCleanedAndReseeds(t *testing.T) {
 
 	c2 := agentpoolclient.New(socketPath)
 	if err := c2.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p25", Workspace: "w25", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "p25", Workspace: "w25", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("d2 RegisterConfig: %v", err)
 	}
@@ -1345,7 +1345,7 @@ func TestMaxParallel_EnforcedConcurrently(t *testing.T) {
 
 	_, client := startDaemon(t, createFn)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p26", Workspace: "w26", WorkspaceMin: 0, MaxParallel: maxP,
+		Provider: "p26", Workspace: "w26", MinReady: 0, MaxParallel: maxP,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1417,7 +1417,7 @@ func TestMaxParallel_One_Serializes(t *testing.T) {
 
 	_, client := startDaemon(t, createFn)
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p27", Workspace: "w27", WorkspaceMin: 0, MaxParallel: 1,
+		Provider: "p27", Workspace: "w27", MinReady: 0, MaxParallel: 1,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1519,12 +1519,12 @@ func TestGet_MultipleProviderWorkspaceIndependent(t *testing.T) {
 
 	const min = 2
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "provA29", Workspace: "wsA29", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "provA29", Workspace: "wsA29", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig A: %v", err)
 	}
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "provB29", Workspace: "wsB29", WorkspaceMin: min, MaxParallel: 5,
+		Provider: "provB29", Workspace: "wsB29", MinReady: min, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig B: %v", err)
 	}
@@ -1571,7 +1571,7 @@ func TestGet_MultipleProviderWorkspaceIndependent(t *testing.T) {
 	}
 }
 
-// Test 30: WorkspaceMin=0 — RegisterConfig with min=0 must not trigger any
+// Test 30: MinReady=0 — RegisterConfig with min=0 must not trigger any
 // background creates. After 100ms silence, a Get fires on-demand and returns ok.
 func TestRegisterConfig_ZeroMin_NoReplenish(t *testing.T) {
 	t.Parallel()
@@ -1580,7 +1580,7 @@ func TestRegisterConfig_ZeroMin_NoReplenish(t *testing.T) {
 	_, client := startDaemon(t, seqCreate(created))
 
 	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p30", Workspace: "w30", WorkspaceMin: 0, MaxParallel: 5,
+		Provider: "p30", Workspace: "w30", MinReady: 0, MaxParallel: 5,
 	}); err != nil {
 		t.Fatalf("RegisterConfig: %v", err)
 	}
@@ -1630,7 +1630,7 @@ func TestGet_ContextCancellation(t *testing.T) {
 	waitSocket(t, socketPath)
 
 	if err := agentpoolclient.New(socketPath).RegisterConfig(agentpool.ProviderPoolConfig{
-		Provider: "p31", Workspace: "w31", WorkspaceMin: 0, MaxParallel: 5,
+		Provider: "p31", Workspace: "w31", MinReady: 0, MaxParallel: 5,
 	}); err != nil {
 		cancel()
 		t.Fatalf("RegisterConfig: %v", err)

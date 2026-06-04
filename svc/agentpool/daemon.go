@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // CreateAgentFunc is called by the daemon to spawn a new detached agent session.
@@ -78,11 +79,15 @@ func (d *Daemon) Run(ctx context.Context, socketPath string) error {
 	}
 }
 
+const connIdleTimeout = 30 * time.Second
+
 func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(connIdleTimeout))
 	scanner := bufio.NewScanner(conn)
 	enc := json.NewEncoder(conn)
 	for scanner.Scan() {
+		_ = conn.SetDeadline(time.Now().Add(connIdleTimeout)) // refresh per request
 		var req Request
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 			_ = enc.Encode(Response{OK: false, Error: "invalid request: " + err.Error()})
@@ -122,7 +127,7 @@ func (d *Daemon) handleRegisterConfig(ctx context.Context, cfg ProviderPoolConfi
 		d.sems[key] = sem
 	}
 	d.mu.Unlock()
-	d.log.Info("agentpool: config registered", "provider", cfg.Provider, "workspace", cfg.Workspace, "min", cfg.WorkspaceMin, "maxParallel", cfg.MaxParallel)
+	d.log.Info("agentpool: config registered", "provider", cfg.Provider, "workspace", cfg.Workspace, "min", cfg.MinReady, "maxParallel", cfg.MaxParallel)
 	// Seed the queue to workspace_min immediately after registration.
 	d.scheduleReplenish(ctx, key)
 	return Response{OK: true}
@@ -134,7 +139,7 @@ func (d *Daemon) handleGet(ctx context.Context, provider, workspace string) Resp
 	d.mu.Lock()
 	// Lazy config registration on first Get.
 	if _, ok := d.configs[key]; !ok {
-		cfg := ProviderPoolConfig{Provider: provider, Workspace: workspace, WorkspaceMin: 1, MaxParallel: 5}
+		cfg := ProviderPoolConfig{Provider: provider, Workspace: workspace, MinReady: 1, MaxParallel: 5}
 		d.configs[key] = cfg
 		sem := make(chan struct{}, cfg.MaxParallel)
 		for i := 0; i < cfg.MaxParallel; i++ {
@@ -154,11 +159,22 @@ func (d *Daemon) handleGet(ctx context.Context, provider, workspace string) Resp
 	}
 	d.mu.Unlock()
 
-	// Queue empty — create on demand, then schedule replenish.
-	d.log.Info("agentpool: queue empty, creating on demand", "provider", provider, "workspace", workspace)
+	// Re-check queue under lock — a replenish goroutine may have added an entry
+	// in the window between the first unlock and here (TOCTOU prevention).
 	d.mu.Lock()
+	if len(d.queues[key]) > 0 {
+		entry := d.queues[key][0]
+		d.queues[key] = d.queues[key][1:]
+		d.mu.Unlock()
+		d.log.Info("agentpool: dequeued after recheck", "provider", provider, "workspace", workspace, "session_id", entry.SessionID)
+		d.scheduleReplenish(ctx, key)
+		return Response{OK: true, Entry: &entry}
+	}
 	cfg := d.configs[key]
 	d.mu.Unlock()
+
+	// Queue confirmed empty — create on demand, then schedule replenish.
+	d.log.Info("agentpool: queue empty, creating on demand", "provider", provider, "workspace", workspace)
 	entry, err := d.spawnOne(ctx, cfg)
 	if err != nil {
 		d.log.Error("agentpool: on-demand create failed", "provider", provider, "workspace", workspace, "err", err)
@@ -180,7 +196,7 @@ func (d *Daemon) scheduleReplenish(ctx context.Context, key string) {
 	}
 	queued := len(d.queues[key])
 	inFlight := d.inflight[key]
-	needed := cfg.WorkspaceMin - queued - inFlight
+	needed := cfg.MinReady - queued - inFlight
 	if needed <= 0 {
 		d.mu.Unlock()
 		return
