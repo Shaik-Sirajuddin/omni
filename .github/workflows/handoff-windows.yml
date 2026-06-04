@@ -49,4 +49,4 @@ jobs:
       - name: vet (windows)
         run: go vet ./handoff/
       - name: test (windows, verbose)
-        run: go test -count=1 -v ./handoff/
+        run: go test -count=1 -v -timeout 120s ./handoff/

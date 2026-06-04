@@ -48,23 +48,36 @@ func openRelayClient(t *testing.T, name string) windows.Handle {
 
 func readAll(t *testing.T, h windows.Handle, want []byte, d time.Duration) []byte {
 	t.Helper()
-	var got []byte
-	buf := make([]byte, 4096)
-	end := time.Now().Add(d)
-	for time.Now().Before(end) {
-		var done uint32
-		err := windows.ReadFile(h, buf, &done, nil)
-		if done > 0 {
-			got = append(got, buf[:done]...)
-			if bytes.Contains(got, want) {
-				return got
+	// ReadFile on a synchronous handle blocks and cannot be interrupted, so the
+	// deadline must be enforced OUT of band: read in a goroutine, select on a timer.
+	// On timeout we return what we have (caller asserts Contains(want) and fails)
+	// instead of hanging to the test binary's global -timeout.
+	ch := make(chan []byte, 1)
+	go func() {
+		var got []byte
+		buf := make([]byte, 4096)
+		for {
+			var done uint32
+			err := windows.ReadFile(h, buf, &done, nil)
+			if done > 0 {
+				got = append(got, buf[:done]...)
+				if bytes.Contains(got, want) {
+					ch <- got
+					return
+				}
+			}
+			if err != nil {
+				ch <- got
+				return
 			}
 		}
-		if err != nil {
-			break
-		}
+	}()
+	select {
+	case got := <-ch:
+		return got
+	case <-time.After(d):
+		return nil
 	}
-	return got
 }
 
 // TestConPTYRelayEndToEnd spawns `cmd /c echo MARKER`, attaches a client, and
