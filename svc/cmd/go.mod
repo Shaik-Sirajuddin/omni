@@ -9,6 +9,7 @@ require (
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/config_sync v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/hook-operator v0.0.0
+	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0
 	github.com/Shaik-Sirajuddin/memory/svc/ptydaemon v0.0.0
 )
 

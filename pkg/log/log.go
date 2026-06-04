@@ -1,14 +1,20 @@
 // Package log provides a shared structured logger factory used across all
 // memory modules. The log level is resolved at construction time:
 //
-//  1. DEV env var set (any non-empty value) → Debug
-//  2. ~/.config/omni/config.json has dev.debug == true → Debug
-//  3. Otherwise → Info
+//  1. OMNI_DEBUG env var set → "1"/"true"/"on" forces debug; "0"/"false"/"off" forces info
+//  2. DEV env var set (any non-empty value) → Debug
+//  3. ~/.config/omni/config.json has dev.debug == true → Debug
+//  4. Otherwise → Info
 //
-// In debug mode, output goes to a file in the OS temp directory
-// (e.g. /tmp/omni-debug-<component>.log). Set OMNI_LOG_FILE to override
-// the path. Pass WithStderr() to write to stderr instead — use this for
-// systemd services whose stdout/stderr is captured by journald.
+// Log destination (in priority order):
+//  1. WithStderr() option → stderr always
+//  2. OMNI_LOG_FILE env var set → that file, all levels
+//  3. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log  (app home, not XDG config)
+//  4. Otherwise → stderr
+//
+// Call InitSessionLog() at process startup to auto-set OMNI_LOG_FILE to
+// ~/.omni/log/session-<pid>.log so all in-process components and
+// child subprocesses share one file for the session.
 //
 // No internal module dependencies — safe to import from any module.
 package log
@@ -30,14 +36,46 @@ type logOptions struct {
 	useStderr bool
 }
 
-// WithStderr directs all log output to stderr regardless of debug mode.
+// WithStderr directs all log output to stderr regardless of other settings.
 // Use this for systemd services whose stdout/stderr is captured by journald.
 func WithStderr() Option {
 	return func(o *logOptions) { o.useStderr = true }
 }
 
+// InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
+// if it is not already set. Call this once at process startup (before any
+// logger is constructed) so that the CLI, operator, code agents, and MCP
+// stdio subprocesses all write to the same file for the session.
+// Long-lived daemon processes should NOT call this.
+func InitSessionLog() {
+	if os.Getenv("OMNI_LOG_FILE") != "" {
+		return
+	}
+	home, err := omniHome()
+	if err != nil {
+		return
+	}
+	logDir := filepath.Join(home, "log")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(logDir, fmt.Sprintf("session-%d.log", os.Getpid()))
+	if err := os.Setenv("OMNI_LOG_FILE", path); err != nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "omni: session log → %s\n", path)
+}
+
+// omniHome returns ~/.omni, creating it if necessary.
+func omniHome() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".omni"), nil
+}
+
 // NewLogger returns a structured logger tagged with the given key/value pair.
-// In debug mode, output goes to a tmp file unless WithStderr() is passed.
 func NewLogger(key, component string, opts ...Option) *slog.Logger {
 	level := resolveLevel()
 	return buildLogger(key, component, level, opts)
@@ -61,24 +99,31 @@ func buildLogger(key, component string, level slog.Level, opts []Option) *slog.L
 
 var announcedPaths sync.Map
 
-// resolveWriter picks the log destination.
-// Debug + no WithStderr → file (OMNI_LOG_FILE or /tmp/omni-debug-<component>.log).
-// Prints the path to stderr the first time a given file is opened.
 func resolveWriter(component string, level slog.Level, o *logOptions) io.Writer {
-	if o.useStderr || level > slog.LevelDebug {
+	if o.useStderr {
 		return os.Stderr
 	}
 	path := os.Getenv("OMNI_LOG_FILE")
 	if path == "" {
-		path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+		// No session file — fall back to auto debug file or stderr.
+		if level > slog.LevelDebug {
+			return os.Stderr
+		}
+		if home, err := omniHome(); err == nil {
+			debugDir := filepath.Join(home, "debug")
+			_ = os.MkdirAll(debugDir, 0o755)
+			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
+		} else {
+			path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "omni: failed to open debug log %s: %v; falling back to stderr\n", path, err)
+		fmt.Fprintf(os.Stderr, "omni: failed to open log %s: %v; falling back to stderr\n", path, err)
 		return os.Stderr
 	}
 	if _, loaded := announcedPaths.LoadOrStore(path, struct{}{}); !loaded {
-		fmt.Fprintf(os.Stderr, "omni: debug log → %s\n", path)
+		fmt.Fprintf(os.Stderr, "omni: log → %s\n", path)
 	}
 	return f
 }
@@ -95,7 +140,17 @@ func sanitizeComponent(s string) string {
 	return string(out)
 }
 
+// resolveLevel determines the log level for this process.
+// OMNI_DEBUG overrides all other sources for per-session control.
 func resolveLevel() slog.Level {
+	if v := os.Getenv("OMNI_DEBUG"); v != "" {
+		switch v {
+		case "0", "false", "off":
+			return slog.LevelInfo
+		default:
+			return slog.LevelDebug
+		}
+	}
 	if os.Getenv("DEV") != "" {
 		return slog.LevelDebug
 	}

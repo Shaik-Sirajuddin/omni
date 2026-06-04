@@ -92,15 +92,15 @@ echo "    output: ${EXEC1_OUT:0:120}"
 
 # ASSERT 1a: exits quickly (<5s), non-blocking.
 if [[ $EXEC1_EXIT -eq 0 ]]; then
-  pass "TEST 1: exec --resume exits 0"
+  pass "TEST 1: exec --bg exits 0"
 else
-  fail "TEST 1: exec --resume exited $EXEC1_EXIT"
+  fail "TEST 1: exec --bg exited $EXEC1_EXIT"
 fi
 
 if [[ $ELAPSED_MS -lt 5000 ]]; then
-  pass "TEST 1: exec --resume returned in <5s (${ELAPSED_MS}ms) — non-blocking"
+  pass "TEST 1: exec --bg returned in <5s (${ELAPSED_MS}ms) — non-blocking"
 else
-  fail "TEST 1: exec --resume took ${ELAPSED_MS}ms — possible blocking"
+  fail "TEST 1: exec --bg took ${ELAPSED_MS}ms — possible blocking"
 fi
 
 # ASSERT 1b: ptydaemon received exec op (proves prompt delivered to PTY).
@@ -149,9 +149,9 @@ echo "    cold-start exec exit=$EXEC2_EXIT elapsed=${EXEC2_MS}ms"
 echo "    output: ${EXEC2_OUT:0:120}"
 
 if [[ $EXEC2_EXIT -eq 0 ]]; then
-  pass "TEST 2: cold-start exec --resume exits 0"
+  pass "TEST 2: cold-start exec --bg exits 0"
 else
-  fail "TEST 2: cold-start exec --resume exited $EXEC2_EXIT"
+  fail "TEST 2: cold-start exec --bg exited $EXEC2_EXIT"
 fi
 
 if [[ $EXEC2_MS -lt 30000 ]]; then

@@ -1282,6 +1282,14 @@ func mcpSessionEnvs(agent *omniagent.AgentInfo) []string {
 		"AXO_LINK_MCP_SENDER_TYPE=" + mcpSenderType,
 		"AXO_LINK_MCP_AGENT_WORKSPACE=" + workspace,
 	}
+	// Forward session log env vars so code agents and MCP stdio subprocesses
+	// write to the same session log file with the same debug level.
+	if v := os.Getenv("OMNI_LOG_FILE"); v != "" {
+		envs = append(envs, "OMNI_LOG_FILE="+v)
+	}
+	if v := os.Getenv("OMNI_DEBUG"); v != "" {
+		envs = append(envs, "OMNI_DEBUG="+v)
+	}
 	logger.Debug("mcpSessionEnvs: built session envs", "agentID", agent.ID, "senderID", senderID, "workspace", workspace, "envKeys", []string{"AXO_LINK_MCP_AUTH_TOKEN", "AXO_LINK_MCP_SENDER_ID", "AXO_LINK_MCP_SENDER_TYPE", "AXO_LINK_MCP_AGENT_WORKSPACE"})
 	return envs
 }
