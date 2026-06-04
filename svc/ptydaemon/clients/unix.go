@@ -393,6 +393,13 @@ func (c *UnixSocketClient) do(req unixRequest) error {
 }
 
 func attachToTerminal(ctx context.Context, ptmx *os.File, stdinDst io.Writer) error {
+	// Fail loudly before attempting MakeRaw — a non-TTY stdin produces
+	// "inappropriate ioctl for device" which gets swallowed and leaves the
+	// user with a silently dead session (no output, no input, no error shown).
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		_ = ptmx.Close()
+		return fmt.Errorf("attach requires an interactive terminal: stdin is not a TTY (run with a real terminal or use --detach for background mode)")
+	}
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		_ = ptmx.Close()
