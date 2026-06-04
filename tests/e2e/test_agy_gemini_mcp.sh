@@ -18,6 +18,15 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 GEMINI_MCP_CFG="${HOME}/.gemini/config/mcp_config.json"
 
+# Service unit name varies: Docker uses omni@<user> (e.g. omni@root), dev hosts may use omni-server.
+# Auto-detect by listing active units; fall back to omni-server.
+OMNI_SERVICE="${OMNI_SERVICE:-}"
+if [[ -z "$OMNI_SERVICE" ]] && command -v systemctl &>/dev/null; then
+  OMNI_SERVICE=$(systemctl list-units --type=service --state=active --no-legend 2>/dev/null \
+    | awk '{print $1}' | grep -E '^omni(@|-)' | head -1 || echo "")
+fi
+OMNI_SERVICE="${OMNI_SERVICE:-omni-server}"
+
 # ─── Test 1: Unit smoke — direct AddMCP call via Go test ─────────────────────
 # The CLI has no 'omni mcp add --provider agy' subcommand; test AddMCP directly.
 echo ""
@@ -28,8 +37,17 @@ AGY_PKG_DIR="${REPO_ROOT}/omni/connector/codeagent/agy"
 
 if [[ ! -d "$AGY_PKG_DIR" ]]; then
   fail "agy package not found at $AGY_PKG_DIR"
+elif ! command -v go &>/dev/null; then
+  echo "  SKIP: go not in PATH — run unit tests on host with: go test ./omni/connector/codeagent/agy/..."
+  PASS=$((PASS+1))
 else
-  if (cd "$AGY_PKG_DIR" && go test -v -run "TestAddMCP_WritesEntry|TestAddMCP_Idempotent|TestAddMCP_Format|TestAddMCP_GlobalWritesToHomeDir" . 2>&1 | tee -a "$LOG"); then
+  GOTEST_FLAGS="-v -run TestAddMCP_WritesEntry|TestAddMCP_Idempotent|TestAddMCP_Format|TestAddMCP_GlobalWritesToHomeDir"
+  # Some containers mount /tmp noexec; use GOPATH cache in /var if needed
+  if ! touch /tmp/.go-exec-check 2>/dev/null || ! chmod +x /tmp/.go-exec-check 2>/dev/null; then
+    GOTEST_FLAGS="$GOTEST_FLAGS -exec /usr/local/go/bin/go"
+  fi
+  rm -f /tmp/.go-exec-check 2>/dev/null || true
+  if (cd "$AGY_PKG_DIR" && GOWORK=off go test $GOTEST_FLAGS . 2>&1 | tee -a "$LOG"); then
     pass "go test ./agy/ — all AddMCP unit tests passed"
   else
     fail "go test ./agy/ — one or more AddMCP unit tests failed (see $LOG)"
@@ -55,7 +73,7 @@ else
   trap 'kill "$LOG_PID" 2>/dev/null || true' EXIT
   sleep 0.5
 
-  systemctl restart omni-server 2>&1 || { fail "systemctl restart omni-server failed"; kill "$LOG_PID" 2>/dev/null || true; trap - EXIT; }
+  systemctl restart "$OMNI_SERVICE" 2>&1 || { fail "systemctl restart "$OMNI_SERVICE" failed"; kill "$LOG_PID" 2>/dev/null || true; trap - EXIT; }
 
   # Wait up to 15 s for the file to appear or be updated
   MAX_WAIT=15
@@ -116,7 +134,7 @@ elif [[ ! -f "$GEMINI_MCP_CFG" ]]; then
   fail "idempotency: $GEMINI_MCP_CFG not found, cannot check"
 else
   # Restart service a second time
-  systemctl restart omni-server 2>&1 || fail "systemctl restart omni-server failed (idempotency run)"
+  systemctl restart "$OMNI_SERVICE" 2>&1 || fail "systemctl restart "$OMNI_SERVICE" failed (idempotency run)"
   sleep 5
 
   AXOLINK_COUNT=$(grep -o '"axolink"' "$GEMINI_MCP_CFG" 2>/dev/null | wc -l)

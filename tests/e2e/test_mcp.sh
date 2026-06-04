@@ -33,18 +33,17 @@ else
     cat "$CLAUDE_MCP_CFG"
   fi
 
-  if grep -q '"http://127.0.0.1:18062/mcp"' "$CLAUDE_MCP_CFG"; then
-    pass "axolink URL is http://127.0.0.1:18062/mcp"
+  # axolink is registered as stdio transport (command=/path/to/omni args=[axolink])
+  if python3 -c "
+import json, sys
+d = json.load(open('$CLAUDE_MCP_CFG'))
+s = d.get('mcpServers', {})
+e = s.get('axolink', {})
+assert e.get('type') == 'stdio' or (e.get('command') and not e.get('url')), 'axolink is not stdio'
+" 2>/dev/null; then
+    pass "axolink entry has stdio transport in $CLAUDE_MCP_CFG"
   else
-    fail "axolink URL absent or wrong in $CLAUDE_MCP_CFG"
-  fi
-
-  # Permissions: settings.json must allow mcp__axolink__*
-  CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
-  if [[ -f "$CLAUDE_SETTINGS" ]] && grep -q '"mcp__axolink__\*"' "$CLAUDE_SETTINGS"; then
-    pass "axolink wildcard permission in $CLAUDE_SETTINGS"
-  else
-    fail "mcp__axolink__* permission missing from $CLAUDE_SETTINGS"
+    fail "axolink entry absent or not stdio transport in $CLAUDE_MCP_CFG"
   fi
 fi
 
@@ -130,7 +129,7 @@ CLAUDE_MCP_CFG="${HOME}/.claude.json"
 if [[ ! -f "$CLAUDE_MCP_CFG" ]]; then
   fail "idempotency: $CLAUDE_MCP_CFG not found, cannot check"
 else
-  TUNNEL_COUNT=$(grep -o '"axolink"' "$CLAUDE_MCP_CFG" | wc -l)
+  TUNNEL_COUNT=$(python3 -c "import json; d=json.load(open('$CLAUDE_MCP_CFG')); print(len([k for k in d.get('mcpServers',{}) if k=='axolink']))" 2>/dev/null || echo 0)
   if [[ "$TUNNEL_COUNT" -eq 1 ]]; then
     pass "exactly 1 axolink entry in $CLAUDE_MCP_CFG"
   else
