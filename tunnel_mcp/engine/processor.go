@@ -39,6 +39,9 @@ const statusQueued = message.Status("queued")
 // The concrete implementation lives in the server layer and is wired via SetReplyService.
 type ReplyService interface {
 	SendReply(ctx context.Context, msg *message.Message, fromAgentID, fromAgentName string) error
+	// SendFailureCallback notifies the author of msg that delivery failed permanently
+	// (agent exhausted retries without calling send_response). Only fires when msg.ShouldReply=true.
+	SendFailureCallback(ctx context.Context, msg *message.Message, fromAgentID string) error
 }
 
 // AgentWorkspace exposes the engine's current workspace for a sender agent.
@@ -1291,7 +1294,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 
 	// instant messages: always mark delivered regardless of tool invocation.
 	if len(msgs) > 0 && msgs[0].RequestType == reqTypeInstant {
-		e.markDelivered(ctx, msgs, agentID, agentState)
+		e.markDelivered(ctx, msgs, agentID, agentState, false)
 		e.state.ClearSession(sessionID)
 		e.state.SignalSessionDone(agentID)
 		return nil
@@ -1327,15 +1330,21 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		}
 	}
 
-	e.markDelivered(ctx, msgs, agentID, agentState)
+	// isForceDeliver=true when the agent never invoked the mandatory tool (no send_response).
+	// The author gets a failure callback for any ShouldReply=true message in that path.
+	isForceDeliver := len(msgs) > 0 && !mandatoryToolInvoked
+	e.markDelivered(ctx, msgs, agentID, agentState, isForceDeliver)
 	e.state.ClearSession(sessionID)
 	e.state.SignalSessionDone(agentID)
 	return nil
 }
 
 // markDelivered marks msgs as delivered and sends replies for non-query types.
-func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Message, agentID string, agentState AgentState) {
-	logger.Info("hook: stop — success, marking messages delivered", "agent_id", agentID, "count", len(msgs))
+// markDelivered marks msgs as delivered. isForceDeliver=true means the agent exhausted
+// retries without calling send_response — a failure callback is sent to the author for
+// any message with ShouldReply=true.
+func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Message, agentID string, agentState AgentState, isForceDeliver bool) {
+	logger.Info("hook: stop — marking messages delivered", "agent_id", agentID, "count", len(msgs), "force", isForceDeliver)
 	now := time.Now().UnixMilli()
 	for _, msg := range msgs {
 		msg.Status = message.StatusDelivered
@@ -1350,9 +1359,16 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 				logger.Warn("hook: task delivery complete checkpoint failed", "task_id", msg.TaskID, "err", err)
 			}
 		}
-		if msg.RequestType != reqTypeQuery && e.reply != nil {
-			if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
-				logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
+		if e.reply != nil {
+			if isForceDeliver && msg.ShouldReply {
+				// Agent never called send_response — notify the author that delivery failed.
+				if err := e.reply.SendFailureCallback(ctx, msg, agentID); err != nil {
+					logger.Error("hook: send failure callback failed", "message_id", msg.ID, "err", err)
+				}
+			} else if msg.RequestType != reqTypeQuery {
+				if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
+					logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
+				}
 			}
 		}
 	}

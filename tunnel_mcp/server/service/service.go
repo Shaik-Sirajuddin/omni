@@ -456,6 +456,22 @@ func (s *Service) buildQueryResultMessageForResolvedSender(ctx context.Context, 
 	if original.To != sender.ID {
 		return nil, nil, QueryResultResponse{}, ServiceError{status: http.StatusForbidden, err: fmt.Errorf("caller is not the message recipient")}
 	}
+	// Reject responses to messages that are no longer active.
+	// StatusFailed means delivery was permanently abandoned (max retries exceeded or swept).
+	// StatusDelivered means a response was already recorded (duplicate call).
+	// In both cases the conversation is closed — use send_message to start a new one.
+	if original.Status == message.StatusFailed {
+		return nil, nil, QueryResultResponse{}, ServiceError{
+			status: http.StatusGone,
+			err:    fmt.Errorf("message %q failed delivery and is no longer active; use send_message to start a new conversation", messageID),
+		}
+	}
+	if original.Status == message.StatusDelivered {
+		return nil, nil, QueryResultResponse{}, ServiceError{
+			status: http.StatusConflict,
+			err:    fmt.Errorf("message %q was already delivered; use send_message to send a new message", messageID),
+		}
+	}
 	replyID := uuid.NewString()
 	reply := &message.Message{
 		ID:             replyID,
