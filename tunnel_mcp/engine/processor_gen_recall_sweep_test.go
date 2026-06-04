@@ -104,8 +104,8 @@ func TestSessionGenerationGuard(t *testing.T) {
 			"onSessionEnd must NOT reset Running→Ready when generation advanced (newer session took over)")
 	})
 
-	// execFailed=true always sets Stopped regardless of generation.
-	t.Run("ExecFailed Always Sets Stopped", func(t *testing.T) {
+	// execFailed=true with no messages — nothing to re-queue, agent stays Stopped.
+	t.Run("ExecFailed_NoMessages_SetsStopped", func(t *testing.T) {
 		msgStore := message.WithTestDB(t)
 		proc := New(msgStore, WithTestBinary(newLocalBlockingCLI()))
 		StartForTest(proc, ctx)
@@ -116,7 +116,7 @@ func TestSessionGenerationGuard(t *testing.T) {
 		OnSessionEndForTest(proc, "ag-fail", nil, true, state.CodeSession.SessionGeneration)
 
 		after, _ := GetAgentStateForTest(proc, "ag-fail")
-		assert.Equal(t, AgentStatusStopped, after.Status, "exec failure must set Stopped")
+		assert.Equal(t, AgentStatusStopped, after.Status, "exec failure with no messages must set Stopped")
 	})
 }
 
