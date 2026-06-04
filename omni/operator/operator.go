@@ -54,6 +54,9 @@ type CreateAgentParams struct {
 	ResumeIfExists     bool                 `json:"resume_if_exists,omitempty"`
 	Interactive        bool                 `json:"interactive"` // launch after create; default true
 	SessionID          string               `json:"session_id,omitempty"`
+	// Status receives phase/ready/error callbacks during initialisation.
+	// nil = no-op (server paths, tests).
+	Status StatusReporter `json:"-"`
 }
 
 type ResumeAgentParams struct {

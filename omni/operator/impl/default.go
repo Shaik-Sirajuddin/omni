@@ -1037,6 +1037,8 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	}
 	logger.Info("CreateAgent: start", "workspace", workspace, "name", params.Name, "provider", params.Provider, "model", params.Model, "interactive", params.Interactive, "memoryEnabled", o.memoryEnabled())
 
+	reportStatus(params.Status, operator.InitPhaseResolving, "Initialising agent…")
+
 	if params.ResumeIfExists {
 		agentName := sanitizeAgentName(params.Name)
 		if agentName != "" {
@@ -1122,8 +1124,14 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Info("CreateAgent: memory seeded", "agentID", agentID, "memoryDir", memDir)
 	}
 
-	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID); err != nil {
+	reportStatus(params.Status, operator.InitPhaseStarting, "Starting session…")
+	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID, params.Status); err != nil {
 		logger.Warn("CreateAgent: session bootstrap failed — agent persisted; use 'omni agent resume' to start session", "agentID", agentID, "provider", params.Provider, "model", params.Model, "err", err)
+		reportError(params.Status, err)
+		reportFlush(params.Status)
+	} else if !params.Interactive {
+		reportReady(params.Status, agentName, "", "")
+		reportFlush(params.Status)
 	}
 	logger.Info("CreateAgent: completed", "workspaceID", ws.ID, "agentID", agentID)
 	return nil
@@ -1357,7 +1365,7 @@ func mcpSessionEnvs(agent *omniagent.AgentInfo) []string {
 	return envs
 }
 
-func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) error {
+func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string, status operator.StatusReporter) error {
 	if provider == "" {
 		provider = codeagent.Provider(operator.DefaultProvider)
 	}
@@ -1426,6 +1434,9 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		logger.Info("startAgentSession: interactive session is not attached", "agentID", agent.ID, "provider", provider, "sessionID", sessionID)
 		return nil
 	}
+
+	reportReady(status, agent.Name, model, sessionID)
+	reportFlush(status)
 
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()

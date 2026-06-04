@@ -677,7 +677,13 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 			if len(args) == 1 {
 				resolved.Name = args[0]
 			}
-			return c.operator.CreateAgent(operator.CreateAgentParams{
+			var statusReporter operator.StatusReporter
+			var tuiReporter *clitui.Reporter
+			if resolved.Interactive && clitui.IsTTY() {
+				tuiReporter = clitui.NewReporter(os.Stdout)
+				statusReporter = tuiReporter
+			}
+			err := c.operator.CreateAgent(operator.CreateAgentParams{
 				Workspace:          sandbox.WorkspaceDir(resolved.Workspace),
 				Name:               resolved.Name,
 				Provider:           codeagent.Provider(resolved.Provider),
@@ -686,7 +692,12 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 				ResumeIfExists:     resolved.ResumeIfExists,
 				Interactive:        resolved.Interactive,
 				SessionID:          sessionID,
+				Status:             statusReporter,
 			})
+			if tuiReporter != nil {
+				tuiReporter.Wait()
+			}
+			return err
 		},
 	}
 
