@@ -45,10 +45,10 @@ type Message struct {
 	CreatorAgentID string      `json:"creator_agent_id,omitempty"`
 	Status       Status      `json:"status"`
 	Retries      int         `json:"retries"`
-	QueueTime    int64       `json:"queue_time"`              // unix ms; 0 = not queued
-	DeliveryTime *int64      `json:"delivery_time,omitempty"` // unix ms, nil if not yet delivered
-	SentTime     int64       `json:"sent_time"`               // unix ms
-	GroupID      string      `json:"group_id"`
+	QueueTime      int64  `json:"queue_time"`              // unix ms; 0 = not queued
+	DeliveryTime   *int64 `json:"delivery_time,omitempty"` // unix ms, nil if not yet delivered
+	SentTime       int64  `json:"sent_time"`               // unix ms
+	GroupID        string `json:"group_id"`
 }
 
 // MessageGroup is a logical batch of related messages.

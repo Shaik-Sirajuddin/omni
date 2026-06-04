@@ -9,7 +9,7 @@ import (
 func (s *Server) handleMCPHealth(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultJSON(healthResponse{
 		Status:    "ok",
-		Service:   "axolink",
+		Service:   "tunnel-mcp",
 		Version:   serviceVersion,
 		Transport: "mcp",
 	})

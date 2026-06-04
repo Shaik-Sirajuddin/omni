@@ -20,7 +20,7 @@ func New() *OmniCLI {
 	return &OmniCLI{}
 }
 
-func (c *OmniCLI) ExecInSession(_ context.Context, agentID, workspace, prompt string) error {
+func (c *OmniCLI) ExecInSession(_ context.Context, agentID, _, workspace, prompt string) error {
 	logger.Debug("test exec in session", "agent_id", agentID, "workspace", workspace, "call_index", c.execIdx)
 
 	if c.execIdx >= len(c.ExecResponses) {

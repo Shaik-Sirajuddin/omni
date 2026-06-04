@@ -45,7 +45,7 @@ func TestReplyService(t *testing.T) {
 		assert.False(t, got.ShouldReply, "Inserted MCP reply should not request another reply")
 		assert.Equal(t, "msg-mcp", got.RespondedTo, "Inserted MCP reply should reference source message")
 		assert.Equal(t, msg.Prompt, got.Prompt, "Inserted MCP reply prompt should forward original message content")
-		assert.JSONEq(t, `{"author":"axolink","author_agent_id":"agent-1","author_agent_name":"agent-one","reply_to_message_id":"msg-mcp","original_sender":"mcp-client"}`, got.Refs, "Inserted MCP reply refs should include reply metadata with resolved agent name")
+		assert.JSONEq(t, `{"author":"tunnel-mcp","author_agent_id":"agent-1","author_agent_name":"agent-one","reply_to_message_id":"msg-mcp","original_sender":"mcp-client"}`, got.Refs, "Inserted MCP reply refs should include reply metadata with resolved agent name")
 		assert.Equal(t, []arrival{{from: "agent-1", to: "mcp-client"}}, arrivals, "Inserted MCP reply should notify engine")
 	})
 

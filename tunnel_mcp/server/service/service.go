@@ -245,7 +245,7 @@ func (s *Service) List(ctx context.Context, req ListRequest) ([]*message.Message
 	}
 
 	query := `SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages`
 	args := []any{}
 	switch {
@@ -456,23 +456,41 @@ func (s *Service) buildQueryResultMessageForResolvedSender(ctx context.Context, 
 	if original.To != sender.ID {
 		return nil, nil, QueryResultResponse{}, ServiceError{status: http.StatusForbidden, err: fmt.Errorf("caller is not the message recipient")}
 	}
+	// Reject responses to messages that are no longer active.
+	// StatusFailed means delivery was permanently abandoned (max retries exceeded or swept).
+	// StatusDelivered means a response was already recorded (duplicate call).
+	// In both cases the conversation is closed — use send_message to start a new one.
+	if original.Status == message.StatusFailed {
+		return nil, nil, QueryResultResponse{}, ServiceError{
+			status: http.StatusGone,
+			err:    fmt.Errorf("message %q failed delivery and is no longer active; use send_message to start a new conversation", messageID),
+		}
+	}
+	if original.Status == message.StatusDelivered {
+		return nil, nil, QueryResultResponse{}, ServiceError{
+			status: http.StatusConflict,
+			err:    fmt.Errorf("message %q was already delivered; use send_message to send a new message", messageID),
+		}
+	}
 	replyID := uuid.NewString()
 	reply := &message.Message{
-		ID:          replyID,
-		To:          original.From,
-		From:        sender.ID,
-		FromSpec:    message.SpecOmni,
-		ToSpec:      message.SpecOmni,
-		RequestType: message.RequestTypeInstant,
-		IsResponse:  true,
-		ShouldReply: false,
-		RespondedTo: original.ID,
-		Prompt:      response,
-		Refs:        queryResultRefs(original, sender.ID),
-		Workspace:   original.Workspace,
-		Status:      message.StatusInQueue,
-		SentTime:    s.nowUnixMS(),
-		GroupID:     groupID,
+		ID:             replyID,
+		To:             original.From,
+		From:           sender.ID,
+		FromSpec:       message.SpecOmni,
+		ToSpec:         message.SpecOmni,
+		RequestType:    message.RequestTypeInstant,
+		IsResponse:     true,
+		ShouldReply:    false,
+		RespondedTo:    original.ID,
+		Prompt:         response,
+		Refs:           queryResultRefs(original, sender.ID),
+		Workspace:      original.Workspace,
+		Status:         message.StatusInQueue,
+		SentTime:       s.nowUnixMS(),
+		GroupID:        groupID,
+		TaskID:         original.TaskID,
+		CreatorAgentID: original.CreatorAgentID,
 	}
 	return reply, original, QueryResultResponse{MessageID: replyID, RespondedTo: original.ID}, nil
 }
@@ -708,7 +726,7 @@ func putStringRef(fields map[string]json.RawMessage, key, value string) {
 
 func queryResultRefs(original *message.Message, fromAgentID string) string {
 	fields := map[string]json.RawMessage{}
-	putStringRef(fields, "author", "axolink")
+	putStringRef(fields, "author", "tunnel-mcp")
 	putStringRef(fields, "author_agent_id", fromAgentID)
 	putStringRef(fields, "reply_to_message_id", original.ID)
 	putStringRef(fields, "original_sender", original.From)

@@ -15,7 +15,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const sessionUsageThrottlePercent = 95.0
+const (
+	sessionUsageThrottlePercent  = 95.0
+	defaultHookFireTimeout       = 10 * time.Second // watchdog: OnPreSessionStart must fire within this window
+	staleRetryDelay              = 15 * time.Second // delay before re-queueing a stale message
+	maxQueueRetries              = 3                // max re-queue attempts before permanent failure
+	maxExecRetries               = 3                // max ExecInSession failures before agent is Stopped
+)
 
 // request type shorthands used by pickNextMessages and buildMessage.
 // store agent should expose RequestTypeQuery and RequestTypeInstant as named constants.
@@ -33,6 +39,9 @@ const statusQueued = message.Status("queued")
 // The concrete implementation lives in the server layer and is wired via SetReplyService.
 type ReplyService interface {
 	SendReply(ctx context.Context, msg *message.Message, fromAgentID, fromAgentName string) error
+	// SendFailureCallback notifies the author of msg that delivery failed permanently
+	// (agent exhausted retries without calling send_response). Only fires when msg.ShouldReply=true.
+	SendFailureCallback(ctx context.Context, msg *message.Message, fromAgentID string) error
 }
 
 // AgentWorkspace exposes the engine's current workspace for a sender agent.
@@ -76,7 +85,9 @@ type ProcessingEngine struct {
 	reply               ReplyService
 	statusCallback      StatusCallbackService
 	promptSessionStore  session.PromptSessionStore
+	taskDelivery        session.TaskDeliveryStore // T5: resumable delivery checkpoints
 	deliveryWindow      time.Duration
+	hookFireTimeout     time.Duration
 	ctx                 context.Context // engine lifetime context, set in Run
 }
 
@@ -109,6 +120,12 @@ func WithDeliveryWindow(d time.Duration) Option {
 	return func(e *ProcessingEngine) { e.deliveryWindow = d }
 }
 
+// WithHookFireTimeout overrides how long the watchdog waits for OnPreSessionStart to fire.
+// Default is 10s. Use a shorter value in tests.
+func WithHookFireTimeout(d time.Duration) Option {
+	return func(e *ProcessingEngine) { e.hookFireTimeout = d }
+}
+
 // WithStatusCallback wires a StatusCallbackService for delivery lifecycle events.
 func WithStatusCallback(s StatusCallbackService) Option {
 	return func(e *ProcessingEngine) { e.statusCallback = s }
@@ -119,6 +136,11 @@ func WithPromptSessionStore(s session.PromptSessionStore) Option {
 	return func(e *ProcessingEngine) { e.promptSessionStore = s }
 }
 
+// WithTaskDeliveryStore wires a TaskDeliveryStore for resumable delivery checkpointing (T5).
+func WithTaskDeliveryStore(s session.TaskDeliveryStore) Option {
+	return func(e *ProcessingEngine) { e.taskDelivery = s }
+}
+
 // New creates a ProcessingEngine backed by msgStore.
 func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 	agentStore, err := agents.GetStore()
@@ -126,13 +148,14 @@ func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 		logger.Error("engine: failed to init agent store", "err", err)
 	}
 	e := &ProcessingEngine{
-		state:          newEngineState(),
-		msgStore:       msgStore,
-		agentStore:     agentStore,
-		omni:           omnicli.New("omni"),
-		mcp:            newMCPClientRegistry(),
-		socketPath:     DefaultSyncSocketPath,
-		deliveryWindow: 10 * time.Second,
+		state:           newEngineState(),
+		msgStore:        msgStore,
+		agentStore:      agentStore,
+		omni:            omnicli.New("omni"),
+		mcp:             newMCPClientRegistry(),
+		socketPath:      DefaultSyncSocketPath,
+		deliveryWindow:  10 * time.Second,
+		hookFireTimeout: defaultHookFireTimeout,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -307,6 +330,20 @@ func (e *ProcessingEngine) hydrateState(ctx context.Context) {
 
 		e.state.SetAgent(agentID, state)
 		e.state.SetPending(agentID, true)
+
+		// T5: restore TaskMux for any in-progress task deliveries so the next pick
+		// prioritises the interrupted task (last writer wins if multiple in-progress).
+		if e.taskDelivery != nil {
+			deliveries, err := e.taskDelivery.GetInProgress(ctx, agentID)
+			if err != nil {
+				logger.Warn("hydrate state: task delivery lookup failed", "agent_id", agentID, "err", err)
+			}
+			for _, d := range deliveries {
+				e.state.SetTaskMux(agentID, &TaskKey{TaskID: d.TaskID, CreatorAgentID: d.CreatorAgentID})
+				logger.Info("hydrate state: restoring in-progress task delivery", "agent_id", agentID, "task_id", d.TaskID, "last_message_id", d.LastMessageID)
+			}
+		}
+
 		logger.Debug("hydrate state: agent loaded", "agent_id", agentID, "status", state.Status)
 	}
 }
@@ -326,7 +363,7 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 			cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
 			stale, err := e.msgStore.RawQuery(ctx,
 				`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-				        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+				        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 				 FROM messages WHERE status = ? AND queue_time > 0 AND queue_time < ?`,
 				string(statusQueued), cutoff,
 			)
@@ -335,13 +372,36 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 				continue
 			}
 			for _, msg := range stale {
-				msg.Status = message.StatusFailed
-				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("queue sweep: mark failed error", "message_id", msg.ID, "err", err)
+				if msg.Retries < maxQueueRetries {
+					// Re-queue so the agent can retry after a short delay.
+					msg.Status = message.StatusInQueue
+					msg.QueueTime = 0 // cleared so the sweep doesn't immediately re-flag it
+					if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+						logger.Error("queue sweep: re-queue failed", "message_id", msg.ID, "err", err)
+						continue
+					}
+					logger.Warn("queue sweep: stale message re-queued with delay",
+						"message_id", msg.ID, "retries", msg.Retries)
+					agentID := msg.To
+					go func() {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(staleRetryDelay):
+						}
+						go e.executeLoop(agentID)
+					}()
+				} else {
+					msg.Status = message.StatusFailed
+					if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+						logger.Error("queue sweep: mark failed error", "message_id", msg.ID, "err", err)
+					}
+					logger.Warn("queue sweep: max retries exceeded, message failed",
+						"message_id", msg.ID, "retries", msg.Retries)
 				}
 			}
 			if len(stale) > 0 {
-				logger.Warn("queue sweep: marked stale queued messages failed", "count", len(stale))
+				logger.Warn("queue sweep: processed stale queued messages", "count", len(stale))
 			}
 		}
 	}
@@ -413,124 +473,264 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		return
 	}
 
-	// Guard: skip if a queued or processing delivery is already in flight for this agent.
-	activeDelivery, err := e.msgStore.RawQuery(ctx,
+	// Preprocessing case (a): check for unacknowledged StatusProcessing non-instant messages FIRST.
+	// This must come before the T3 guard — a processing execute would otherwise trigger T3 and
+	// return early before we can recall it. Instant (steer) messages are exempt since they don't
+	// require a mandatory tool response.
+	//
+	// IMPORTANT: recall prompt must be YAML (buildWarmUpPrompt) not plain text (buildRecallPrompt).
+	// ExecInSession fires OnUserPromptSubmit which runs the stale sweep (StatusProcessing → Failed)
+	// then re-advances message IDs found in the YAML payload back to StatusProcessing.
+	// Plain-text prompts fail the YAML parse and leave messages permanently Failed.
+	//
+	// Case (b): no processing messages — fall through to T3 check + normal pick.
+	processingRecall, procErr := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status IN (?, ?) LIMIT 1`,
-		agentID, string(statusQueued), string(message.StatusProcessing),
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
+		 FROM messages WHERE "to" = ? AND status = ? AND request_type != ?`,
+		agentID, string(message.StatusProcessing), string(reqTypeInstant),
 	)
-	if err != nil {
-		logger.Error("execute loop: active delivery check failed", "agent_id", agentID, "err", err)
+	if procErr != nil {
+		logger.Error("execute loop: preprocessing recall check failed", "agent_id", agentID, "err", procErr)
 		return
 	}
-	if len(activeDelivery) > 0 {
-		logger.Debug("execute loop: active delivery in flight, skipping", "agent_id", agentID)
-		return
+	var msgs []*message.Message
+	var recallPrompt string
+	isPreprocessingRecall := false
+	var err error
+	if len(processingRecall) > 0 {
+		msgs = processingRecall
+		// Count this as a delivery attempt so the mandatory-tool retry counter advances.
+		// The normal markMessagesQueued path is skipped for preprocessing recall, so we
+		// must increment here to prevent the OnStop recall guard from looping forever.
+		for _, msg := range msgs {
+			msg.Retries++
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("execute loop: preprocessing recall — retries increment failed", "message_id", msg.ID, "err", err)
+				return // avoid building recall with inconsistently incremented retries
+			}
+		}
+		recallPrompt = buildWarmUpPrompt(msgs)
+		isPreprocessingRecall = true
+		logger.Warn("execute loop: preprocessing recall — unacknowledged processing messages",
+			"agent_id", agentID, "count", len(msgs))
+	} else {
+		// Case (b): T3: only an in-flight execute blocks new picks. Queries may bypass when task_id matches (T2).
+		var activeExecute []*message.Message
+		activeExecute, err = e.msgStore.RawQuery(ctx,
+			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
+			 FROM messages WHERE "to" = ? AND status IN (?, ?) AND request_type = ? LIMIT 1`,
+			agentID, string(statusQueued), string(message.StatusProcessing), string(reqTypeExecute),
+		)
+		if err != nil {
+			logger.Error("execute loop: active execute check failed", "agent_id", agentID, "err", err)
+			return
+		}
+
+		// bypassTask is non-nil when a query bypass is allowed for an in-flight execute (T2).
+		var bypassTask *TaskKey
+		if len(activeExecute) > 0 {
+			mux := e.state.GetTaskMux(agentID)
+			if mux == nil || mux.IsZero() {
+				logger.Debug("execute loop: execute in flight, no task mux — skipping", "agent_id", agentID)
+				return
+			}
+			bypassTask = mux
+			logger.Debug("execute loop: execute in flight, checking bypass queries", "agent_id", agentID, "task_id", mux.TaskID)
+		}
+
+		msgs, err = e.pickNextMessages(agentID, bypassTask)
+		if err != nil {
+			logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
+			return
+		}
+		if len(msgs) == 0 {
+			if bypassTask != nil {
+				logger.Debug("execute loop: no bypass queries for task", "agent_id", agentID, "task_id", bypassTask.TaskID)
+			} else {
+				logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
+				e.state.SetPending(agentID, false)
+			}
+			return
+		}
 	}
 
-	// TODO: re-enable once omni agent prompt-state subcommand is stable.
-	// Skipping prompt-state check for now — messages are sent directly.
-	// promptState, err := e.omni.GetPromptState(ctx, agentID)
-	// if err != nil {
-	// 	logger.Error("execute loop: get prompt state failed", "agent_id", agentID, "err", err)
-	// 	return
-	// }
-	// if promptState != "" {
-	// 	logger.Debug("execute loop: agent has pending prompt, skipping", "agent_id", agentID)
-	// 	return
-	// }
+	if !isPreprocessingRecall {
+		// T1/T2: update TaskMux on every execute pick.
+		// Cleared on untagged execute to prevent stale task from enabling bypass injection.
+		// Retained after execute completes (not cleared in markDelivered) for T1 next-loop priority.
+		if msgs[0].RequestType == reqTypeExecute {
+			if msgs[0].TaskID != "" {
+				e.state.SetTaskMux(agentID, &TaskKey{TaskID: msgs[0].TaskID, CreatorAgentID: msgs[0].CreatorAgentID})
+			} else {
+				e.state.SetTaskMux(agentID, nil)
+			}
+		}
 
-	msgs, err := e.pickNextMessages(agentID)
-	if err != nil {
-		logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
-		return
-	}
-	if len(msgs) == 0 {
-		logger.Debug("execute loop: no pending messages, clearing delivery flag", "agent_id", agentID)
-		e.state.SetPending(agentID, false)
-		return
-	}
+		// Populate workspace from message if not yet set on agent state.
+		if agentState.Agent.Workspace == "" && msgs[0].Workspace != "" {
+			agentState.Agent.Workspace = msgs[0].Workspace
+			e.state.SetAgent(agentID, agentState)
+		}
 
-	// Populate workspace from message if not yet set on agent state.
-	if agentState.Agent.Workspace == "" && msgs[0].Workspace != "" {
-		agentState.Agent.Workspace = msgs[0].Workspace
-		e.state.SetAgent(agentID, agentState)
-	}
+		queueTime := time.Now().UnixMilli()
+		for _, msg := range msgs {
+			msg.Status = statusQueued
+			msg.Retries++
+			msg.QueueTime = queueTime
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("execute loop: update message to queued failed", "message_id", msg.ID, "err", err)
+			}
+		}
 
-	queueTime := time.Now().UnixMilli()
-	for _, msg := range msgs {
-		msg.Status = statusQueued
-		msg.Retries++
-		msg.QueueTime = queueTime
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-			logger.Error("execute loop: update message to queued failed", "message_id", msg.ID, "err", err)
+		// T5: checkpoint execute delivery so it can be resumed on restart.
+		if e.taskDelivery != nil && msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
+			if err := e.taskDelivery.StartDelivery(ctx, msgs[0].TaskID, agentID, msgs[0].CreatorAgentID, msgs[0].ID); err != nil {
+				logger.Warn("execute loop: task delivery checkpoint failed", "task_id", msgs[0].TaskID, "err", err)
+			}
 		}
 	}
 
 	agentState, _ = e.state.GetAgent(agentID)
 
-	// Determine warm-up vs active prompt via PromptSessionStore.
-	// msgs[0].ID is the promptID for the whole batch: a batch is a single delivery unit,
-	// so the first message ID is a stable key for the warm-up/active decision.
-	sessionID := agentState.CodeSession.SessionID
-	promptID := msgs[0].ID
-	isWarmUp := true
-	if e.promptSessionStore != nil && sessionID != "" {
-		if e.promptSessionStore.IsDelivered(ctx, sessionID, promptID) {
-			isWarmUp = false
-		}
-	}
+	// Build the prompt: recall (preprocessing case a) takes precedence over warm-up/active.
 	var prompt string
-	if isWarmUp {
-		prompt = buildWarmUpPrompt(msgs)
+	if isPreprocessingRecall {
+		prompt = recallPrompt
+	} else {
+		// Determine warm-up vs active prompt via PromptSessionStore.
+		// warmupSentinel is a fixed key: once marked, all subsequent deliveries to the
+		// same session use the lean active prompt instead of the full warm-up prompt.
+		const warmupSentinel = "warmup_done"
+		sessionID := agentState.CodeSession.SessionID
+		isWarmUp := true
 		if e.promptSessionStore != nil && sessionID != "" {
-			if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, promptID); err != nil {
-				logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "prompt_id", promptID, "err", err)
+			if e.promptSessionStore.IsDelivered(ctx, sessionID, warmupSentinel) {
+				isWarmUp = false
 			}
 		}
-	} else {
-		senderName := senderNameFromRefs(msgs[0].Refs)
-		prompt = buildActivePrompt(msgs, senderName)
+		if isWarmUp {
+			prompt = buildWarmUpPrompt(msgs)
+			if e.promptSessionStore != nil && sessionID != "" {
+				if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, warmupSentinel); err != nil {
+					logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "err", err)
+				}
+			}
+		} else {
+			senderName := senderNameFromRefs(msgs[0].Refs)
+			prompt = buildActivePrompt(msgs, senderName)
+		}
 	}
 
 	agentState.Status = AgentStatusRunning
 	e.state.SetAgent(agentID, agentState)
+	// Capture generation AFTER marking Running so the watchdog and onSessionEnd can
+	// detect whether a newer session (from markDelivered) has taken over.
+	myGeneration := agentState.CodeSession.SessionGeneration
+	prevSessionID := agentState.CodeSession.SessionID
+
+	// Open a session-done channel so we can wait for OnStop to fire before running
+	// onSessionEnd. omni agent exec --bg is non-blocking: it returns in <1s while the
+	// actual Claude session runs asynchronously. Without this wait, onSessionEnd would
+	// mark messages as orphaned/failed before any hooks (OnStop, OnUserPromptSubmit)
+	// have a chance to process them.
+	sessionDoneCh := e.state.OpenSessionDone(agentID)
 
 	logger.Info("execute loop: executing agent",
 		"agent_id", agentID,
 		"message_count", len(msgs),
 		"first_message_id", msgs[0].ID,
-		"warm_up", isWarmUp,
 	)
 
 	if e.statusCallback != nil {
 		e.statusCallback.SendStatusCallback(ctx, msgs[0].ID, agentState.Agent.Name, agentState.Agent.Team)
 	}
 
+	// Watchdog: if OnPreSessionStart doesn't fire within hookFireTimeout (e.g. omni process
+	// failed to start), reset to Ready and re-trigger so pending messages aren't lost.
+	go func(gen int, prevSID string) {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-time.After(e.hookFireTimeout):
+		}
+		cur, ok := e.state.GetAgent(agentID)
+		if !ok || cur.CodeSession.IsInterrupted {
+			return
+		}
+		// Only intervene when: still Running, our generation is current (no delivery happened),
+		// and SessionID is unchanged (OnPreSessionStart never fired for this exec call).
+		if cur.Status == AgentStatusRunning &&
+			cur.CodeSession.SessionGeneration == gen &&
+			cur.CodeSession.SessionID == prevSID {
+			logger.Warn("execute loop watchdog: hook timeout, resetting to Ready", "agent_id", agentID)
+			cur.Status = AgentStatusReady
+			e.state.SetAgent(agentID, cur)
+			// Unblock the sessionDoneCh waiter so onSessionEnd can run cleanup.
+			e.state.SignalSessionDone(agentID)
+			go e.executeLoop(agentID)
+		}
+	}(myGeneration, prevSessionID)
+
 	execErr := e.omni.ExecInSession(ctx, agentID, agentState.Agent.Name, agentState.Agent.Workspace, prompt)
 	if execErr != nil {
 		logger.Error("execute loop: exec failed", "agent_id", agentID, "err", execErr)
 	}
 
+	// If ExecInSession returned without error, wait for OnStop to signal that the session
+	// has truly ended. This handles non-blocking exec implementations (e.g. omni agent exec
+	// --bg) where ExecInSession returns before hooks fire. The watchdog also signals this
+	// channel if OnPreSessionStart never fires within hookFireTimeout.
+	if execErr == nil {
+		select {
+		case <-sessionDoneCh:
+			logger.Debug("execute loop: session done signal received", "agent_id", agentID)
+		case <-e.ctx.Done():
+		}
+	}
+	e.state.ClearSessionDone(agentID)
+
 	// Session-end guard: hooks (OnStop) fire during the session and should have already
 	// cleaned up status and messages. If they didn't (crash / no PostPrompt), do it here.
-	e.onSessionEnd(agentID, msgs, execErr != nil)
+	e.onSessionEnd(agentID, msgs, execErr != nil, myGeneration)
 
 	// Reset queue_time so the cron sweep doesn't re-flag these messages.
+	// Re-fetch each message from DB: OnStop (inside ExecInSession) may have already marked them
+	// StatusDelivered. Writing the stale local copy (still statusQueued) would overwrite that,
+	// causing the post-loop executeLoop to pick and re-deliver the same message.
 	now := time.Now().UnixMilli()
 	for _, msg := range msgs {
-		msg.QueueTime = now
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		fresh, ferr := e.msgStore.GetMessage(ctx, msg.ID)
+		if ferr != nil {
+			logger.Error("execute loop: get message for queue_time reset failed", "message_id", msg.ID, "err", ferr)
+			continue
+		}
+		if fresh.Status != statusQueued {
+			continue // OnStop already advanced the status; don't overwrite
+		}
+		fresh.QueueTime = now
+		if err := e.msgStore.UpdateMessage(ctx, fresh); err != nil {
 			logger.Error("execute loop: reset queue_time failed", "message_id", msg.ID, "err", err)
 		}
+	}
+
+	// Post-loop retry: pick any pending messages that arrived while this session was running.
+	// markDelivered intentionally does not spawn executeLoop; this is the sole path that
+	// triggers the next delivery after ExecInSession fully returns.
+	// Skipped on interrupt and stopped (exec-failed) states.
+	cur, _ := e.state.GetAgent(agentID)
+	if !cur.CodeSession.IsInterrupted && cur.Status != AgentStatusStopped {
+		go e.executeLoop(agentID)
 	}
 }
 
 // onSessionEnd is called after ExecInSession returns to clean up state that hooks may have missed
 // (e.g. if the omni process crashed before PostPrompt fired).
 // msgs is used only for IDs — status is re-queried from DB to avoid stale overwrites.
-func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message, execFailed bool) {
+// myGeneration is the SessionGeneration captured before ExecInSession was called; it guards
+// against resetting Running status when a newer session (spawned by markDelivered) has taken over.
+func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message, execFailed bool, myGeneration int) {
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
@@ -538,12 +738,14 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	agentState.CodeSession.MandatoryToolInvoked = false
 
 	if execFailed {
-		agentState.Status = AgentStatusStopped
 		agentState.StopReason = StopReasonOther
-	} else if agentState.Status == AgentStatusRunning {
-		// Status still Running means PostPrompt never fired — hooks missed.
+		agentState.Status = AgentStatusStopped // default; overridden below when retry is allowed
+	} else if agentState.Status == AgentStatusRunning && agentState.CodeSession.SessionGeneration == myGeneration {
+		// Status still Running AND generation unchanged means PostPrompt never fired for this
+		// session (hooks missed). Safe to reset — no newer session has taken over.
 		agentState.Status = AgentStatusReady
 	}
+	// If generation advanced (markDelivered ran concurrently with a new session arrival), leave status as-is.
 
 	e.state.SetAgent(agentID, agentState)
 
@@ -556,31 +758,85 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	for i, m := range msgs {
 		ids[i] = m.ID
 	}
+
+	// On exec failure: re-queue messages below the retry cap for another attempt.
+	// Interrupted or cap-exhausted → permanently fail.
+	// On exec success with orphaned messages (hooks missed) → original safety-net: mark Failed.
+	canRetry := execFailed && !agentState.CodeSession.IsInterrupted
+	anyRequeued := false
+
 	for _, id := range ids {
 		msg, err := e.msgStore.GetMessage(ctx, id)
 		if err != nil {
 			logger.Error("session end: get message failed", "message_id", id, "err", err)
 			continue
 		}
-		if msg.Status == statusQueued || msg.Status == message.StatusProcessing {
-			logger.Warn("session end: orphaned message, marking failed", "message_id", id, "status", msg.Status, "exec_failed", execFailed)
+		if msg.Status != statusQueued && msg.Status != message.StatusProcessing {
+			continue // OnStop already handled this message
+		}
+		if canRetry && msg.Retries < maxExecRetries {
+			msg.Status = message.StatusInQueue
+			msg.QueueTime = 0
+			logger.Warn("session end: exec failed, re-queuing for retry",
+				"message_id", id, "retries", msg.Retries)
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("session end: re-queue failed", "message_id", id, "err", err)
+			} else {
+				anyRequeued = true
+			}
+		} else {
+			logger.Warn("session end: orphaned message, marking failed",
+				"message_id", id, "status", msg.Status, "exec_failed", execFailed)
 			msg.Status = message.StatusFailed
 			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
 				logger.Error("session end: mark failed error", "message_id", id, "err", err)
 			}
 		}
 	}
+
+	// Reset to Ready so the post-loop retry can fire another ExecInSession attempt.
+	if anyRequeued {
+		agentState, _ = e.state.GetAgent(agentID)
+		agentState.Status = AgentStatusReady
+		e.state.SetAgent(agentID, agentState)
+	}
 }
 
 // pickNextMessages selects the next batch of messages for agentID.
-// Groups by sender (msg.From): execute picks exactly 1; query/instant accumulate up to 5.
-func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message, error) {
-	msgs, err := e.msgStore.RawQuery(e.ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 10`,
-		agentID, string(message.StatusInQueue),
-	)
+//
+// bypassTask non-nil: T2 bypass mode — execute in flight, only pick queries for that task.
+//
+// Normal mode (bypassTask nil):
+//   Execute: picks 1 execute; bundles co-task non-execute messages (same task_id, then same group_id fallback).
+//   Query/instant: accumulate up to 5 from same sender, stop before execute.
+//   T1 priority: TaskMux retained from last execute — messages with matching task_id sorted first.
+//   T4: messages for paused tasks are skipped.
+func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey) ([]*message.Message, error) {
+	// T2 bypass: execute in flight — pick only queries for the matching task.
+	if bypassTask != nil && !bypassTask.IsZero() {
+		return e.pickBypassQueries(agentID, *bypassTask)
+	}
+
+	// T1: use TaskMux for task_id-first ordering when available.
+	taskMux := e.state.GetTaskMux(agentID)
+	var msgs []*message.Message
+	var err error
+	if taskMux != nil && !taskMux.IsZero() {
+		msgs, err = e.msgStore.RawQuery(e.ctx,
+			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
+			 FROM messages WHERE "to" = ? AND status = ?
+			 ORDER BY CASE WHEN task_id = ? AND creator_agent_id = ? THEN 0 ELSE 1 END, sent_time ASC LIMIT 20`,
+			agentID, string(message.StatusInQueue), taskMux.TaskID, taskMux.CreatorAgentID,
+		)
+	} else {
+		msgs, err = e.msgStore.RawQuery(e.ctx,
+			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
+			 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
+			agentID, string(message.StatusInQueue),
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -589,11 +845,35 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 	}
 
 	first := msgs[0]
+
+	// T4: skip paused task.
+	if first.TaskID != "" && e.state.IsTaskPaused(agentID, first.TaskID) {
+		logger.Debug("pick: task is paused, skipping", "agent_id", agentID, "task_id", first.TaskID)
+		return nil, nil
+	}
+
 	if first.RequestType == reqTypeExecute {
-		return msgs[:1], nil
+		picked := []*message.Message{first}
+		// Bundle co-task non-execute messages: prefer task_id match, fall back to group_id.
+		for _, msg := range msgs[1:] {
+			if msg.RequestType == reqTypeExecute {
+				continue
+			}
+			if first.TaskID != "" && msg.TaskID == first.TaskID && msg.CreatorAgentID == first.CreatorAgentID {
+				picked = append(picked, msg)
+			} else if first.TaskID == "" && first.GroupID != "" && msg.GroupID == first.GroupID {
+				picked = append(picked, msg)
+			}
+		}
+		return picked, nil
 	}
 
 	// Accumulate query/instant from the same sender, up to 5, stop before execute.
+	// No task filter here — in normal mode (no active execute) all pending messages are
+	// eligible regardless of task_id. Task filtering only applies in T2 bypass mode
+	// (pickBypassQueries) where an execute is actively in flight. Filtering in normal mode
+	// would permanently block task-T2 messages if TaskMux is stuck on T1 with no new
+	// execute arriving to update it.
 	senderID := first.From
 	var picked []*message.Message
 	for _, msg := range msgs {
@@ -611,54 +891,95 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 	return picked, nil
 }
 
-type promptItem struct {
-	MessageID string `yaml:"message_id"`
-	Refs      string `yaml:"refs,omitempty"`
-	Prompt    string `yaml:"prompt"`
+// pickBypassQueries picks pending queries for the given task when an execute is in flight (T2).
+func (e *ProcessingEngine) pickBypassQueries(agentID string, key TaskKey) ([]*message.Message, error) {
+	return e.msgStore.RawQuery(e.ctx,
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
+		 FROM messages WHERE "to" = ? AND status = ? AND task_id = ? AND creator_agent_id = ? AND request_type = ?
+		 ORDER BY sent_time ASC LIMIT 5`,
+		agentID, string(message.StatusInQueue), key.TaskID, key.CreatorAgentID, string(reqTypeQuery),
+	)
 }
 
+type promptItem struct {
+	MessageID   string `yaml:"message_id"`
+	RequestType string `yaml:"request_type,omitempty"` // per-item; set in mixed-type batches
+	Refs        string `yaml:"refs,omitempty"`
+	Prompt      string `yaml:"prompt"`
+}
+
+// promptPayload — messages first, instruction last (stronger influence at bottom of prompt).
+// warm_up detection is embedded in each item's refs JSON (key "warm_up": true) rather than
+// as a top-level field, so the agent reads it from the same refs object as sender identity.
 type promptPayload struct {
-	WarmUp      bool         `yaml:"warm_up,omitempty"`
-	RequestType string       `yaml:"request_type"`
-	Instruction string       `yaml:"instruction"`
 	Messages    []promptItem `yaml:"messages"`
+	Instruction string       `yaml:"instruction"`
+}
+
+// isMixedBatch reports whether msgs contains more than one distinct request type.
+func isMixedBatch(msgs []*message.Message) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+	rt := msgs[0].RequestType
+	for _, m := range msgs[1:] {
+		if m.RequestType != rt {
+			return true
+		}
+	}
+	return false
 }
 
 var warmUpInstruction = map[message.RequestType]string{
-	reqTypeExecute: "Execute the following task. Call `update_message` or `update_messages` after completing the task.",
-	reqTypeQuery:   "Answer the following queries. Use the axolink query_result tool (or query_result_batch for multiple) to send your response back, passing the message_id and your answer as the response.",
-	reqTypeInstant: "Process the following messages",
+	reqTypeExecute: "Execute the following task. Call `send_response(message_id, ...)` after completing.",
+	reqTypeQuery:   "Answer the following queries. Call `send_response(message_id, response)` for each.",
+	reqTypeInstant: "Process the following messages.",
 }
 
+const warmUpMixedInstruction = "Complete the task and answer all queries. Call `send_response(message_id, ...)` for each message_id."
+
 var activeInstruction = map[message.RequestType]string{
-	reqTypeExecute: "Continue the task from %s. Call `update_message` when done.",
-	reqTypeQuery:   "Reply to %s using query_result or query_result_batch.",
+	reqTypeExecute: "Continue from %s. Call `send_response` when done.",
+	reqTypeQuery:   "Reply to %s using `send_response` or `send_response_batch`.",
 	reqTypeInstant: "Process the following from %s.",
 }
 
+const activeMixedInstruction = "Continue from %s. Call `send_response` for each message_id."
+
 // buildWarmUpPrompt builds a full prompt for a first delivery to a session.
-// Includes warm_up=true and full type-specific instructions with all message fields.
+// Supports mixed-type batches (execute + co-task queries): per-item request_type is set,
+// instruction is unified and appended last.
 func buildWarmUpPrompt(msgs []*message.Message) string {
 	if len(msgs) == 0 {
 		return ""
 	}
-	rt := msgs[0].RequestType
-	instruction, ok := warmUpInstruction[rt]
-	if !ok {
-		instruction = "Process the following"
+	mixed := isMixedBatch(msgs)
+	var instruction string
+	if mixed {
+		instruction = warmUpMixedInstruction
+	} else {
+		rt := msgs[0].RequestType
+		var ok bool
+		instruction, ok = warmUpInstruction[rt]
+		if !ok {
+			instruction = "Process the following."
+		}
 	}
-	payload := promptPayload{
-		WarmUp:      true,
-		RequestType: string(rt),
-		Instruction: instruction,
-		Messages:    make([]promptItem, len(msgs)),
-	}
+	items := make([]promptItem, len(msgs))
 	for i, msg := range msgs {
-		payload.Messages[i] = promptItem{
+		items[i] = promptItem{
 			MessageID: msg.ID,
 			Refs:      msg.Refs,
 			Prompt:    msg.Prompt,
 		}
+		if mixed {
+			items[i].RequestType = string(msg.RequestType)
+		}
+	}
+	payload := promptPayload{
+		Messages:    items,
+		Instruction: instruction,
 	}
 	out, err := yaml.Marshal(payload)
 	if err != nil {
@@ -670,6 +991,7 @@ func buildWarmUpPrompt(msgs []*message.Message) string {
 
 // buildActivePrompt builds a lean prompt for subsequent deliveries to an already-warm session.
 // References sender name in the instruction; omits refs to reduce token usage.
+// Supports mixed-type batches with per-item request_type and unified instruction.
 func buildActivePrompt(msgs []*message.Message, senderName string) string {
 	if len(msgs) == 0 {
 		return ""
@@ -677,21 +999,31 @@ func buildActivePrompt(msgs []*message.Message, senderName string) string {
 	if senderName == "" {
 		senderName = "sender"
 	}
-	rt := msgs[0].RequestType
-	tmpl, ok := activeInstruction[rt]
-	if !ok {
-		tmpl = "Process the following from %s."
+	mixed := isMixedBatch(msgs)
+	var instruction string
+	if mixed {
+		instruction = fmt.Sprintf(activeMixedInstruction, senderName)
+	} else {
+		rt := msgs[0].RequestType
+		tmpl, ok := activeInstruction[rt]
+		if !ok {
+			tmpl = "Process the following from %s."
+		}
+		instruction = fmt.Sprintf(tmpl, senderName)
 	}
-	payload := promptPayload{
-		RequestType: string(rt),
-		Instruction: fmt.Sprintf(tmpl, senderName),
-		Messages:    make([]promptItem, len(msgs)),
-	}
+	items := make([]promptItem, len(msgs))
 	for i, msg := range msgs {
-		payload.Messages[i] = promptItem{
+		items[i] = promptItem{
 			MessageID: msg.ID,
 			Prompt:    msg.Prompt,
 		}
+		if mixed {
+			items[i].RequestType = string(msg.RequestType)
+		}
+	}
+	payload := promptPayload{
+		Messages:    items,
+		Instruction: instruction,
 	}
 	out, err := yaml.Marshal(payload)
 	if err != nil {
@@ -762,7 +1094,21 @@ func (e *ProcessingEngine) handleFailedExec(req AgentCallbackRequest) {
 		logger.Error("failed exec: update retries failed", "message_id", msg.ID, "err", err)
 	}
 
-	logger.Info("retrying message", "message_id", msg.ID, "retries", msg.Retries)
+	if msg.Retries >= maxExecRetries {
+		logger.Warn("failed exec: max retries reached, stopping agent",
+			"message_id", msg.ID, "retries", msg.Retries)
+		msg.Status = message.StatusFailed
+		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			logger.Error("failed exec: mark failed error", "message_id", msg.ID, "err", err)
+		}
+		agentState, _ := e.state.GetAgent(req.AgentID)
+		agentState.Status = AgentStatusStopped
+		agentState.StopReason = StopReasonOther
+		e.state.SetAgent(req.AgentID, agentState)
+		return
+	}
+
+	logger.Info("failed exec: retrying message", "message_id", msg.ID, "retries", msg.Retries)
 	go e.executeLoop(req.AgentID)
 }
 
@@ -798,9 +1144,14 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	ctx := e.ctx
 
 	// A new prompt means a new session — any messages still in processing are orphaned from a prior session.
+	// Safety: this hook fires only on the UserPromptSubmit (PrePrompt) event, which Claude Code emits for
+	// user-originated prompts only. systemMessage injections (returned via PostPrompt/Stop hook response) do
+	// NOT fire this hook — they continue the same session and trigger another Stop event instead. The sweep
+	// is therefore safe on the recall path: recall messages stay StatusProcessing across Stop → systemMessage
+	// → Stop turns without being cleared here.
 	stale, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ?`,
 		agentID, string(message.StatusProcessing),
 	)
@@ -821,7 +1172,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
 	staleQueued, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ? AND queue_time > 0 AND queue_time < ?`,
 		agentID, string(statusQueued), cutoff,
 	)
@@ -866,9 +1217,31 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 // first ExecInSession, so the guard uses <= to get exactly 3 recall attempts.
 const maxMandatoryToolRetries = 3
 
-var recallPrompt = map[message.RequestType]string{
-	reqTypeExecute: "Tool callback not received. Call `update_message` after completing the task. Do not use send_message to reply.",
-	reqTypeQuery:   "Tool callback not received. Call `query_result` or `query_result_batch` to respond. Do not use send_message.",
+// buildRecallPrompt builds a minimal recall systemMessage that includes the message ID(s)
+// so the agent can call the correct tool without re-reading context.
+func buildRecallPrompt(msgs []*message.Message) string {
+	if len(msgs) == 0 {
+		return "Tool callback not received. Please use the appropriate tool to respond."
+	}
+	ids := make([]string, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.ID
+	}
+	if len(msgs) == 1 {
+		return fmt.Sprintf("Tool callback not received. Call `send_response` with message_id=%s, or `send_response_batch` with a single-item array. Do not use send_message to reply.", ids[0])
+	}
+	return fmt.Sprintf("Tool callback not received. Call `send_response` for each or `send_response_batch` for all message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
+}
+
+func joinIDs(ids []string) string {
+	result := ""
+	for i, id := range ids {
+		if i > 0 {
+			result += ", "
+		}
+		result += id
+	}
+	return result
 }
 
 // OnStop is called by HookHandler on Stop / PostPrompt events.
@@ -886,13 +1259,14 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 
 	msgs, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ?`,
 		agentID, string(message.StatusProcessing),
 	)
 	if err != nil {
 		logger.Error("hook: stop — query processing messages failed", "agent_id", agentID, "err", err)
 		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
@@ -908,6 +1282,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		agentState.Status = AgentStatusReady
 		e.state.SetAgent(agentID, agentState)
 		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
@@ -919,8 +1294,9 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 
 	// instant messages: always mark delivered regardless of tool invocation.
 	if len(msgs) > 0 && msgs[0].RequestType == reqTypeInstant {
-		e.markDelivered(ctx, msgs, agentID, agentState)
+		e.markDelivered(ctx, msgs, agentID, agentState, false)
 		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
@@ -929,22 +1305,21 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	if len(msgs) > 0 && !mandatoryToolInvoked {
 		retries := msgs[0].Retries
 		if retries <= maxMandatoryToolRetries {
-			recall, ok := recallPrompt[msgs[0].RequestType]
-			if !ok {
-				recall = "Tool callback not received. Please use the appropriate tool to respond."
-			}
+			recall := buildRecallPrompt(msgs)
 			logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
 				"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
+			// Increment retries before injecting recall so the guard counter advances each turn.
+			// Without this, retries stays constant and the recall loops forever.
 			for _, msg := range msgs {
-				msg.Status = message.StatusFailed
+				msg.Retries++
 				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("hook: mark failed for recall error", "message_id", msg.ID, "err", err)
+					logger.Error("hook: stop — recall retries increment failed", "message_id", msg.ID, "err", err)
 				}
 			}
-			agentState.Status = AgentStatusReady
-			e.state.SetAgent(agentID, agentState)
-			e.state.ClearSession(sessionID)
-			go e.executeLoop(agentID)
+			// Keep messages as StatusProcessing and status as Running — the agent continues the
+			// same session. Changing status to Ready here would allow the watchdog or the
+			// post-loop retry to dispatch new messages into a concurrent second session.
+			e.state.SetAgent(agentID, agentState) // persists MandatoryToolInvoked=false only
 			return &recall
 		}
 		// Max retries exceeded — fire status callback and fall through to deliver.
@@ -955,14 +1330,21 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		}
 	}
 
-	e.markDelivered(ctx, msgs, agentID, agentState)
+	// isForceDeliver=true when the agent never invoked the mandatory tool (no send_response).
+	// The author gets a failure callback for any ShouldReply=true message in that path.
+	isForceDeliver := len(msgs) > 0 && !mandatoryToolInvoked
+	e.markDelivered(ctx, msgs, agentID, agentState, isForceDeliver)
 	e.state.ClearSession(sessionID)
+	e.state.SignalSessionDone(agentID)
 	return nil
 }
 
 // markDelivered marks msgs as delivered and sends replies for non-query types.
-func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Message, agentID string, agentState AgentState) {
-	logger.Info("hook: stop — success, marking messages delivered", "agent_id", agentID, "count", len(msgs))
+// markDelivered marks msgs as delivered. isForceDeliver=true means the agent exhausted
+// retries without calling send_response — a failure callback is sent to the author for
+// any message with ShouldReply=true.
+func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Message, agentID string, agentState AgentState, isForceDeliver bool) {
+	logger.Info("hook: stop — marking messages delivered", "agent_id", agentID, "count", len(msgs), "force", isForceDeliver)
 	now := time.Now().UnixMilli()
 	for _, msg := range msgs {
 		msg.Status = message.StatusDelivered
@@ -971,23 +1353,68 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 			logger.Error("hook: deliver message failed", "message_id", msg.ID, "err", err)
 			continue
 		}
-		if msg.RequestType != reqTypeQuery && e.reply != nil {
-			if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
-				logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
+		// T5: complete delivery checkpoint for execute messages.
+		if e.taskDelivery != nil && msg.RequestType == reqTypeExecute && msg.TaskID != "" {
+			if err := e.taskDelivery.CompleteDelivery(ctx, msg.TaskID, agentID); err != nil {
+				logger.Warn("hook: task delivery complete checkpoint failed", "task_id", msg.TaskID, "err", err)
+			}
+		}
+		if e.reply != nil {
+			if isForceDeliver && msg.ShouldReply {
+				// Agent never called send_response — notify the author that delivery failed.
+				if err := e.reply.SendFailureCallback(ctx, msg, agentID); err != nil {
+					logger.Error("hook: send failure callback failed", "message_id", msg.ID, "err", err)
+				}
+			} else if msg.RequestType != reqTypeQuery {
+				if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
+					logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
+				}
 			}
 		}
 	}
+	// Increment generation so onSessionEnd (called after ExecInSession returns) can detect
+	// that delivery already happened and must not reset a concurrently-started session.
+	// Do NOT spawn a new executeLoop here: markDelivered runs inside OnStop, which is a
+	// hook fired while ExecInSession is still blocking. Spawning an executeLoop now would
+	// pick unrelated messages (e.g. from a different task/sender) while the current session
+	// is still active. The post-loop retry at the end of executeLoop delivers the next batch
+	// after ExecInSession returns.
+	agentState.CodeSession.SessionGeneration++
 	agentState.Status = AgentStatusReady
 	e.state.SetAgent(agentID, agentState)
+}
+
+// PauseTask pauses delivery of messages for the given task to agentID (T4).
+// Signature matches the service.taskPauser interface (plain strings, no cross-package type).
+func (e *ProcessingEngine) PauseTask(agentID, taskID, creatorAgentID string) {
+	if taskID == "" {
+		return
+	}
+	e.state.PauseTask(agentID, taskID)
+	logger.Info("engine: task paused", "agent_id", agentID, "task_id", taskID)
+}
+
+// ResumeTask clears the paused flag and triggers delivery for agentID (T4).
+// Signature matches the service.taskResumer interface.
+func (e *ProcessingEngine) ResumeTask(ctx context.Context, agentID, taskID, creatorAgentID string) {
+	if taskID == "" {
+		return
+	}
+	e.state.ResumeTask(agentID, taskID)
+	logger.Info("engine: task resumed", "agent_id", agentID, "task_id", taskID)
 	go e.executeLoop(agentID)
 }
 
 // mandatoryToolNames is the set of axolink tool names that confirm delivery.
+// send_response / send_response_batch are the canonical names (T7).
+// Legacy names kept as aliases until all agents migrate.
 var mandatoryToolNames = map[string]bool{
-	"update_message":     true, // execute
-	"update_messages":    true, // execute (batch)
-	"query_result":       true, // query
-	"query_result_batch": true, // query (batch)
+	"send_response":      true, // canonical
+	"send_response_batch": true, // canonical batch
+	"update_message":     true, // legacy execute alias
+	"update_messages":    true, // legacy execute batch alias
+	"query_result":       true, // legacy query alias
+	"query_result_batch": true, // legacy query batch alias
 }
 
 // OnPreToolUse is called by HookHandler on PreToolUse events.
