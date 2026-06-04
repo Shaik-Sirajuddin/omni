@@ -344,6 +344,75 @@ func TestQueueSweepRetry(t *testing.T) {
 	})
 }
 
+// ─── TestOnStopRecallIncrementsRetries ────────────────────────────────────────
+
+// TestOnStopRecallIncrementsRetries verifies that each recall injection in OnStop
+// increments msg.Retries, so the maxMandatoryToolRetries guard terminates the loop.
+func TestOnStopRecallIncrementsRetries(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Retries Incremented On Each Recall Injection", func(t *testing.T) {
+		msgStore := message.WithTestDB(t)
+		proc := New(msgStore, WithTestBinary(newLocalBlockingCLI()))
+		StartForTest(proc, ctx)
+		RegisterAgentForTest(proc, "ag-recall-ret", "ag-recall-ret", "/ws", "team")
+		SetSessionForTest(proc, "ag-recall-ret", "sess-recall-ret")
+		SetAgentStatusForTest(proc, "ag-recall-ret", AgentStatusRunning)
+
+		msg := &message.Message{
+			ID: "recall-ret-1", To: "ag-recall-ret", From: "sender",
+			FromSpec: message.SpecOmni, ToSpec: message.SpecOmni,
+			RequestType: message.RequestTypeExecute,
+			Status:      message.StatusProcessing,
+			Retries: 0, SentTime: 100, Prompt: "task", Refs: "{}",
+		}
+		require.NoError(t, msgStore.InsertMessage(ctx, msg))
+
+		// First recall injection — retries 0 → 1.
+		recall := proc.OnStop(ctx, "ag-recall-ret", "sess-recall-ret")
+		require.NotNil(t, recall, "OnStop must return recall when tool not invoked")
+
+		got, err := msgStore.GetMessage(ctx, "recall-ret-1")
+		require.NoError(t, err)
+		assert.Equal(t, 1, got.Retries, "first recall must increment retries to 1")
+
+		// Second recall injection — retries 1 → 2.
+		SetSessionForTest(proc, "ag-recall-ret", "sess-recall-ret")
+		SetAgentStatusForTest(proc, "ag-recall-ret", AgentStatusRunning)
+		recall2 := proc.OnStop(ctx, "ag-recall-ret", "sess-recall-ret")
+		require.NotNil(t, recall2, "second recall must still fire (retries=1 <= max=3)")
+
+		got2, err := msgStore.GetMessage(ctx, "recall-ret-1")
+		require.NoError(t, err)
+		assert.Equal(t, 2, got2.Retries, "second recall must increment retries to 2")
+	})
+
+	t.Run("Recall Stops After Max Retries", func(t *testing.T) {
+		msgStore := message.WithTestDB(t)
+		proc := New(msgStore, WithTestBinary(newLocalBlockingCLI()))
+		StartForTest(proc, ctx)
+		RegisterAgentForTest(proc, "ag-recall-max", "ag-recall-max", "/ws", "team")
+		SetSessionForTest(proc, "ag-recall-max", "sess-recall-max")
+		SetAgentStatusForTest(proc, "ag-recall-max", AgentStatusRunning)
+
+		// retries = maxMandatoryToolRetries+1: guard should NOT recall.
+		msg := &message.Message{
+			ID: "recall-max-1", To: "ag-recall-max", From: "sender",
+			FromSpec: message.SpecOmni, ToSpec: message.SpecOmni,
+			RequestType: message.RequestTypeExecute,
+			Status:      message.StatusProcessing,
+			Retries: maxMandatoryToolRetries + 1, SentTime: 100, Prompt: "task", Refs: "{}",
+		}
+		require.NoError(t, msgStore.InsertMessage(ctx, msg))
+
+		recall := proc.OnStop(ctx, "ag-recall-max", "sess-recall-max")
+		assert.Nil(t, recall, "recall must not fire when retries exceed maxMandatoryToolRetries")
+
+		state, _ := GetAgentStateForTest(proc, "ag-recall-max")
+		assert.Equal(t, AgentStatusReady, state.Status, "agent must become Ready after max retries")
+	})
+}
+
 // ─── TestQueueTimeResetNoDuplicateDelivery ────────────────────────────────────
 
 // TestQueueTimeResetNoDuplicateDelivery verifies that the queue_time reset after

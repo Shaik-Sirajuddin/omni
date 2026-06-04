@@ -488,6 +488,15 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	var err error
 	if len(processingRecall) > 0 {
 		msgs = processingRecall
+		// Count this as a delivery attempt so the mandatory-tool retry counter advances.
+		// The normal markMessagesQueued path is skipped for preprocessing recall, so we
+		// must increment here to prevent the OnStop recall guard from looping forever.
+		for _, msg := range msgs {
+			msg.Retries++
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("execute loop: preprocessing recall — retries increment failed", "message_id", msg.ID, "err", err)
+			}
+		}
 		recallPrompt = buildWarmUpPrompt(msgs)
 		isPreprocessingRecall = true
 		logger.Warn("execute loop: preprocessing recall — unacknowledged processing messages",
@@ -797,6 +806,9 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 	}
 
 	// Accumulate query/instant from the same sender, up to 5, stop before execute.
+	// Task context filter: when TaskMux is set, only include messages that belong to
+	// the same task (or have no task_id). Messages for a different task wait until the
+	// current task context changes — they will be re-evaluated by a future executeLoop.
 	senderID := first.From
 	var picked []*message.Message
 	for _, msg := range msgs {
@@ -808,6 +820,11 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 		}
 		if msg.RequestType == reqTypeExecute {
 			break
+		}
+		if taskMux != nil && !taskMux.IsZero() && msg.TaskID != "" {
+			if msg.TaskID != taskMux.TaskID || msg.CreatorAgentID != taskMux.CreatorAgentID {
+				continue // different task — defer to a future executeLoop
+			}
 		}
 		picked = append(picked, msg)
 	}
@@ -1214,6 +1231,14 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 			recall := buildRecallPrompt(msgs)
 			logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
 				"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
+			// Increment retries before injecting recall so the guard counter advances each turn.
+			// Without this, retries stays constant and the recall loops forever.
+			for _, msg := range msgs {
+				msg.Retries++
+				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+					logger.Error("hook: stop — recall retries increment failed", "message_id", msg.ID, "err", err)
+				}
+			}
 			// Keep messages as StatusProcessing and status as Running — the agent continues the
 			// same session. Changing status to Ready here would allow the watchdog or the
 			// post-loop retry to dispatch new messages into a concurrent second session.
