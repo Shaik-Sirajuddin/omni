@@ -195,18 +195,18 @@ else
   echo "    pane (first 4 lines):"
   echo "$PANE" | head -4 | sed 's/^/    | /'
 
-  # Check journalctl for attach evidence
-  ATTACH_JRNL=$(grep "ResumeAgent.*attach\|PTY terminal already active.*attach\|ptyDaemon.Attach\|Attach.*session" "$JRNL_LOG" 2>/dev/null | head -1 || true)
-  ATTACH_STDERR=$(grep -iE "attach|connected|resume|active" "$ATTACH_LOG" 2>/dev/null | head -1 || true)
+  # Primary: journalctl "fd granted to client" — fired by ptydaemon on SCM_RIGHTS handoff
+  ATTACH_JRNL=$(grep "fd granted to client" "$JRNL_LOG" 2>/dev/null | tail -1 || true)
+  # Fallback: process still running (blocking) = attached
+  RESUME_PID=$(pgrep -f "omni agent resume $AGENT" 2>/dev/null | head -1 || true)
 
   if [[ -n "$ATTACH_JRNL" ]]; then
-    pass "T6: journalctl confirms ptyDaemon.Attach called: ${ATTACH_JRNL:0:100}"
-  elif [[ $PANE_LINES -gt 3 ]]; then
-    pass "T6: pane has $PANE_LINES lines — attach appears successful"
-  elif [[ -n "$ATTACH_STDERR" ]]; then
-    pass "T6: attach confirmed via stderr: ${ATTACH_STDERR:0:80}"
+    pass "T6: ptydaemon granted fd to client (SCM_RIGHTS handoff confirmed): ${ATTACH_JRNL:0:120}"
+  elif [[ -n "$RESUME_PID" ]]; then
+    pass "T6: resume process $RESUME_PID is blocking — attached to PTY"
   else
-    fail "T6: no attach evidence in journalctl ($PANE_LINES pane lines, no stderr)"
+    fail "T6: no attach evidence (no 'fd granted to client' in journal, resume not blocking)"
+    echo "    pane lines: $PANE_LINES"
     echo "    attach log: $(cat "$ATTACH_LOG" 2>/dev/null | head -5 || echo '(empty)')"
   fi
 
