@@ -33,17 +33,17 @@ type spyTaskDeliveryStore struct {
 	Completes []spyComplete
 }
 
-type spyStart struct{ TaskID, AgentID, LastMessageID string }
+type spyStart struct{ TaskID, AgentID, CreatorAgentID, LastMessageID string }
 type spyComplete struct{ TaskID, AgentID string }
 
 func newSpyTaskDeliveryStore() *spyTaskDeliveryStore {
 	return &spyTaskDeliveryStore{}
 }
 
-func (s *spyTaskDeliveryStore) StartDelivery(_ context.Context, taskID, agentID, lastMessageID string) error {
+func (s *spyTaskDeliveryStore) StartDelivery(_ context.Context, taskID, agentID, creatorAgentID, lastMessageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Starts = append(s.Starts, spyStart{taskID, agentID, lastMessageID})
+	s.Starts = append(s.Starts, spyStart{taskID, agentID, creatorAgentID, lastMessageID})
 	return nil
 }
 
