@@ -1,0 +1,40 @@
+name: handoff-windows
+
+# Functional verification of the Windows ConPTY relay endpoint
+# (svc/ptydaemon/handoff) on a GitHub-hosted Windows runner. The package only
+# needs golang.org/x/sys + stdlib on Windows (the one pkg/pty import is in the
+# unix-tagged test), so GOWORK=off isolates it to the svc/ptydaemon module.
+
+on:
+  push:
+    branches: [feat/ptydaemon-handoff]
+    paths:
+      - 'svc/ptydaemon/handoff/**'
+      - '.github/workflows/handoff-windows.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-handoff:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: svc/ptydaemon
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: go version
+        run: go version
+      - name: build (windows)
+        run: go build ./handoff/
+      - name: vet (windows)
+        run: go vet ./handoff/
+      - name: test (windows, verbose)
+        run: go test -count=1 -v ./handoff/
