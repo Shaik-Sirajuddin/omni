@@ -85,6 +85,14 @@ func isDuplicateColumnError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
 }
 
+// isIndexColumnMissingError catches SQLite's "table X has no column named Y" error that
+// occurs when applySchema tries to create an index referencing columns that don't exist
+// yet on an existing (pre-migration) database. The migration will add the columns and
+// recreate the index with IF NOT EXISTS afterward.
+func isIndexColumnMissingError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "has no column named")
+}
+
 func ensureMigrationTable(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migration (
 		pointer_value  INTEGER NOT NULL DEFAULT 0,
