@@ -124,7 +124,7 @@ StateDirectoryMode=0700
 Environment=OMNI_PTY_SOCKET=/run/omni-%i/omni-pty.sock
 Environment=PTYDAEMON_DB=/var/lib/omni-%i/ptydaemon.db
 Environment=HOOK_OPERATOR_SOCKET=/run/omni-%i/hook-operator.sock
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/%i/.local/bin${debug_env}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/root/.local/bin:/home/%i/.local/bin${debug_env}
 StandardOutput=journal
 StandardError=journal
 
