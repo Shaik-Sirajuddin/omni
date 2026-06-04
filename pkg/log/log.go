@@ -13,8 +13,8 @@
 //  1. UseStderrForAll() called → stderr (all loggers in the process)
 //  2. WithStderr() option → stderr (this logger only)
 //  3. OMNI_LOG_FILE env var set → that file, all levels
-//  4. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log
-//  5. Otherwise → stderr
+//  4. Debug mode → ~/.omni/debug/<component>.log
+//  5. Otherwise → ~/.omni/log/omni.log  (silent; no terminal output for CLI users)
 //
 // OTLP targets registered via InitOtel() always receive records regardless
 // of the text destination above.
@@ -22,7 +22,7 @@
 // Daemon startup: call UseStderrForAll() before the first log write so every
 // sub-package logger lands in journald without needing WithStderr() everywhere.
 //
-// CLI startup: call InitSessionLog() to set OMNI_LOG_FILE to
+// CLI with session: call InitSessionLog() to set OMNI_LOG_FILE to
 // ~/.omni/log/session-<pid>.log so all in-process components share one file.
 //
 // No internal module dependencies — safe to import from any module.
@@ -71,8 +71,8 @@ func UseStderrForAll() {
 }
 
 // InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
-// if it is not already set. Call once at CLI startup (before the first log
-// write) so all in-process components and child subprocesses share one file.
+// if it is not already set. Call for commands that attach to an agent session
+// so that all in-process components and child subprocesses share one file.
 // Long-lived daemon processes should NOT call this — use UseStderrForAll().
 func InitSessionLog() {
 	if os.Getenv("OMNI_LOG_FILE") != "" {
@@ -87,10 +87,7 @@ func InitSessionLog() {
 		return
 	}
 	path := filepath.Join(logDir, fmt.Sprintf("session-%d.log", os.Getpid()))
-	if err := os.Setenv("OMNI_LOG_FILE", path); err != nil {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "omni: session log → %s\n", path)
+	_ = os.Setenv("OMNI_LOG_FILE", path)
 }
 
 // NewLogger returns a structured logger tagged with the given key/value pair.
@@ -134,8 +131,6 @@ func (lw *lazyWriter) Write(p []byte) (int, error) {
 	return lw.w.Write(p)
 }
 
-var announcedPaths sync.Map
-
 func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Writer {
 	processWriterMu.RLock()
 	pw := processWriter
@@ -148,24 +143,27 @@ func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Wri
 	}
 	path := os.Getenv("OMNI_LOG_FILE")
 	if path == "" {
-		if level > slog.LevelDebug {
+		home, err := omniHome()
+		if err != nil {
+			// No home dir — fall back to stderr rather than polluting /tmp.
 			return os.Stderr
 		}
-		if home, err := omniHome(); err == nil {
+		if level <= slog.LevelDebug {
+			// Debug mode: per-component file for easy filtering.
 			debugDir := filepath.Join(home, "debug")
 			_ = os.MkdirAll(debugDir, 0o755)
 			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
 		} else {
-			path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+			// Info mode: shared persistent log — silent to the terminal.
+			logDir := filepath.Join(home, "log")
+			_ = os.MkdirAll(logDir, 0o755)
+			path = filepath.Join(logDir, "omni.log")
 		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "omni: failed to open log %s: %v; falling back to stderr\n", path, err)
+		// Can't open the log file — fall back to stderr silently.
 		return os.Stderr
-	}
-	if _, loaded := announcedPaths.LoadOrStore(path, struct{}{}); !loaded {
-		fmt.Fprintf(os.Stderr, "omni: log → %s\n", path)
 	}
 	return f
 }
