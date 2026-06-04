@@ -137,9 +137,9 @@ else
   systemctl restart "$OMNI_SERVICE" 2>&1 || fail "systemctl restart "$OMNI_SERVICE" failed (idempotency run)"
   sleep 5
 
-  AXOLINK_COUNT=$(grep -o '"axolink"' "$GEMINI_MCP_CFG" 2>/dev/null | wc -l)
+  AXOLINK_COUNT=$(python3 -c "import json; d=json.load(open('$GEMINI_MCP_CFG')); print(len([k for k in d.get('mcpServers',{}) if k=='axolink']))" 2>/dev/null || echo 0)
   if [[ "$AXOLINK_COUNT" -eq 1 ]]; then
-    pass "exactly 1 axolink entry after second restart ($AXOLINK_COUNT)"
+    pass "exactly 1 axolink entry after second restart"
   else
     fail "expected 1 axolink entry after second restart, found $AXOLINK_COUNT"
     cat "$GEMINI_MCP_CFG"
