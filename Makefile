@@ -1,5 +1,8 @@
-COMPOSE_FILE := development/docker-compose.yaml
-VERSION      ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+COMPOSE_FILE  := development/docker-compose.yaml
+VERSION       ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+WORKTREE_NAME := $(notdir $(CURDIR))
+IMAGE_TAG     := omni-dev:$(WORKTREE_NAME)
+export COMPOSE_PROJECT_NAME := omni-$(WORKTREE_NAME)
 
 .PHONY: build install uninstall release snapshot docker-build docker-up docker-down docker-rebuild docker-relaunch docker-connect dev-preflight docker-fix-volumes tools
 
@@ -63,7 +66,7 @@ dev-preflight:
 # ── docker ────────────────────────────────────────────────────────────────────
 
 docker-build:
-	docker compose -f $(COMPOSE_FILE) build --build-arg VERSION=$(VERSION)
+	OMNI_DEV_IMAGE=$(IMAGE_TAG) docker compose -f $(COMPOSE_FILE) build --build-arg VERSION=$(VERSION)
 
 docker-fix-volumes:
 	@vol=$$(docker volume ls --format '{{.Name}}' | grep '_agent-codex$$' | head -1); \
@@ -74,7 +77,7 @@ docker-fix-volumes:
 	    '[ -d /data/antigravity-cli/antigravity-oauth-token ] && rm -rf /data/antigravity-cli/antigravity-oauth-token && echo "fixed $$vol: antigravity-oauth-token was a directory" || true' 2>/dev/null || true
 
 docker-up: dev-preflight docker-fix-volumes
-	docker compose -f $(COMPOSE_FILE) up -d --wait
+	OMNI_DEV_IMAGE=$(IMAGE_TAG) docker compose -f $(COMPOSE_FILE) up -d --wait
 	docker compose -f $(COMPOSE_FILE) exec ubuntu bash -l
 
 docker-down:
