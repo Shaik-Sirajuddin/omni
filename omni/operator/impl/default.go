@@ -680,6 +680,8 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				if info != nil && info.AgentID == agent.ID && info.SessionID == sessionID && info.Status == "active" {
 					if params.Detached {
 						logger.Info("ResumeAgent: PTY terminal already active, leaving running in background", "agentID", agent.ID, "sessionID", sessionID)
+						reportReady(params.Status, agent.Name, model, sessionID)
+						reportFlush(params.Status)
 						return nil
 					}
 					// Guard against double-attach: if a client already holds the session,
@@ -687,10 +689,14 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 					if mac, ok := o.ptyDaemon.(interface{ MetaAttached(string) (int, error) }); ok {
 						if count, err := mac.MetaAttached(sessionID); err == nil && count >= 1 {
 							logger.Info("ResumeAgent: PTY terminal already active and attached, skipping", "agentID", agent.ID, "sessionID", sessionID, "attachedCount", count)
+							reportReady(params.Status, agent.Name, model, sessionID)
+							reportFlush(params.Status)
 							return nil
 						}
 					}
 					logger.Info("ResumeAgent: PTY terminal already active, attaching", "agentID", agent.ID, "sessionID", sessionID)
+					reportReady(params.Status, agent.Name, model, sessionID)
+					reportFlush(params.Status)
 					attachCtx, cancelAttach := newResumeContext()
 					defer cancelAttach()
 					return o.ptyDaemon.Attach(attachCtx, sessionID)
@@ -702,6 +708,8 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		if mac, ok := o.ptyDaemon.(interface{ MetaAttached(string) (int, error) }); ok {
 			if count, err := mac.MetaAttached(sessionID); err == nil && count >= 1 {
 				logger.Info("ResumeAgent: session already attached, skipping resume", "component", "operator", "agentID", agent.ID, "sessionID", sessionID, "attachedCount", count)
+				reportReady(params.Status, agent.Name, model, sessionID)
+				reportFlush(params.Status)
 				return nil
 			}
 		}
