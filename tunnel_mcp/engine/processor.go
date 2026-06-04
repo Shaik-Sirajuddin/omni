@@ -681,8 +681,8 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	}
 
 	// Post-loop retry: pick any pending messages that arrived while this session was running.
-	// This is the fallback path for when markDelivered's go-executeLoop fired early but the
-	// agent was still Running at the time and returned without picking anything.
+	// markDelivered intentionally does not spawn executeLoop; this is the sole path that
+	// triggers the next delivery after ExecInSession fully returns.
 	// Skipped on interrupt and stopped (exec-failed) states.
 	cur, _ := e.state.GetAgent(agentID)
 	if !cur.CodeSession.IsInterrupted && cur.Status != AgentStatusStopped {
@@ -710,7 +710,7 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 		// session (hooks missed). Safe to reset — no newer session has taken over.
 		agentState.Status = AgentStatusReady
 	}
-	// If generation advanced (markDelivered ran and spawned a new session), leave status as-is.
+	// If generation advanced (markDelivered ran concurrently with a new session arrival), leave status as-is.
 
 	e.state.SetAgent(agentID, agentState)
 
@@ -1281,12 +1281,16 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 			}
 		}
 	}
-	// Increment generation so any in-flight onSessionEnd (from the now-finished ExecInSession)
-	// can detect that a new session may start and must not reset its Running status.
+	// Increment generation so onSessionEnd (called after ExecInSession returns) can detect
+	// that delivery already happened and must not reset a concurrently-started session.
+	// Do NOT spawn a new executeLoop here: markDelivered runs inside OnStop, which is a
+	// hook fired while ExecInSession is still blocking. Spawning an executeLoop now would
+	// pick unrelated messages (e.g. from a different task/sender) while the current session
+	// is still active. The post-loop retry at the end of executeLoop delivers the next batch
+	// after ExecInSession returns.
 	agentState.CodeSession.SessionGeneration++
 	agentState.Status = AgentStatusReady
 	e.state.SetAgent(agentID, agentState)
-	go e.executeLoop(agentID)
 }
 
 // PauseTask pauses delivery of messages for the given task to agentID (T4).
