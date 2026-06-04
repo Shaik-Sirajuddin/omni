@@ -6,4 +6,4 @@ import (
 	applog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 )
 
-var logger *slog.Logger = applog.NewLogger("component", "hook-operator")
+var logger *slog.Logger = applog.NewLogger("component", "hook-operator", applog.WithStderr())

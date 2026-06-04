@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E test: MCP config reflection, tunnel_mcp tool availability, AddMCP idempotency.
+# E2E test: MCP config reflection, axolink tool availability, AddMCP idempotency.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,8 +16,8 @@ pass() { echo "  PASS: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 # ─── Test 1: MCP config reflection ───────────────────────────────────────────
-# Verify that tunnel-mcp is present in the global claude config file written by
-# seed_mcp_configs() in entrypoint.sh (mcpServers → tunnel-mcp key).
+# Verify that axolink is present in the global claude config file written by
+# seed_mcp_configs() in entrypoint.sh (mcpServers → axolink key).
 echo ""
 echo "==> [TEST 1] MCP config reflection"
 
@@ -33,30 +33,29 @@ else
     cat "$CLAUDE_MCP_CFG"
   fi
 
-  if grep -q '"http://127.0.0.1:18062/mcp"' "$CLAUDE_MCP_CFG"; then
-    pass "axolink URL is http://127.0.0.1:18062/mcp"
+  # axolink is registered as stdio transport (command=/path/to/omni args=[axolink])
+  if python3 -c "
+import json, sys
+d = json.load(open('$CLAUDE_MCP_CFG'))
+s = d.get('mcpServers', {})
+e = s.get('axolink', {})
+assert e.get('type') == 'stdio' or (e.get('command') and not e.get('url')), 'axolink is not stdio'
+" 2>/dev/null; then
+    pass "axolink entry has stdio transport in $CLAUDE_MCP_CFG"
   else
-    fail "axolink URL absent or wrong in $CLAUDE_MCP_CFG"
-  fi
-
-  # Permissions: settings.json must allow mcp__axolink__*
-  CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
-  if [[ -f "$CLAUDE_SETTINGS" ]] && grep -q '"mcp__axolink__\*"' "$CLAUDE_SETTINGS"; then
-    pass "axolink wildcard permission in $CLAUDE_SETTINGS"
-  else
-    fail "mcp__axolink__* permission missing from $CLAUDE_SETTINGS"
+    fail "axolink entry absent or not stdio transport in $CLAUDE_MCP_CFG"
   fi
 fi
 
-# ─── Test 2: tunnel_mcp tool availability ────────────────────────────────────
+# ─── Test 2: axolink tool availability ───────────────────────────────────────
 # Two-pronged: (a) direct HTTP tools/list to the MCP server, (b) agent exec +
 # journalctl scan for tool invocations.
 echo ""
-echo "==> [TEST 2] tunnel_mcp tool availability"
+echo "==> [TEST 2] axolink tool availability"
 
 TUNNEL_URL="http://127.0.0.1:18062/mcp"
 
-# (a) Direct HTTP reachability check — tunnel_mcp requires session auth headers so
+# (a) Direct HTTP reachability check — axolink requires session auth headers so
 # an unauthenticated POST correctly returns "Invalid session ID". Any HTTP response
 # (including 400/auth errors) confirms the server is listening. curl failure (exit≠0
 # or empty body) means the server is down.
@@ -66,13 +65,13 @@ MCP_HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' 2>/dev/null) || MCP_HTTP_STATUS="000"
 
 if [[ "$MCP_HTTP_STATUS" != "000" ]]; then
-  pass "HTTP reachability: tunnel_mcp server listening at $TUNNEL_URL (HTTP $MCP_HTTP_STATUS)"
+  pass "HTTP reachability: axolink server listening at $TUNNEL_URL (HTTP $MCP_HTTP_STATUS)"
 else
-  fail "HTTP reachability: tunnel_mcp not responding at $TUNNEL_URL (curl timed out or refused)"
+  fail "HTTP reachability: axolink not responding at $TUNNEL_URL (curl timed out or refused)"
 fi
 
 # (b) Agent-exec check — start journalctl tap, exec a claude agent, grep for
-# tunnel-mcp tool names surfacing in server logs.
+# axolink tool names surfacing in server logs.
 echo ""
 echo "==> [TEST 2b] agent exec tool listing via journalctl"
 
@@ -110,11 +109,11 @@ omni agent delete "$MCP_AGENT" --workspace "$MCP_WORKSPACE" 2>/dev/null || true
 rm -rf "$MCP_WORKSPACE"
 
 if grep -qE "send_message|list_agents|get_message|list_messages" "$LOG"; then
-  pass "journalctl: tunnel_mcp tool names observed after agent exec"
-elif grep -q "tunnel.mcp\|tunnel_mcp" "$LOG"; then
-  pass "journalctl: tunnel-mcp server referenced in logs (tools not explicitly listed)"
+  pass "journalctl: axolink tool names observed after agent exec"
+elif grep -q "axolink" "$LOG"; then
+  pass "journalctl: axolink server referenced in logs (tools not explicitly listed)"
 else
-  fail "journalctl: no tunnel_mcp tool evidence after agent exec"
+  fail "journalctl: no axolink tool evidence after agent exec"
   echo "==> journalctl tail (last 30 lines):"
   tail -30 "$LOG" || true
 fi
@@ -130,7 +129,7 @@ CLAUDE_MCP_CFG="${HOME}/.claude.json"
 if [[ ! -f "$CLAUDE_MCP_CFG" ]]; then
   fail "idempotency: $CLAUDE_MCP_CFG not found, cannot check"
 else
-  TUNNEL_COUNT=$(grep -o '"axolink"' "$CLAUDE_MCP_CFG" | wc -l)
+  TUNNEL_COUNT=$(python3 -c "import json; d=json.load(open('$CLAUDE_MCP_CFG')); print(len([k for k in d.get('mcpServers',{}) if k=='axolink']))" 2>/dev/null || echo 0)
   if [[ "$TUNNEL_COUNT" -eq 1 ]]; then
     pass "exactly 1 axolink entry in $CLAUDE_MCP_CFG"
   else

@@ -31,6 +31,7 @@ func (ep *entryPoint) Hook(payload HookPayload) (Result, error) {
 
 	results := ep.exec.runAll(context.Background(), payload, entries)
 	result := aggregate(results)
+	ep.exec.releaseResults(results)
 
 	logger.Debug("hook: aggregated result", "event", payload.EventName, "continue", result.Continue, "suppress_output", result.SuppressOutput)
 

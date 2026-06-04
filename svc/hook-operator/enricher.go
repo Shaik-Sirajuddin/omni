@@ -19,6 +19,12 @@ type AgentLookup interface {
 	GetAgent(id string) (*omniagent.AgentInfo, error)
 }
 
+// emptyOmni is the pre-encoded omni field used when no agent context resolves.
+// It must byte-for-byte equal json.Marshal(hooks.OmniContext{}): neither the
+// `agent` object nor its `id` field carries omitempty, so the zero value
+// serialises to `{"agent":{"id":""}}`, not `{}`.
+var emptyOmni = json.RawMessage(`{"agent":{"id":""}}`)
+
 type enricher struct {
 	sessions SessionLookup
 	agents   AgentLookup
@@ -40,11 +46,18 @@ func (e *enricher) enrich(body []byte) []byte {
 
 	ctx := e.buildContext(raw)
 
-	omniBytes, err := json.Marshal(ctx)
-	if err != nil {
-		return body
+	// Common case: nothing resolved (no session_id, or lookup miss). Inject the
+	// pre-encoded empty object instead of marshaling a zero-value struct on every
+	// hook event.
+	if ctx == (hooks.OmniContext{}) {
+		raw["omni"] = emptyOmni
+	} else {
+		omniBytes, err := json.Marshal(ctx)
+		if err != nil {
+			return body
+		}
+		raw["omni"] = omniBytes
 	}
-	raw["omni"] = omniBytes
 
 	enriched, err := json.Marshal(raw)
 	if err != nil {

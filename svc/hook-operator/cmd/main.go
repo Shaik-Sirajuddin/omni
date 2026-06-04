@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	logger := applog.NewLogger("component", "hook-operator")
+	logger := applog.NewLogger("component", "hook-operator", applog.WithStderr())
 
 	var sessions hookoperator.SessionLookup
 	var agents hookoperator.AgentLookup

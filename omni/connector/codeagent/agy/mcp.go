@@ -3,6 +3,7 @@ package agy
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -172,10 +173,14 @@ func (a *agyAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult, er
 	workDir := a.workDir
 	a.mu.RUnlock()
 
+	slog.Debug("agy: AddMCP called", "name", p.Server.Name, "global", p.Global, "workDir", workDir, "transport", p.Server.Transport)
+
 	path, err := geminiMCPConfigPath(p.Global, workDir)
 	if err != nil {
+		slog.Error("agy: AddMCP: resolve path failed", "name", p.Server.Name, "err", err)
 		return nil, fmt.Errorf("agy: AddMCP: resolve path: %w", err)
 	}
+	slog.Debug("agy: AddMCP writing to", "path", path)
 	if err := withMCPWrite(func() error {
 		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
@@ -184,8 +189,10 @@ func (a *agyAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult, er
 		servers[p.Server.Name] = mcpToRaw(p.Server)
 		return writeMCPRaw(path, raw, servers, mtime)
 	}); err != nil {
+		slog.Error("agy: AddMCP write failed", "name", p.Server.Name, "path", path, "err", err)
 		return nil, fmt.Errorf("agy: AddMCP %q: %w", p.Server.Name, err)
 	}
+	slog.Info("agy: AddMCP success", "name", p.Server.Name, "path", path)
 	return &codeagent.AddMCPResult{}, nil
 }
 
