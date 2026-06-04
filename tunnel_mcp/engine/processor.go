@@ -20,6 +20,7 @@ const (
 	defaultHookFireTimeout       = 10 * time.Second // watchdog: OnPreSessionStart must fire within this window
 	staleRetryDelay              = 15 * time.Second // delay before re-queueing a stale message
 	maxQueueRetries              = 3                // max re-queue attempts before permanent failure
+	maxExecRetries               = 3                // max ExecInSession failures before agent is Stopped
 )
 
 // request type shorthands used by pickNextMessages and buildMessage.
@@ -712,8 +713,8 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	agentState.CodeSession.MandatoryToolInvoked = false
 
 	if execFailed {
-		agentState.Status = AgentStatusStopped
 		agentState.StopReason = StopReasonOther
+		agentState.Status = AgentStatusStopped // default; overridden below when retry is allowed
 	} else if agentState.Status == AgentStatusRunning && agentState.CodeSession.SessionGeneration == myGeneration {
 		// Status still Running AND generation unchanged means PostPrompt never fired for this
 		// session (hooks missed). Safe to reset — no newer session has taken over.
@@ -732,19 +733,47 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	for i, m := range msgs {
 		ids[i] = m.ID
 	}
+
+	// On exec failure: re-queue messages below the retry cap for another attempt.
+	// Interrupted or cap-exhausted → permanently fail.
+	// On exec success with orphaned messages (hooks missed) → original safety-net: mark Failed.
+	canRetry := execFailed && !agentState.CodeSession.IsInterrupted
+	anyRequeued := false
+
 	for _, id := range ids {
 		msg, err := e.msgStore.GetMessage(ctx, id)
 		if err != nil {
 			logger.Error("session end: get message failed", "message_id", id, "err", err)
 			continue
 		}
-		if msg.Status == statusQueued || msg.Status == message.StatusProcessing {
-			logger.Warn("session end: orphaned message, marking failed", "message_id", id, "status", msg.Status, "exec_failed", execFailed)
+		if msg.Status != statusQueued && msg.Status != message.StatusProcessing {
+			continue // OnStop already handled this message
+		}
+		if canRetry && msg.Retries < maxExecRetries {
+			msg.Status = message.StatusInQueue
+			msg.QueueTime = 0
+			logger.Warn("session end: exec failed, re-queuing for retry",
+				"message_id", id, "retries", msg.Retries)
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("session end: re-queue failed", "message_id", id, "err", err)
+			} else {
+				anyRequeued = true
+			}
+		} else {
+			logger.Warn("session end: orphaned message, marking failed",
+				"message_id", id, "status", msg.Status, "exec_failed", execFailed)
 			msg.Status = message.StatusFailed
 			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
 				logger.Error("session end: mark failed error", "message_id", id, "err", err)
 			}
 		}
+	}
+
+	// Reset to Ready so the post-loop retry can fire another ExecInSession attempt.
+	if anyRequeued {
+		agentState, _ = e.state.GetAgent(agentID)
+		agentState.Status = AgentStatusReady
+		e.state.SetAgent(agentID, agentState)
 	}
 }
 
@@ -1043,7 +1072,21 @@ func (e *ProcessingEngine) handleFailedExec(req AgentCallbackRequest) {
 		logger.Error("failed exec: update retries failed", "message_id", msg.ID, "err", err)
 	}
 
-	logger.Info("retrying message", "message_id", msg.ID, "retries", msg.Retries)
+	if msg.Retries >= maxExecRetries {
+		logger.Warn("failed exec: max retries reached, stopping agent",
+			"message_id", msg.ID, "retries", msg.Retries)
+		msg.Status = message.StatusFailed
+		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			logger.Error("failed exec: mark failed error", "message_id", msg.ID, "err", err)
+		}
+		agentState, _ := e.state.GetAgent(req.AgentID)
+		agentState.Status = AgentStatusStopped
+		agentState.StopReason = StopReasonOther
+		e.state.SetAgent(req.AgentID, agentState)
+		return
+	}
+
+	logger.Info("failed exec: retrying message", "message_id", msg.ID, "retries", msg.Retries)
 	go e.executeLoop(req.AgentID)
 }
 
