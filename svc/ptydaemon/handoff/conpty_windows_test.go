@@ -264,7 +264,11 @@ func TestConPTYPIDVerifyRejectsWrongPID(t *testing.T) {
 // TestConPTYJobObjectKillsTree asserts Close() kills the child tree via the Job
 // Object: after Close the child process handle is signalled (exited).
 func TestConPTYJobObjectKillsTree(t *testing.T) {
-	cp, err := NewWinConPTY(Winsize{Cols: 80, Rows: 24}, `cmd.exe /k`)
+	// Use a long-running, input-independent child: `cmd /k` exits immediately in a
+	// headless ConPTY (stdin EOF), which would fail the "child is alive" precondition.
+	// ping -n 30 runs ~29s with no stdin, so the child is reliably alive until the
+	// Job Object kills it.
+	cp, err := NewWinConPTY(Winsize{Cols: 80, Rows: 24}, `ping.exe -n 30 127.0.0.1`)
 	if err != nil {
 		t.Fatalf("NewWinConPTY: %v", err)
 	}
