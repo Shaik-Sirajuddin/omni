@@ -13,7 +13,7 @@ import (
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 )
 
-var logger = pkglog.NewLogger("component", "mcp-main")
+var logger = pkglog.NewLogger("component", "mcp-main", pkglog.WithStderr())
 
 func main() {
 	defaults := runner.DefaultConfig()
