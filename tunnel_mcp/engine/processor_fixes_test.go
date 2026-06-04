@@ -383,7 +383,7 @@ func TestFix3_TaskMuxQueryFilter(t *testing.T) {
 		assert.Equal(t, "fix3-q-match", picked[0].ID)
 	})
 
-	t.Run("Query for different task is skipped", func(t *testing.T) {
+	t.Run("Query for different task is picked in normal mode (no active execute)", func(t *testing.T) {
 		msgStore := message.WithTestDB(t)
 		proc := engine.New(msgStore, engine.WithTestBinary(&noopCLI{}))
 		engine.StartForTest(proc, ctx)
@@ -397,7 +397,9 @@ func TestFix3_TaskMuxQueryFilter(t *testing.T) {
 
 		picked, err := engine.PickNextMessagesForTest(proc, "fix3-skip")
 		require.NoError(t, err)
-		assert.Empty(t, picked, "query for a different task_id must be skipped when TaskMux is set")
+		require.Len(t, picked, 1,
+			"query for a different task_id must be picked in normal mode — task filter only applies in T2 bypass (active execute in flight)")
+		assert.Equal(t, "fix3-q-skip", picked[0].ID)
 	})
 
 	t.Run("Query with no task_id is always picked regardless of TaskMux", func(t *testing.T) {
