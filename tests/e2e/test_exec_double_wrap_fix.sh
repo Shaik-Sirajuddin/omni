@@ -108,7 +108,7 @@ run_provider_test() {
   before_count=$(awk '/op=exec|submit-key retry|UserPromptSubmit/{c++} END{print c+0}' "$JRNL_LOG" 2>/dev/null)
 
   echo "    sending exec prompt..."
-  (cd "$WS" && $OMNI agent exec "$agent_name" --prompt "$prompt" --resume 2>&1) &
+  (cd "$WS" && $OMNI agent exec "$agent_name" --prompt "$prompt" --bg 2>&1) &
   local exec_pid=$!
   sleep 0.5
   wait $exec_pid 2>/dev/null || true

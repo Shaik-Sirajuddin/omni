@@ -47,7 +47,7 @@ if command -v agy &>/dev/null; then
   if [[ $INIT_EXIT -eq 0 ]]; then
     # Run exec --resume with a short timeout (must NOT hang).
     EXEC_OUT=$(timeout 10 bash -c \
-      "cd '$WS_AGY' && omni agent exec '$AGY_AGENT' --prompt 'hello' --resume" 2>&1) || EXEC_EXIT=$?
+      "cd '$WS_AGY' && omni agent exec '$AGY_AGENT' --prompt 'hello' --bg" 2>&1) || EXEC_EXIT=$?
     EXEC_EXIT=${EXEC_EXIT:-0}
     echo "    exec exit=$EXEC_EXIT output: ${EXEC_OUT:0:120}"
 
@@ -110,7 +110,7 @@ if command -v agy &>/dev/null || command -v gemini &>/dev/null; then
     # exec --resume with timeout — must NOT block/hang waiting for TUI.
     START_TS=$(date +%s)
     GEXEC_OUT=$(timeout 10 bash -c \
-      "cd '$WS_GEM' && omni agent exec '$GEM_AGENT' --prompt 'hello' --resume" 2>&1) || GEXEC_EXIT=$?
+      "cd '$WS_GEM' && omni agent exec '$GEM_AGENT' --prompt 'hello' --bg" 2>&1) || GEXEC_EXIT=$?
     GEXEC_EXIT=${GEXEC_EXIT:-0}
     END_TS=$(date +%s)
     ELAPSED=$((END_TS - START_TS))

@@ -82,7 +82,7 @@ echo "==> [TEST 1] Detached exec delivers prompt — ptydaemon exec op fires wit
 
 START_TS=$(date +%s%N)
 EXEC1_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" \
-  --prompt "reply with: pong" --resume 2>&1)
+  --prompt "reply with: pong" --bg 2>&1)
 EXEC1_EXIT=$?
 END_TS=$(date +%s%N)
 ELAPSED_MS=$(( (END_TS - START_TS) / 1000000 ))
@@ -140,7 +140,7 @@ BEFORE=$(awk '/op=exec|submit-key retry|UserPromptSubmit/{c++} END{print c+0}' "
 # exec --resume immediately (cold start — session not yet running).
 EXEC2_START=$(date +%s%N)
 EXEC2_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" \
-  --prompt "cold start pong" --resume 2>&1)
+  --prompt "cold start pong" --bg 2>&1)
 EXEC2_EXIT=$?
 EXEC2_END=$(date +%s%N)
 EXEC2_MS=$(( (EXEC2_END - EXEC2_START) / 1000000 ))
