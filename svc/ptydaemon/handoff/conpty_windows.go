@@ -93,12 +93,11 @@ func NewWinConPTY(size Winsize, commandLine string) (*winConPTY, error) {
 		return nil, fmt.Errorf("CreatePseudoConsole: HRESULT 0x%x", r1)
 	}
 
-	// The ConPTY now owns inRead and outWrite; close OUR copies so EOF propagates.
-	windows.CloseHandle(w.inRead)
-	w.inRead = 0
-	windows.CloseHandle(w.outWrite)
-	w.outWrite = 0
-
+	// Do NOT close inRead/outWrite here. They are the ConPTY's ends of the pipes;
+	// closing them before the child is spawned and attached breaks the output
+	// plumbing (the cause of the second Windows CI hang — the overlapped read
+	// pended but ConPTY wrote nothing). They are closed in close() at teardown,
+	// matching Microsoft's EchoCon lifecycle.
 	if err := w.spawn(commandLine); err != nil {
 		w.cleanupPartial()
 		return nil, err
@@ -357,18 +356,38 @@ func (w *winConPTY) close() error {
 	w.closed = true
 	w.mu.Unlock()
 
+	// Teardown order matters: ClosePseudoConsole can DEADLOCK if the output pipe
+	// still has buffered data and no one is reading it. So first stop our reader,
+	// kill the child (closing the job), and break ALL pipe plumbing — only then
+	// ClosePseudoConsole, which now returns promptly because conhost's writes fail.
 	if w.out != nil {
-		_ = w.out.Close()
+		_ = w.out.Close() // cancel the in-flight overlapped read (M3)
 	}
-	// Close the pseudoconsole first (drops the ConPTY's ends of the pipes).
-	if w.hpc != 0 {
-		procClosePseudoConsole.Call(uintptr(w.hpc))
-		w.hpc = 0
-	}
-	// Closing the job kills the child tree (SIGHUP-equiv).
+	// Closing the job kills the child tree (SIGHUP-equiv) so it stops writing.
 	if w.job != 0 {
 		windows.CloseHandle(w.job)
 		w.job = 0
+	}
+	if w.inWrite != 0 {
+		windows.CloseHandle(w.inWrite)
+		w.inWrite = 0
+	}
+	if w.inRead != 0 {
+		windows.CloseHandle(w.inRead)
+		w.inRead = 0
+	}
+	if w.outWrite != 0 {
+		windows.CloseHandle(w.outWrite)
+		w.outWrite = 0
+	}
+	if w.outRead != 0 {
+		windows.CloseHandle(w.outRead)
+		w.outRead = 0
+	}
+	// Now safe: pipes are gone, child is dead.
+	if w.hpc != 0 {
+		procClosePseudoConsole.Call(uintptr(w.hpc))
+		w.hpc = 0
 	}
 	if w.thread != 0 {
 		windows.CloseHandle(w.thread)
@@ -377,14 +396,6 @@ func (w *winConPTY) close() error {
 	if w.proc != 0 {
 		windows.CloseHandle(w.proc)
 		w.proc = 0
-	}
-	if w.inWrite != 0 {
-		windows.CloseHandle(w.inWrite)
-		w.inWrite = 0
-	}
-	if w.outRead != 0 {
-		windows.CloseHandle(w.outRead)
-		w.outRead = 0
 	}
 	if w.attrList != nil {
 		w.attrList.Delete()
