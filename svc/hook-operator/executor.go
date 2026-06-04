@@ -137,6 +137,7 @@ func (e *executor) runHTTP(ctx context.Context, payload HookPayload, rawURL stri
 		return hookRunResult{err: fmt.Errorf("hook-operator: parse http response from %q: %w", rawURL, err)}
 	}
 
+	logger.Debug("hook: http response", "event", payload.EventName, "url", rawURL, "status", resp.StatusCode, "continue", hookResp.Continue)
 	return hookRunResult{resp: hookResp}
 }
 

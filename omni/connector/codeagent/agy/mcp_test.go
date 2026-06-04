@@ -53,6 +53,68 @@ func TestAddMCP_WritesEntry(t *testing.T) {
 	assert.True(t, ok, "AddMCP must write 'axolink-test' entry to mcp_config.json")
 }
 
+// ── Test 2: DeleteMCP and ListMCP round-trip ──────────────────────────────────
+func TestDeleteMCP_RemovesEntry(t *testing.T) {
+	a := newTestAgent(t)
+
+	_, err := a.AddMCP(codeagent.AddMCPParams{
+		Server: codeagent.MCPServer{Name: "axolink", Transport: codeagent.MCPTransportStdio, Command: "/usr/bin/omni"},
+		Global: false,
+	})
+	require.NoError(t, err)
+
+	_, err = a.DeleteMCP(codeagent.DeleteMCPParams{Name: "axolink", Global: false})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(a.workDir, ".gemini", "config", "mcp_config.json")
+	servers := readMCPConfig(t, cfgPath)
+	_, ok := servers["axolink"]
+	assert.False(t, ok, "axolink must be absent after DeleteMCP")
+}
+
+func TestDeleteMCP_NonExistent_IsNoOp(t *testing.T) {
+	a := newTestAgent(t)
+	_, err := a.DeleteMCP(codeagent.DeleteMCPParams{Name: "does-not-exist", Global: false})
+	require.NoError(t, err, "deleting a non-existent server must not error")
+}
+
+func TestListMCP_RoundTrip(t *testing.T) {
+	a := newTestAgent(t)
+
+	_, err := a.AddMCP(codeagent.AddMCPParams{
+		Server: codeagent.MCPServer{Name: "axolink", Transport: codeagent.MCPTransportStdio, Command: "/usr/bin/omni", Args: []string{"axolink"}},
+		Global: false,
+	})
+	require.NoError(t, err)
+
+	res, err := a.ListMCP(codeagent.ListMCPParams{Global: false})
+	require.NoError(t, err)
+	require.Len(t, res.Servers, 1)
+	assert.Equal(t, "axolink", res.Servers[0].Name)
+	assert.Equal(t, codeagent.MCPTransportStdio, res.Servers[0].Transport)
+}
+
+func TestAddMCP_ConcurrentWrites(t *testing.T) {
+	a := newTestAgent(t)
+	const n = 10
+	errs := make(chan error, n)
+	for i := range n {
+		go func(name string) {
+			_, err := a.AddMCP(codeagent.AddMCPParams{
+				Server: codeagent.MCPServer{Name: name, Transport: codeagent.MCPTransportStdio, Command: "/usr/bin/true"},
+				Global: false,
+			})
+			errs <- err
+		}("server-" + string(rune('a'+i)))
+	}
+	for range n {
+		require.NoError(t, <-errs)
+	}
+	res, err := a.ListMCP(codeagent.ListMCPParams{Global: false})
+	require.NoError(t, err)
+	assert.Len(t, res.Servers, n, "all concurrent writes must persist")
+}
+
 // ── Test 3: Idempotency ────────────────────────────────────────────────────────
 // Calling AddMCP twice for the same server name must produce exactly 1 entry.
 func TestAddMCP_Idempotent(t *testing.T) {
