@@ -9,11 +9,11 @@
 // Log destination (in priority order):
 //  1. WithStderr() option → stderr always
 //  2. OMNI_LOG_FILE env var set → that file, all levels
-//  3. Debug mode, no OMNI_LOG_FILE → ~/.config/omni/debug/<component>.log
+//  3. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log  (app home, not XDG config)
 //  4. Otherwise → stderr
 //
 // Call InitSessionLog() at process startup to auto-set OMNI_LOG_FILE to
-// ~/.config/omni/log/session-<pid>.log so all in-process components and
+// ~/.omni/log/session-<pid>.log so all in-process components and
 // child subprocesses share one file for the session.
 //
 // No internal module dependencies — safe to import from any module.
@@ -42,7 +42,7 @@ func WithStderr() Option {
 	return func(o *logOptions) { o.useStderr = true }
 }
 
-// InitSessionLog sets OMNI_LOG_FILE to ~/.config/omni/log/session-<pid>.log
+// InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
 // if it is not already set. Call this once at process startup (before any
 // logger is constructed) so that the CLI, operator, code agents, and MCP
 // stdio subprocesses all write to the same file for the session.
@@ -51,11 +51,11 @@ func InitSessionLog() {
 	if os.Getenv("OMNI_LOG_FILE") != "" {
 		return
 	}
-	cfgHome, err := xdgConfigHome()
+	home, err := omniHome()
 	if err != nil {
 		return
 	}
-	logDir := filepath.Join(cfgHome, "omni", "log")
+	logDir := filepath.Join(home, "log")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return
 	}
@@ -64,6 +64,15 @@ func InitSessionLog() {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "omni: session log → %s\n", path)
+}
+
+// omniHome returns ~/.omni, creating it if necessary.
+func omniHome() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".omni"), nil
 }
 
 // NewLogger returns a structured logger tagged with the given key/value pair.
@@ -100,8 +109,8 @@ func resolveWriter(component string, level slog.Level, o *logOptions) io.Writer 
 		if level > slog.LevelDebug {
 			return os.Stderr
 		}
-		if dir, err := xdgConfigHome(); err == nil {
-			debugDir := filepath.Join(dir, "omni", "debug")
+		if home, err := omniHome(); err == nil {
+			debugDir := filepath.Join(home, "debug")
 			_ = os.MkdirAll(debugDir, 0o755)
 			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
 		} else {
