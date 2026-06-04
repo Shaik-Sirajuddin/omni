@@ -1,3 +1,9 @@
+// Deprecated: the gemini connector is deprecated and no longer maintained.
+// It does not follow the current exec contract (ExecInSession pre-wraps the
+// prompt with bracketed paste + submit key instead of sending the raw prompt and
+// letting the ptydaemon's execPrompt own framing — see the agy/claude/codex
+// connectors). Do not build new functionality on this package; prefer claude,
+// codex, or agy.
 package gemini
 
 import (
@@ -69,6 +75,10 @@ type geminiAgent struct {
 type PTYClient = codeagent.PTYClient
 
 // New returns a CodeAgent backed by the local gemini CLI binary.
+//
+// Deprecated: the gemini connector is deprecated and unmaintained; its
+// ExecInSession still double-wraps prompts (known TUI-leak bug). Prefer the
+// claude, codex, or agy connectors.
 func New(workDir, model string, c PTYClient) (codeagent.CodeAgent, error) {
 	binPath, err := lookPath("gemini")
 	if err != nil {

@@ -153,14 +153,16 @@ const (
 // MCPServer is the canonical representation of an MCP server entry shared
 // across all connectors. Connectors translate to/from their native config shape.
 type MCPServer struct {
-	Name      string            // unique key within the settings scope
-	Transport MCPTransport
-	Command   string            // stdio: executable path
-	Args      []string          // stdio: arguments
-	URL       string            // sse/http: endpoint URL
-	Env       map[string]string // extra environment variables
-	Headers   map[string]string // sse/http: request headers
-	Timeout   int               // milliseconds; 0 = provider default
+	Name       string            // unique key within the settings scope
+	Transport  MCPTransport
+	Command    string            // stdio: executable path
+	Args       []string          // stdio: arguments
+	URL        string            // sse/http: endpoint URL
+	Env        map[string]string // stdio: literal env vars injected into subprocess
+	EnvVars    []string          // stdio: parent env var names to forward into subprocess
+	Headers    map[string]string // sse/http: literal request headers → http_headers
+	EnvHeaders map[string]string // sse/http: env-var-expanded headers → env_http_headers
+	Timeout    int               // milliseconds; 0 = provider default
 }
 
 type AddMCPParams struct {

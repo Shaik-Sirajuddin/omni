@@ -137,7 +137,7 @@ EOF
 check_agent_binaries() {
   echo "==> checking agent binaries are system-wide"
   local missing=()
-  for bin in claude codex gemini; do
+  for bin in claude codex agy; do
     if ! /usr/bin/which "$bin" &>/dev/null && ! [[ -x "/usr/local/bin/$bin" ]]; then
       missing+=("$bin")
     fi
@@ -145,7 +145,12 @@ check_agent_binaries() {
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "    WARNING: the following agent binaries were not found in system PATH:" >&2
     for bin in "${missing[@]}"; do
-      echo "      - $bin  (install system-wide, e.g. sudo npm install -g @anthropic-ai/claude-code)" >&2
+      case "$bin" in
+        claude) echo "      - $bin  (install: curl -fsSL https://claude.ai/install.sh | sh)" >&2 ;;
+        codex)  echo "      - $bin  (install: curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh)" >&2 ;;
+        agy)    echo "      - $bin  (install: curl -fsSL https://antigravity.google/cli/install.sh | bash)" >&2 ;;
+        *)      echo "      - $bin" >&2 ;;
+      esac
     done
     echo "    Install them system-wide or ensure they are in ~/.local/bin for the target user." >&2
   else

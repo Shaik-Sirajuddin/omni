@@ -65,7 +65,7 @@ func DefaultConfig() Config {
 		ServiceAddr:       envDefault("AXO_LINK_SERVICE_ADDR", DefaultServiceAddr),
 		ServiceUnixSocket: envDefault("AXO_LINK_SERVICE_UNIX_SOCKET", DefaultServiceUnixSocketPath()),
 		HTTPPath:          envDefault("AXO_LINK_MCP_HTTP_PATH", DefaultHTTPPath),
-		AuthToken:         envDefault("AXO_LINK_MCP_AUTH_TOKEN", "tunnel-mcp-dev-token"),
+		AuthToken:         envDefault("AXO_LINK_MCP_AUTH_TOKEN", "axolink-dev-token"),
 		DBPath:            os.Getenv("AXO_LINK_MCP_DB_PATH"),
 		DeliveryMode:      envDefault("AXO_LINK_MCP_DELIVERY_MODE", "async"),
 		SenderID:          os.Getenv("AXO_LINK_MCP_SENDER_ID"),

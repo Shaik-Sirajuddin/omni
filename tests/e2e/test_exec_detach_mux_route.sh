@@ -82,7 +82,7 @@ echo "==> [TEST 1] Detached exec delivers prompt — ptydaemon exec op fires wit
 
 START_TS=$(date +%s%N)
 EXEC1_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" \
-  --prompt "reply with: pong" --resume 2>&1)
+  --prompt "reply with: pong" --bg 2>&1)
 EXEC1_EXIT=$?
 END_TS=$(date +%s%N)
 ELAPSED_MS=$(( (END_TS - START_TS) / 1000000 ))
@@ -92,15 +92,15 @@ echo "    output: ${EXEC1_OUT:0:120}"
 
 # ASSERT 1a: exits quickly (<5s), non-blocking.
 if [[ $EXEC1_EXIT -eq 0 ]]; then
-  pass "TEST 1: exec --resume exits 0"
+  pass "TEST 1: exec --bg exits 0"
 else
-  fail "TEST 1: exec --resume exited $EXEC1_EXIT"
+  fail "TEST 1: exec --bg exited $EXEC1_EXIT"
 fi
 
 if [[ $ELAPSED_MS -lt 5000 ]]; then
-  pass "TEST 1: exec --resume returned in <5s (${ELAPSED_MS}ms) — non-blocking"
+  pass "TEST 1: exec --bg returned in <5s (${ELAPSED_MS}ms) — non-blocking"
 else
-  fail "TEST 1: exec --resume took ${ELAPSED_MS}ms — possible blocking"
+  fail "TEST 1: exec --bg took ${ELAPSED_MS}ms — possible blocking"
 fi
 
 # ASSERT 1b: ptydaemon received exec op (proves prompt delivered to PTY).
@@ -140,7 +140,7 @@ BEFORE=$(awk '/op=exec|submit-key retry|UserPromptSubmit/{c++} END{print c+0}' "
 # exec --resume immediately (cold start — session not yet running).
 EXEC2_START=$(date +%s%N)
 EXEC2_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" \
-  --prompt "cold start pong" --resume 2>&1)
+  --prompt "cold start pong" --bg 2>&1)
 EXEC2_EXIT=$?
 EXEC2_END=$(date +%s%N)
 EXEC2_MS=$(( (EXEC2_END - EXEC2_START) / 1000000 ))
@@ -149,9 +149,9 @@ echo "    cold-start exec exit=$EXEC2_EXIT elapsed=${EXEC2_MS}ms"
 echo "    output: ${EXEC2_OUT:0:120}"
 
 if [[ $EXEC2_EXIT -eq 0 ]]; then
-  pass "TEST 2: cold-start exec --resume exits 0"
+  pass "TEST 2: cold-start exec --bg exits 0"
 else
-  fail "TEST 2: cold-start exec --resume exited $EXEC2_EXIT"
+  fail "TEST 2: cold-start exec --bg exited $EXEC2_EXIT"
 fi
 
 if [[ $EXEC2_MS -lt 30000 ]]; then

@@ -16,13 +16,16 @@ type TargetSpec struct {
 }
 
 type PayloadMessage struct {
-	To          TargetSpec      `json:"to"`
-	Workspace   string          `json:"workspace,omitempty"`
-	Prompt      string          `json:"prompt"`
-	Refs        json.RawMessage `json:"refs,omitempty"`
-	Async       bool            `json:"async,omitempty"`
-	RequestType string          `json:"request_type,omitempty"`
-	ShouldReply *bool           `json:"should_reply,omitempty"`
+	To             TargetSpec      `json:"to"`
+	Workspace      string          `json:"workspace,omitempty"`
+	Prompt         string          `json:"prompt"`
+	Refs           json.RawMessage `json:"refs,omitempty"`
+	Async          bool            `json:"async,omitempty"`
+	RequestType    string          `json:"request_type,omitempty"`
+	ShouldReply    *bool           `json:"should_reply,omitempty"`
+	Schema         string          `json:"schema,omitempty"`
+	TaskID         string          `json:"task_id,omitempty"`
+	CreatorAgentID string          `json:"creator_agent_id,omitempty"`
 }
 
 type SendMessageRequest struct {
@@ -65,6 +68,41 @@ type QueryResultBatchResponse struct {
 	Count   int                   `json:"count"`
 	GroupID string                `json:"group_id,omitempty"`
 }
+
+// TaskKey identifies a task for pause/resume operations.
+type TaskKey struct {
+	TaskID         string
+	CreatorAgentID string
+}
+
+// TaskControlRequest is the HTTP request body for pause/resume task endpoints.
+type TaskControlRequest struct {
+	AgentID        string `json:"agent_id"`
+	TaskID         string `json:"task_id"`
+	CreatorAgentID string `json:"creator_agent_id"`
+}
+
+// SendResponseItem is a response to a query message, including the response payload.
+type SendResponseItem struct {
+	MessageID string `json:"message_id"`
+	Response  string `json:"response"`
+}
+
+// SendResponseRequest wraps a single SendResponseItem for HTTP requests.
+type SendResponseRequest struct {
+	Item SendResponseItem `json:"item"`
+}
+
+// SendResponseBatchRequest wraps multiple SendResponseItems for HTTP batch requests.
+type SendResponseBatchRequest struct {
+	Items []SendResponseItem `json:"items"`
+}
+
+// SendResponseResponse is an alias for QueryResultResponse.
+type SendResponseResponse = QueryResultResponse
+
+// SendResponseBatchResponse is an alias for QueryResultBatchResponse.
+type SendResponseBatchResponse = QueryResultBatchResponse
 
 type ErrorResponse struct {
 	Error string `json:"error"`

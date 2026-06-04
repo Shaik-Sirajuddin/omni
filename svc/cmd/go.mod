@@ -15,6 +15,8 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock v0.0.0 // indirect
+	github.com/Shaik-Sirajuddin/memory/pkg/pty v0.0.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -66,6 +68,7 @@ require (
 replace (
 	github.com/Shaik-Sirajuddin/memory => ../../omni
 	github.com/Shaik-Sirajuddin/memory/mcp => ../../tunnel_mcp
+	github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../../pkg/filelock
 	github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
 	github.com/Shaik-Sirajuddin/memory/pkg/pty => ../../pkg/pty
 	github.com/Shaik-Sirajuddin/memory/pkg/sockpath => ../../pkg/sockpath

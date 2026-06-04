@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -38,6 +40,12 @@ type AgentWorkspace interface {
 	GetAgentWorkspace(ctx context.Context, agentID string) (string, bool)
 }
 
+// StatusCallbackService receives lifecycle events for message delivery.
+type StatusCallbackService interface {
+	// SendStatusCallback is called when a message is picked for delivery or fails after max retries.
+	SendStatusCallback(ctx context.Context, messageID, agentName, teamName string)
+}
+
 // AgentCallbackRequest carries the details of a completed (or failed) agent execution.
 type AgentCallbackRequest struct {
 	Source    MessageRef `json:"source"`
@@ -58,16 +66,18 @@ type MessageRef struct {
 //   - runs a unix-socket SyncServer for live session-usage updates from omni-server
 //   - registers hook routes on a caller-provided mux via RegisterHookRoutes
 type ProcessingEngine struct {
-	state          *EngineState
-	msgStore       message.MessageStore
-	agentStore     agents.AgentStore
-	omni           OmniCLI
-	mcp            *MCPClientRegistry
-	syncServer     *SyncServer
-	socketPath     string
-	reply          ReplyService
-	deliveryWindow time.Duration
-	ctx            context.Context // engine lifetime context, set in Run
+	state               *EngineState
+	msgStore            message.MessageStore
+	agentStore          agents.AgentStore
+	omni                OmniCLI
+	mcp                 *MCPClientRegistry
+	syncServer          *SyncServer
+	socketPath          string
+	reply               ReplyService
+	statusCallback      StatusCallbackService
+	promptSessionStore  session.PromptSessionStore
+	deliveryWindow      time.Duration
+	ctx                 context.Context // engine lifetime context, set in Run
 }
 
 // Option configures a ProcessingEngine.
@@ -97,6 +107,16 @@ func (e *ProcessingEngine) SetReplyService(r ReplyService) {
 // WithDeliveryWindow sets the timeout after which a queued message is marked failed.
 func WithDeliveryWindow(d time.Duration) Option {
 	return func(e *ProcessingEngine) { e.deliveryWindow = d }
+}
+
+// WithStatusCallback wires a StatusCallbackService for delivery lifecycle events.
+func WithStatusCallback(s StatusCallbackService) Option {
+	return func(e *ProcessingEngine) { e.statusCallback = s }
+}
+
+// WithPromptSessionStore wires a PromptSessionStore for warm-up/active prompt deduplication.
+func WithPromptSessionStore(s session.PromptSessionStore) Option {
+	return func(e *ProcessingEngine) { e.promptSessionStore = s }
 }
 
 // New creates a ProcessingEngine backed by msgStore.
@@ -448,9 +468,32 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		}
 	}
 
-	prompt := buildMessage(msgs)
-
 	agentState, _ = e.state.GetAgent(agentID)
+
+	// Determine warm-up vs active prompt via PromptSessionStore.
+	// msgs[0].ID is the promptID for the whole batch: a batch is a single delivery unit,
+	// so the first message ID is a stable key for the warm-up/active decision.
+	sessionID := agentState.CodeSession.SessionID
+	promptID := msgs[0].ID
+	isWarmUp := true
+	if e.promptSessionStore != nil && sessionID != "" {
+		if e.promptSessionStore.IsDelivered(ctx, sessionID, promptID) {
+			isWarmUp = false
+		}
+	}
+	var prompt string
+	if isWarmUp {
+		prompt = buildWarmUpPrompt(msgs)
+		if e.promptSessionStore != nil && sessionID != "" {
+			if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, promptID); err != nil {
+				logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "prompt_id", promptID, "err", err)
+			}
+		}
+	} else {
+		senderName := senderNameFromRefs(msgs[0].Refs)
+		prompt = buildActivePrompt(msgs, senderName)
+	}
+
 	agentState.Status = AgentStatusRunning
 	e.state.SetAgent(agentID, agentState)
 
@@ -458,7 +501,12 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		"agent_id", agentID,
 		"message_count", len(msgs),
 		"first_message_id", msgs[0].ID,
+		"warm_up", isWarmUp,
 	)
+
+	if e.statusCallback != nil {
+		e.statusCallback.SendStatusCallback(ctx, msgs[0].ID, agentState.Agent.Name, agentState.Agent.Team)
+	}
 
 	execErr := e.omni.ExecInSession(ctx, agentID, agentState.Agent.Name, agentState.Agent.Workspace, prompt)
 	if execErr != nil {
@@ -486,8 +534,8 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
-	// Always reset the query tool flag — it belongs to a single session.
-	agentState.CodeSession.QueryToolInvoked = false
+	// Always reset the mandatory tool flag — it belongs to a single session.
+	agentState.CodeSession.MandatoryToolInvoked = false
 
 	if execFailed {
 		agentState.Status = AgentStatusStopped
@@ -565,35 +613,43 @@ func (e *ProcessingEngine) pickNextMessages(agentID string) ([]*message.Message,
 
 type promptItem struct {
 	MessageID string `yaml:"message_id"`
-	Refs      string `yaml:"refs"`
+	Refs      string `yaml:"refs,omitempty"`
 	Prompt    string `yaml:"prompt"`
 }
 
 type promptPayload struct {
+	WarmUp      bool         `yaml:"warm_up,omitempty"`
 	RequestType string       `yaml:"request_type"`
 	Instruction string       `yaml:"instruction"`
 	Messages    []promptItem `yaml:"messages"`
 }
 
-var requestTypeInstruction = map[message.RequestType]string{
-	reqTypeExecute: "Execute the following task",
-	reqTypeQuery:   "Answer the following queries. Use the tunnel_mcp query_result tool (or query_result_batch for multiple) to send your response back, passing the message_id and your answer as the response.",
+var warmUpInstruction = map[message.RequestType]string{
+	reqTypeExecute: "Execute the following task. Call `update_message` or `update_messages` after completing the task.",
+	reqTypeQuery:   "Answer the following queries. Use the axolink query_result tool (or query_result_batch for multiple) to send your response back, passing the message_id and your answer as the response.",
 	reqTypeInstant: "Process the following messages",
 }
 
-// buildMessage assembles a strict YAML prompt for ExecInSession.
-func buildMessage(msgs []*message.Message) string {
+var activeInstruction = map[message.RequestType]string{
+	reqTypeExecute: "Continue the task from %s. Call `update_message` when done.",
+	reqTypeQuery:   "Reply to %s using query_result or query_result_batch.",
+	reqTypeInstant: "Process the following from %s.",
+}
+
+// buildWarmUpPrompt builds a full prompt for a first delivery to a session.
+// Includes warm_up=true and full type-specific instructions with all message fields.
+func buildWarmUpPrompt(msgs []*message.Message) string {
 	if len(msgs) == 0 {
 		return ""
 	}
-
-	instruction, ok := requestTypeInstruction[msgs[0].RequestType]
+	rt := msgs[0].RequestType
+	instruction, ok := warmUpInstruction[rt]
 	if !ok {
 		instruction = "Process the following"
 	}
-
 	payload := promptPayload{
-		RequestType: string(msgs[0].RequestType),
+		WarmUp:      true,
+		RequestType: string(rt),
 		Instruction: instruction,
 		Messages:    make([]promptItem, len(msgs)),
 	}
@@ -604,13 +660,62 @@ func buildMessage(msgs []*message.Message) string {
 			Prompt:    msg.Prompt,
 		}
 	}
-
 	out, err := yaml.Marshal(payload)
 	if err != nil {
-		logger.Error("build message: yaml marshal failed", "err", err)
+		logger.Error("build warm-up prompt: yaml marshal failed", "err", err)
 		return ""
 	}
 	return string(out)
+}
+
+// buildActivePrompt builds a lean prompt for subsequent deliveries to an already-warm session.
+// References sender name in the instruction; omits refs to reduce token usage.
+func buildActivePrompt(msgs []*message.Message, senderName string) string {
+	if len(msgs) == 0 {
+		return ""
+	}
+	if senderName == "" {
+		senderName = "sender"
+	}
+	rt := msgs[0].RequestType
+	tmpl, ok := activeInstruction[rt]
+	if !ok {
+		tmpl = "Process the following from %s."
+	}
+	payload := promptPayload{
+		RequestType: string(rt),
+		Instruction: fmt.Sprintf(tmpl, senderName),
+		Messages:    make([]promptItem, len(msgs)),
+	}
+	for i, msg := range msgs {
+		payload.Messages[i] = promptItem{
+			MessageID: msg.ID,
+			Prompt:    msg.Prompt,
+		}
+	}
+	out, err := yaml.Marshal(payload)
+	if err != nil {
+		logger.Error("build active prompt: yaml marshal failed", "err", err)
+		return ""
+	}
+	return string(out)
+}
+
+// senderNameFromRefs extracts author_agent_name from a message refs JSON string.
+func senderNameFromRefs(refs string) string {
+	if refs == "" {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(refs), &m); err != nil {
+		logger.Debug("senderNameFromRefs: JSON parse failed", "err", err)
+		return ""
+	}
+	var name string
+	if v, ok := m["author_agent_name"]; ok {
+		_ = json.Unmarshal(v, &name)
+	}
+	return name
 }
 
 func (e *ProcessingEngine) handlePostExec(req AgentCallbackRequest) {
@@ -756,16 +861,29 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	logger.Debug("hook: user prompt submit processed", "agent_id", agentID, "session_id", sessionID, "count", len(payload.Messages))
 }
 
+// maxMandatoryToolRetries is the number of recall injections before giving up.
+// Compared against msg.Retries which executeLoop increments (to 1) before the
+// first ExecInSession, so the guard uses <= to get exactly 3 recall attempts.
+const maxMandatoryToolRetries = 3
+
+var recallPrompt = map[message.RequestType]string{
+	reqTypeExecute: "Tool callback not received. Call `update_message` after completing the task. Do not use send_message to reply.",
+	reqTypeQuery:   "Tool callback not received. Call `query_result` or `query_result_batch` to respond. Do not use send_message.",
+}
+
 // OnStop is called by HookHandler on Stop / PostPrompt events.
-// If IsInterrupted: resets processing messages to in_queue without retry increment.
-// If normal: marks processing messages as delivered and routes replies.
-func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) {
+// Returns a non-nil recall prompt string when the mandatory tool was not invoked
+// and retries remain, so the handler can inject it as a systemMessage.
+//
+// The HTTP request context (r.Context()) is intentionally discarded in favour of the
+// engine lifetime context (e.ctx) so that DB writes are never cancelled by a short-lived
+// hook request timeout.
+func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) *string {
 	logger.Debug("hook: stop", "agent_id", agentID, "session_id", sessionID)
 
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
-	// Query messages still in processing state for this agent.
 	msgs, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
 		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id
@@ -774,7 +892,8 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	)
 	if err != nil {
 		logger.Error("hook: stop — query processing messages failed", "agent_id", agentID, "err", err)
-		return
+		e.state.ClearSession(sessionID)
+		return nil
 	}
 
 	if agentState.CodeSession.IsInterrupted {
@@ -788,65 +907,98 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		agentState.CodeSession.IsInterrupted = false
 		agentState.Status = AgentStatusReady
 		e.state.SetAgent(agentID, agentState)
-	} else {
-		queryToolInvoked := agentState.CodeSession.QueryToolInvoked
+		e.state.ClearSession(sessionID)
+		return nil
+	}
 
-		// For query-type messages: if the agent never called query_result/query_result_batch,
-		// mark them failed and retry — the tool call is the only valid reply path.
-		if len(msgs) > 0 && msgs[0].RequestType == reqTypeQuery && !queryToolInvoked {
-			logger.Warn("hook: stop — query tool not invoked, marking failed for retry", "agent_id", agentID, "count", len(msgs))
+	// Capture the flag into a local before resetting it in agentState.
+	// The local is used for all checks below; agentState (with MandatoryToolInvoked=false)
+	// is persisted via SetAgent only after the check, so no concurrent OnStop can race.
+	mandatoryToolInvoked := agentState.CodeSession.MandatoryToolInvoked
+	agentState.CodeSession.MandatoryToolInvoked = false
+
+	// instant messages: always mark delivered regardless of tool invocation.
+	if len(msgs) > 0 && msgs[0].RequestType == reqTypeInstant {
+		e.markDelivered(ctx, msgs, agentID, agentState)
+		e.state.ClearSession(sessionID)
+		return nil
+	}
+
+	// execute/query: mandatory tool must be invoked; retry up to maxMandatoryToolRetries.
+	// msg.Retries is persisted in the DB (messages table), so the counter survives process restarts.
+	if len(msgs) > 0 && !mandatoryToolInvoked {
+		retries := msgs[0].Retries
+		if retries <= maxMandatoryToolRetries {
+			recall, ok := recallPrompt[msgs[0].RequestType]
+			if !ok {
+				recall = "Tool callback not received. Please use the appropriate tool to respond."
+			}
+			logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
+				"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
 			for _, msg := range msgs {
 				msg.Status = message.StatusFailed
 				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("hook: mark query failed error", "message_id", msg.ID, "err", err)
+					logger.Error("hook: mark failed for recall error", "message_id", msg.ID, "err", err)
 				}
 			}
-			agentState.CodeSession.QueryToolInvoked = false
 			agentState.Status = AgentStatusReady
 			e.state.SetAgent(agentID, agentState)
+			e.state.ClearSession(sessionID)
 			go e.executeLoop(agentID)
-		} else {
-			logger.Info("hook: stop — success, marking messages delivered", "agent_id", agentID, "count", len(msgs))
-			now := time.Now().UnixMilli()
-			for _, msg := range msgs {
-				msg.Status = message.StatusDelivered
-				msg.DeliveryTime = &now
-				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("hook: deliver message failed", "message_id", msg.ID, "err", err)
-					continue
-				}
-				// Query type: agent replies via tool call — skip SendReply.
-				if msg.RequestType != reqTypeQuery && e.reply != nil {
-					if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
-						logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
-					}
-				}
-			}
-			agentState.CodeSession.QueryToolInvoked = false
-			agentState.Status = AgentStatusReady
-			e.state.SetAgent(agentID, agentState)
-			go e.executeLoop(agentID)
+			return &recall
+		}
+		// Max retries exceeded — fire status callback and fall through to deliver.
+		logger.Warn("hook: stop — mandatory tool not invoked, max retries exceeded, delivering",
+			"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
+		if e.statusCallback != nil {
+			e.statusCallback.SendStatusCallback(ctx, msgs[0].ID, agentState.Agent.Name, agentState.Agent.Team)
 		}
 	}
 
+	e.markDelivered(ctx, msgs, agentID, agentState)
 	e.state.ClearSession(sessionID)
+	return nil
 }
 
-// queryToolNames is the set of tunnel_mcp tool names that satisfy a query delivery.
-var queryToolNames = map[string]bool{
-	"query_result":       true,
-	"query_result_batch": true,
+// markDelivered marks msgs as delivered and sends replies for non-query types.
+func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Message, agentID string, agentState AgentState) {
+	logger.Info("hook: stop — success, marking messages delivered", "agent_id", agentID, "count", len(msgs))
+	now := time.Now().UnixMilli()
+	for _, msg := range msgs {
+		msg.Status = message.StatusDelivered
+		msg.DeliveryTime = &now
+		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			logger.Error("hook: deliver message failed", "message_id", msg.ID, "err", err)
+			continue
+		}
+		if msg.RequestType != reqTypeQuery && e.reply != nil {
+			if err := e.reply.SendReply(ctx, msg, agentID, agentState.Agent.Name); err != nil {
+				logger.Error("hook: send reply failed", "message_id", msg.ID, "err", err)
+			}
+		}
+	}
+	agentState.Status = AgentStatusReady
+	e.state.SetAgent(agentID, agentState)
+	go e.executeLoop(agentID)
+}
+
+// mandatoryToolNames is the set of axolink tool names that confirm delivery.
+var mandatoryToolNames = map[string]bool{
+	"update_message":     true, // execute
+	"update_messages":    true, // execute (batch)
+	"query_result":       true, // query
+	"query_result_batch": true, // query (batch)
 }
 
 // OnPreToolUse is called by HookHandler on PreToolUse events.
-// Marks QueryToolInvoked when the agent calls a query_result tool.
+// Sets MandatoryToolInvoked when a delivery-confirming tool is called.
 func (e *ProcessingEngine) OnPreToolUse(agentID, sessionID, toolName string, _ map[string]any) {
 	logger.Debug("hook: pre tool use", "agent_id", agentID, "session_id", sessionID, "tool_name", toolName)
-	if queryToolNames[toolName] {
+	if mandatoryToolNames[toolName] {
 		agentState, _ := e.state.GetAgent(agentID)
-		agentState.CodeSession.QueryToolInvoked = true
+		agentState.CodeSession.MandatoryToolInvoked = true
 		e.state.SetAgent(agentID, agentState)
-		logger.Debug("hook: query tool invoked", "agent_id", agentID, "tool_name", toolName)
+		logger.Debug("hook: mandatory tool invoked", "agent_id", agentID, "tool_name", toolName)
 	}
 }
 

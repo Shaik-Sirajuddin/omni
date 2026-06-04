@@ -894,7 +894,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 	var prompt string
 	var sessionID string
 	var agentID string
-	var resume bool
+	var bg bool
 
 	cmd := &cobra.Command{
 		Use:   "exec <name>",
@@ -916,7 +916,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 				}
 				resolvedID = id
 			}
-			if resume {
+			if bg {
 				if err := c.operator.ResumeAgent(operator.ResumeAgentParams{
 					Name:      name,
 					SessionID: sessionID,
@@ -929,7 +929,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 				AgentID:   resolvedID,
 				SessionID: sessionID,
 				Prompt:    prompt,
-				Detached:  resume,
+				Detached:  bg,
 			}); err != nil {
 				return err
 			}
@@ -941,7 +941,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to send")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 	cmd.Flags().StringVar(&agentID, "id", "", "Agent UUID (bypasses name resolution)")
-	cmd.Flags().BoolVarP(&resume, "resume", "r", false, "Resume agent before sending prompt")
+	cmd.Flags().BoolVarP(&bg, "bg", "b", false, "Resume agent in background before sending prompt")
 	_ = cmd.MarkFlagRequired("prompt")
 	return cmd
 }
@@ -1108,8 +1108,8 @@ func (c *DefaultCli) newAgentSandboxSyncCommand() *cobra.Command {
 
 func (c *DefaultCli) newAxoLinkCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "axo-link",
-		Short: "Start the axo-link MCP service (stdio transport)",
+		Use:   "axolink",
+		Short: "Start the axolink MCP service (stdio transport)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := runner.DefaultConfig()
 			cfg.Transport = runner.TransportStdio

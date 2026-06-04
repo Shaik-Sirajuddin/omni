@@ -3,12 +3,20 @@ package internal
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 )
+
+// dbgBytes renders a byte slice for debug logs: a Go-quoted form (control and
+// escape bytes visible as \x1b, \r, …) plus a raw hex dump. Use to inspect what
+// actually lands on the PTY master so a malformed/duplicated chunk is obvious.
+func dbgBytes(b []byte) string {
+	return fmt.Sprintf("%q hex=% x", b, b)
+}
 
 type Status string
 
@@ -28,15 +36,8 @@ const (
 	modifyOtherShiftEnter = "\x1b[27;2;13~"
 
 	maxInputBuf = 4096
-	// inputQueueCap history slots + 1 active slot at index queueLen.
-	inputQueueCap = 2
 	// carrySize must cover the longest escape sequence we detect (7 bytes for CSI-u shift-enter).
 	carrySize = 8
-
-	// pasteSettle is the pause between clear, paste, and submit so the TUI
-	// applies each step in order. Without it the submit key races ahead of the
-	// bracketed paste and lands on stale human input.
-	pasteSettle = 40 * time.Millisecond
 
 	// drainReadTimeout bounds each idle-drain read so the drainer periodically
 	// re-checks pause/close state even when the child is silent.
@@ -78,14 +79,14 @@ type PTYTerminal struct {
 	// PTY master cannot interleave.
 	execMu sync.Mutex
 
-	// humanMu guards the input tracking state below.
-	humanMu sync.Mutex
-	// inputQueue[0..queueLen-1] = committed history (oldest→newest).
-	// inputQueue[queueLen]      = active top slot; trackHumanInput writes here directly.
-	// On enter: active slot becomes history (queueLen++, drop oldest if full), new active = nil.
-	// Bot reads inputQueue[queueLen] (active top) via readLastInput — no pop.
-	inputQueue       [inputQueueCap + 1][]byte
-	queueLen         int
+	// userMu guards the input tracking state below.
+	userMu sync.Mutex
+	// activeInput is the user's current UNSUBMITTED line — the live mirror of the
+	// child TUI's input buffer. trackUserInput appends filtered text and resets it
+	// on a submit/clear; readLastInput returns a copy for exec reinjection. No
+	// history is kept (only the unsubmitted line is ever read), so there is no
+	// slot rotation that could drop the line across a commit boundary.
+	activeInput      []byte
 	inBracketedPaste bool
 	// carry holds the tail of the last relay chunk to detect escape sequences
 	// that span two consecutive reads.
@@ -109,11 +110,41 @@ type PTYTerminal struct {
 func (t *PTYTerminal) write(p []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.writeLocked(p)
+}
+
+// writeLocked writes to the master assuming the caller already holds t.mu.
+// execPrompt uses this to hold t.mu across its ENTIRE clear→paste→submit→reinject
+// sequence, so no other writer (writeUser/writePipe) — and crucially no closer
+// (closeMaster takes only t.mu, not execMu) — can touch or nil the master between
+// the sub-writes. The whole prompt lands as one uninterrupted unit on the fd.
+func (t *PTYTerminal) writeLocked(p []byte) error {
 	if t.master == nil {
 		return errors.New("no pty master: terminal was adopted without a writable fd")
 	}
 	_, err := t.master.Write(p)
 	return err
+}
+
+// writePipe writes connector-supplied bytes as one atomic logical unit. It takes
+// execMu — the same sequence lock execPrompt/writeUser hold — so a Pipe write can
+// never interleave between execPrompt's sub-writes (execPrompt releases the
+// low-level t.mu between writes during its retry sleeps, but keeps execMu).
+func (t *PTYTerminal) writePipe(data []byte) error {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	return t.write(data)
+}
+
+// writeUser forwards a user-typed chunk to the master under execMu — the same
+// lock execPrompt holds across its whole clear→paste→submit→reinject sequence.
+// This keeps a keystroke from interleaving inside an in-flight exec (which would
+// corrupt the prompt line). The keystrokes are deferred while exec runs, not
+// dropped: they flush once the lock is released and surface after the prompt.
+func (t *PTYTerminal) writeUser(chunk []byte) error {
+	t.execMu.Lock()
+	defer t.execMu.Unlock()
+	return t.write(chunk)
 }
 
 func (t *PTYTerminal) kill() error {
@@ -190,7 +221,8 @@ func (t *PTYTerminal) drainLoop() {
 		// Bounded deadline so a paused/closed transition is noticed even when
 		// the child is silent.
 		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
-		if _, err := m.Read(buf); err != nil {
+		_, err := m.Read(buf)
+		if err != nil {
 			if os.IsTimeout(err) {
 				continue
 			}
@@ -210,6 +242,9 @@ func (t *PTYTerminal) pauseDrain() {
 	}
 	t.drainActive = false
 	t.drainMu.Unlock()
+	ptylog.Debug("ptydaemon: pauseDrain begin (attaching: handing master to client)",
+		"session_id", t.SessionID)
+	waitStart := time.Now()
 
 	// Interrupt any in-progress read so the drainer returns promptly and parks
 	// instead of overwriting this deadline with a fresh future one and reading
@@ -227,7 +262,11 @@ func (t *PTYTerminal) pauseDrain() {
 	for !t.drainParked && !t.drainClosed {
 		t.drainCond.Wait()
 	}
+	closed := t.drainClosed
 	t.drainMu.Unlock()
+	ptylog.Debug("ptydaemon: pauseDrain done (client is now sole reader)",
+		"session_id", t.SessionID, "closed", closed,
+		"wait_ms", time.Since(waitStart).Milliseconds())
 }
 
 // resumeDrain restarts draining after a client detaches. No-op for adopted
@@ -240,6 +279,8 @@ func (t *PTYTerminal) resumeDrain() {
 	}
 	t.drainActive = true
 	t.drainMu.Unlock()
+	ptylog.Debug("ptydaemon: resumeDrain (detached: daemon is sole reader again)",
+		"session_id", t.SessionID)
 	t.mu.Lock()
 	if t.master != nil {
 		_ = t.master.SetReadDeadline(time.Time{}) // clear deadline
@@ -265,69 +306,105 @@ func (t *PTYTerminal) stopDrain() {
 	t.drainMu.Unlock()
 }
 
-// readLastInput returns a full copy of the active queue top (inputQueue[queueLen]).
-// This is what the human is currently typing — never pops, never clears.
+// readLastInput returns a copy of the user's current unsubmitted line
+// (activeInput). This is what the user is currently typing — never pops, never
+// clears.
 func (t *PTYTerminal) readLastInput() []byte {
-	t.humanMu.Lock()
-	defer t.humanMu.Unlock()
-	active := t.inputQueue[t.queueLen]
-	if len(active) == 0 {
+	t.userMu.Lock()
+	defer t.userMu.Unlock()
+	if len(t.activeInput) == 0 {
 		return nil
 	}
-	return append([]byte(nil), active...)
+	return append([]byte(nil), t.activeInput...)
 }
 
-// execPrompt sends a bot prompt while preserving the human's partial input.
-// Each step is a separate PTY write so the TUI applies them in order — a single
-// concatenated write lets the submit key race ahead of the paste and submit
-// stale human input instead of the prompt.
+// execPrompt sends a bot prompt while preserving the user's partial input.
 //
-//  1. ctrlU                          clear the human's partial line
-//  2. paste(prompt)                  bracketed-paste the prompt (no submit yet)
-//  3. submitKey [+ retries]          submit; bare resubmit if the TUI swallowed it
-//  4. human input (once, no submit)  restore what the human was typing
+// The clear+paste+submit is a SINGLE atomic write: a PTY is an ordered byte
+// stream, so the child reads ctrlU → \x1b[200~ → prompt → \x1b[201~ → submit in
+// exactly that order and parses them sequentially (201~ closes the paste before
+// the submit byte, so the submit is a real keypress, not pasted text). One write
+// means there is no inter-write gap for the child's own render output to
+// interleave with the half-injected paste — the split-with-sleeps version let
+// the paste land at a stale cursor / in the output area.
 //
-// execMu is held across the whole sequence (including the settle/retry sleeps)
-// so concurrent exec calls cannot interleave their writes.
+//  1. ctrlU + \x1b[200~ prompt \x1b[201~ + submit   one atomic write
+//  2. submit [+ retries]                            bare resubmit if the TUI swallowed it
+//  3. user input (once, no submit)                  restore what the user was typing
+//
+// paste mode (DECSET 2004) is assumed active — every supported TUI enables it at
+// startup. Connectors must send the RAW prompt (no pre-wrap) or it double-frames;
+// newline / multi-line intent is the prompt sender's responsibility.
+//
+// execMu is held across the whole sequence (including the retry sleeps) so
+// concurrent exec calls cannot interleave their writes. t.mu is also held across
+// the whole sequence so no other writer (writeUser/writePipe) and no closer
+// (closeMaster, which takes only t.mu) can touch the master between our
+// sub-writes — the prompt lands as one uninterrupted unit on the fd.
 func (t *PTYTerminal) execPrompt(prompt string) error {
-	// Snapshot the human's partial input up front; restored at the end. Never pops.
-	human := t.readLastInput()
+	// Snapshot the user's partial input up front; restored at the end. Never pops.
+	user := t.readLastInput()
 
 	t.execMu.Lock()
 	defer t.execMu.Unlock()
 
-	// 1. Clear the human's partial line, then let the TUI apply it before we
-	//    paste — otherwise the clear races behind the paste/submit.
-	if err := t.write([]byte(ctrlU)); err != nil {
-		return err
-	}
-	time.Sleep(pasteSettle)
+	// Acquire the master-fd lock once and hold it for the entire sequence (payload,
+	// retry sleeps, reinject). Every sub-write below uses writeLocked, which assumes
+	// t.mu is held — calling t.write here would self-deadlock.
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	// 2. Bracketed-paste the prompt as its own write and let it settle. The
-	//    submit must not share this write or it races the paste.
-	if err := t.write([]byte(pasteStart + prompt + pasteEnd)); err != nil {
-		return err
-	}
-	time.Sleep(pasteSettle)
+	// The prompt must arrive raw here (no caller-side bracketed-paste/submit
+	// framing): this method is the single owner of framing — see handleExec.
+	ptylog.Debug("ptydaemon: execPrompt begin", "session_id", t.SessionID,
+		"submit_key", t.submitKey, "prompt_len", len(prompt),
+		"prompt_prewrapped", strings.Contains(prompt, pasteStart), "user_carry", len(user))
 
-	// 3. Submit. Retries send the bare submit key only (no ctrlU) so a prompt
-	//    still sitting in the buffer is pushed through rather than wiped.
+	// Defang the ONLY bytes bracketed-paste wrapping cannot neutralise: an
+	// embedded 201~ would terminate our paste early and let the prompt tail run as
+	// keystrokes (escaping the input box); an embedded 200~ would open a nested
+	// paste. We neutralise them as literal text (drop the ESC, keep "[201~"), not
+	// delete. Every other control/escape byte already stays literal inside the
+	// wrap, so nothing else is touched. execPrompt is the sole owner of framing.
+	if clean := defangPasteMarkers(prompt); clean != prompt {
+		ptylog.Debug("ptydaemon: execPrompt defanged paste markers", "session_id", t.SessionID,
+			"before_len", len(prompt), "after_len", len(clean))
+		prompt = clean
+	}
+
+	// 1. One atomic write: close any dangling paste, clear line, bracketed-paste
+	//    the prompt, submit. The child reads this in order; the leading 201~
+	//    defensively closes a paste a prior sequence may have left open (else our
+	//    prompt would be swallowed as paste content) and is a harmless no-op
+	//    otherwise; the trailing 201~ closes our paste before the submit byte.
 	submit := submitSeq(t.submitKey)
-	if err := t.write(submit); err != nil {
+	payload := append([]byte(pasteEnd+ctrlU+pasteStart+prompt+pasteEnd), submit...)
+	ptylog.Debug("ptydaemon: execPrompt payload", "session_id", t.SessionID,
+		"payload", dbgBytes(payload), "len", len(payload))
+	if err := t.writeLocked(payload); err != nil {
 		return err
 	}
+
+	// 2. Submit retries: bare submit key only (no ctrlU/paste) so a prompt still
+	//    sitting in the buffer is pushed through if the TUI swallowed the first
+	//    submit, rather than wiped.
 	for i, delay := range submitRetryDelays {
 		time.Sleep(delay)
-		werr := t.write(submit)
+		werr := t.writeLocked(submit)
 		ptylog.Debug("ptydaemon: submit-key retry", "attempt", i+2, "session_id", t.SessionID, "submit_key", t.submitKey, "err", werr)
 		if werr != nil {
 			return werr
 		}
 	}
-
-	// 4. Restore the human's partial input (no submit) so they see it again.
-	if len(human) > 0 {
-		if err := t.write(human); err != nil {
+     
+	// delay to allow the application to process submit 
+	time.Sleep(50 * time.Millisecond)
+	
+	// 3. Restore the user's partial input (no submit) so they see it again.
+	if len(user) > 0 {
+		ptylog.Debug("ptydaemon: execPrompt reinject user", "session_id", t.SessionID,
+			"user", dbgBytes(user), "len", len(user))
+		if err := t.writeLocked(user); err != nil {
 			return err
 		}
 	}
@@ -360,12 +437,12 @@ func (t *PTYTerminal) setStatus(s Status) {
 	t.mu.Unlock()
 }
 
-// trackHumanInput is called by the stdin relay before forwarding each chunk
+// trackUserInput is called by the stdin relay before forwarding each chunk
 // to the PTY master. It maintains currentInput — the always-live active buffer
-// the bot reads to reinject human input after sending a prompt.
-func (t *PTYTerminal) trackHumanInput(chunk []byte) {
-	t.humanMu.Lock()
-	defer t.humanMu.Unlock()
+// the bot reads to reinject user input after sending a prompt.
+func (t *PTYTerminal) trackUserInput(chunk []byte) {
+	t.userMu.Lock()
+	defer t.userMu.Unlock()
 
 	// Prepend carry bytes to detect sequences split across chunk boundaries.
 	var buf []byte
@@ -387,18 +464,10 @@ func (t *PTYTerminal) trackHumanInput(chunk []byte) {
 	}
 
 	if !t.inBracketedPaste && isSubmitOrClear(buf) {
-		// Commit active slot (inputQueue[queueLen]) to history by advancing queueLen.
-		// Drop oldest history entry if at capacity.
-		if len(t.inputQueue[t.queueLen]) > 0 {
-			if t.queueLen == inputQueueCap {
-				copy(t.inputQueue[:], t.inputQueue[1:])
-				t.inputQueue[inputQueueCap] = nil
-			} else {
-				t.queueLen++
-			}
-		}
-		// New active slot is now inputQueue[queueLen] — start fresh.
-		t.inputQueue[t.queueLen] = nil
+		// Submit (\r/shift-enter) or clear (\x15): the unsubmitted line is gone
+		// from the child's input buffer, so drop our mirror of it. Keep the slice
+		// backing array for reuse.
+		t.activeInput = t.activeInput[:0]
 		return
 	}
 
@@ -410,10 +479,18 @@ func (t *PTYTerminal) trackHumanInput(chunk []byte) {
 	copy(t.carry[:], buf[len(buf)-n:])
 	t.carryN = n
 
-	// Write directly into the active queue top slot.
-	t.inputQueue[t.queueLen] = append(t.inputQueue[t.queueLen], chunk...)
-	if len(t.inputQueue[t.queueLen]) > maxInputBuf {
-		t.inputQueue[t.queueLen] = t.inputQueue[t.queueLen][len(t.inputQueue[t.queueLen])-maxInputBuf:]
+	// Write into the active queue top slot. This tracked buffer is SEPARATE from
+	// the bytes writeUser already forwarded to the child: reporting escapes (focus
+	// in/out, mouse) still reach the child verbatim, but are stripped here so they
+	// never get replayed into the user's line by execPrompt's reinject. Skip the
+	// strip inside a bracketed paste so literal pasted bytes stay intact.
+	text := chunk
+	if !t.inBracketedPaste {
+		text = stripReportingEscapes(chunk)
+	}
+	t.activeInput = append(t.activeInput, text...)
+	if len(t.activeInput) > maxInputBuf {
+		t.activeInput = t.activeInput[len(t.activeInput)-maxInputBuf:]
 	}
 }
 
@@ -424,6 +501,68 @@ func isSubmitOrClear(b []byte) bool {
 	return strings.ContainsAny(s, "\r\x15") ||
 		strings.Contains(s, csiUShiftEnter) ||
 		strings.Contains(s, modifyOtherShiftEnter)
+}
+
+// defangPasteMarkers neutralises bracketed-paste markers (200~ / 201~) embedded
+// in s WITHOUT discarding the characters: it drops only the introducing ESC so
+// the sequence can no longer end/open a paste, leaving the printable remainder
+// ("[201~") as literal text the user still sees. Only these markers escape a
+// bracketed-paste wrap — a 201~ ends paste mode early (tail then runs as
+// keystrokes), a 200~ opens a nested paste; every other byte stays literal in
+// the wrap, so nothing else is touched. The loop guards a doubled ESC
+// (\x1b\x1b[201~) that would re-form the marker after a single pass. Used by
+// execPrompt, the sole owner of paste framing.
+func defangPasteMarkers(s string) string {
+	if !strings.Contains(s, "\x1b[2") { // fast path: no candidate marker
+		return s
+	}
+	for strings.Contains(s, pasteStart) {
+		s = strings.ReplaceAll(s, pasteStart, pasteStart[1:]) // "\x1b[200~" -> "[200~"
+	}
+	for strings.Contains(s, pasteEnd) {
+		s = strings.ReplaceAll(s, pasteEnd, pasteEnd[1:]) // "\x1b[201~" -> "[201~"
+	}
+	return s
+}
+
+// stripReportingEscapes removes terminal "reporting" escape sequences — focus
+// in/out (ESC [ I, ESC [ O) and mouse events (ESC [ M b b b, ESC [ < … M|m) —
+// from b. These are forwarded to the child verbatim by writeUser; this only
+// keeps them OUT of the reinject buffer, where replaying them would corrupt the
+// user's visible input line. The terminal delivers these sequences atomically,
+// so per-chunk stripping is sufficient.
+func stripReportingEscapes(b []byte) []byte {
+	if !bytes.Contains(b, []byte{0x1b}) {
+		return b // fast path: no escapes at all
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); {
+		if b[i] == 0x1b && i+2 < len(b) && b[i+1] == '[' {
+			switch {
+			case b[i+2] == 'I' || b[i+2] == 'O': // focus in / out
+				i += 3
+				continue
+			case b[i+2] == '<': // mouse SGR: ESC [ < … (M|m)
+				j := i + 3
+				for j < len(b) && b[j] != 'M' && b[j] != 'm' {
+					j++
+				}
+				if j < len(b) {
+					i = j + 1
+					continue
+				}
+			case b[i+2] == 'M': // mouse X10: ESC [ M + 3 bytes
+				i += 6
+				if i > len(b) {
+					i = len(b)
+				}
+				continue
+			}
+		}
+		out = append(out, b[i])
+		i++
+	}
+	return out
 }
 
 func submitSeq(name string) []byte {

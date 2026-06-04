@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	codehooks "github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	"github.com/Shaik-Sirajuddin/memory/pkg/filelock"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
 )
 
@@ -215,9 +216,17 @@ func readHooksConfig(path string) (map[string][]codexHookMatcher, error) {
 	return hooks, nil
 }
 
-func writeHooksConfig(path string, hooksByEvent map[string][]codexHookMatcher) error {
-	// Hold mcpMu for the full read-modify-write cycle so concurrent AddMCP/
-	// ensureMCPApprovalMode calls cannot race with this write (Bug 1 fix).
+func writeHooksConfig(locker filelock.Locker, path string, hooksByEvent map[string][]codexHookMatcher) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("codex: mkdir config dir: %w", err)
+	}
+	lockPath := filepath.Join(filepath.Dir(path), ".config.toml.lock")
+	unlock, err := locker.Lock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	mcpMu.Lock()
 	defer mcpMu.Unlock()
 
@@ -281,7 +290,14 @@ func writeHooksConfig(path string, hooksByEvent map[string][]codexHookMatcher) e
 		events = append(events, e)
 	}
 	logger.Debug("writeHooksConfig", "path", path, "events", events)
-	return writeConfigTOMLAtomic(path, raw)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("codex: mkdir config dir: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
+		return fmt.Errorf("codex: encode config.toml: %w", err)
+	}
+	return locker.WriteAtomic(path, buf.Bytes())
 }
 
 // extractHooks converts the raw TOML hooks value back to typed matchers.
@@ -355,12 +371,12 @@ func extractHooks(raw map[string]interface{}) map[string][]codexHookMatcher {
 // config.toml — MCP server approval mode
 // ============================================================
 
-func ensureMCPApprovalMode(serverName string) error {
+func (a *codexAgent) ensureMCPApprovalMode(serverName string) error {
 	path, err := globalConfigPath()
 	if err != nil {
 		return err
 	}
-	return withMCPConfig(path, func(raw map[string]interface{}) error {
+	return a.withMCPConfig(path, func(raw map[string]interface{}) error {
 		mcpServers, _ := raw["mcp_servers"].(map[string]interface{})
 		if mcpServers == nil {
 			// No mcp_servers section — nothing to patch.

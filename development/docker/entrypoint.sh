@@ -5,13 +5,6 @@ set -euo pipefail
 WORKSPACE="${WORKSPACE:-/workspace}"
 
 # ── install + setup omni (binary already baked into image at /opt/omni/bin) ───
-fix_claude_binary() {
-  local native="/usr/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
-  if [[ -f "$native" ]]; then
-    ln -sf "$native" /usr/bin/claude
-  fi
-}
-fix_claude_binary
 
 install_and_setup() {
   echo "==> install_phase"
@@ -54,6 +47,22 @@ export OMNI_PTY_SOCKET=/run/omni-root/omni-pty.sock
 EOF
   grep -q HOOK_OPERATOR_SOCKET /root/.bashrc 2>/dev/null || \
     echo 'source /etc/profile.d/omni-sockets.sh' >> /root/.bashrc
+
+  # Write auth env vars to profile.d so interactive shells (docker exec bash)
+  # have the same credentials as omni-server. The systemd drop-in only covers
+  # the service process; shells get a clean env and would show the login prompt.
+  local auth_profile=/etc/profile.d/omni-auth.sh
+  : > "$auth_profile"
+  for var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN \
+             OPENAI_API_KEY OPENAI_OAUTH_TOKEN \
+             GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_CLOUD_PROJECT \
+             ANTHROPIC_MODEL CODEX_MODEL GEMINI_MODEL AGY_MODEL; do
+    if [[ -n "${!var:-}" ]]; then
+      printf 'export %s=%s\n' "$var" "${!var}" >> "$auth_profile"
+    fi
+  done
+  grep -q omni-auth /root/.bashrc 2>/dev/null || \
+    echo 'source /etc/profile.d/omni-auth.sh' >> /root/.bashrc
 }
 write_runtime_env
 
@@ -96,7 +105,7 @@ seed_mcp_json() {
   cat > "$path" <<EOF
 {
   "mcpServers": {
-    "tunnel-mcp": {
+    "axolink": {
       "type": "http",
       "url": "${url}",
       "headers": {
@@ -173,12 +182,49 @@ seed_mcp_configs() {
   fi
   seed_mcp_json /root/.claude.json "$url" "$claude_key_suffix"
 
-  # accept workspace trust + project onboarding for /build (write-once)
-  if [[ -f /usr/bin/claude ]] && ! claude config get hasTrustDialogAccepted 2>/dev/null | grep -q true; then
-    echo "==> accepting claude workspace trust for /build"
-    cd /build && claude config set hasTrustDialogAccepted true 2>/dev/null || true
-    cd /build && claude config set hasCompletedProjectOnboarding true 2>/dev/null || true
+  # Ensure onboarding/trust flags are set in ~/.claude.json even when the file
+  # already exists (claude creates it as {} on first run, seed_mcp_json skips it).
+  python3 - <<'PYEOF'
+import json, os
+path = os.path.expanduser("~/.claude.json")
+cfg = {}
+if os.path.exists(path):
+    try: cfg = json.load(open(path))
+    except Exception: cfg = {}
+cfg.setdefault("hasCompletedOnboarding", True)
+cfg.setdefault("hasTrustDialogAccepted", True)
+cfg.setdefault("hasTrustDialogHooksAccepted", True)
+cfg.setdefault("shiftEnterKeyBindingInstalled", True)
+json.dump(cfg, open(path, "w"), indent=2)
+PYEOF
+
+  # claude.ai installer places binary at ~/.local/bin — not in non-login-shell PATH.
+  export PATH="${HOME}/.local/bin:${PATH}"
+
+  # Clear stale stored credentials so CLAUDE_CODE_OAUTH_TOKEN (env pos 5) is not
+  # shadowed by a console API key from a previous interactive login (stored pos 6
+  # for subscription, but an API key from --console login could cause prompt loops).
+  if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    rm -f "${HOME}/.claude/.credentials.json"
   fi
+
+  # Accept workspace trust for all directories omni-server may use as workDir.
+  # claude 2.1.x uses per-project JSON; `claude config set` no longer works for this.
+  # Directory → project file mapping: replace leading / with -, then .json
+  # /build → -build.json, / → root.json (systemd default cwd), /workspace → -workspace.json
+  local trust_json='{"hasTrustDialogAccepted":true,"hasTrustDialogHooksAccepted":true,"hasCompletedProjectOnboarding":true}'
+  local projects_dir="${HOME}/.claude/projects"
+  mkdir -p "$projects_dir"
+  for dir in /build /workspace /; do
+    local fname
+    fname="$(echo "$dir" | sed 's|^/||; s|/|-|g')"
+    [[ -z "$fname" ]] && fname="root"
+    local project_json="${projects_dir}/${fname}.json"
+    if [[ ! -f "$project_json" ]]; then
+      echo "==> accepting claude workspace trust for $dir"
+      echo "$trust_json" > "$project_json"
+    fi
+  done
 
   # ── agy (Antigravity CLI) ────────────────────────────────────────────────────
   # agy MCP seeded via codeagent.GlobalMCPRegistry at runtime (see omni/connector/codeagent/agy/mcp.go)
@@ -190,8 +236,8 @@ seed_mcp_configs() {
   # if os.path.exists(path):
   #     try: cfg = json.load(open(path))
   #     except Exception: cfg = {}
-  # cfg.setdefault("enabledMcpjsonServers", ["tunnel-mcp"])
-  # cfg.setdefault("permissions", {}).setdefault("allow", ["mcp__tunnel-mcp__*"])
+  # cfg.setdefault("enabledMcpjsonServers", ["axolink"])
+  # cfg.setdefault("permissions", {}).setdefault("allow", ["mcp__axolink__*"])
   # env = cfg.setdefault("env", {})
   # for var in ["AXO_LINK_MCP_AUTH_TOKEN","AXO_LINK_MCP_SENDER_ID","AXO_LINK_MCP_SENDER_TYPE","AXO_LINK_MCP_AGENT_WORKSPACE"]:
   #     val = os.environ.get(var, "")
@@ -212,7 +258,7 @@ seed_mcp_configs() {
   #   cat > "$agy_mcp_config" <<'EOF'
   # {
   #   "mcpServers": {
-  #     "tunnel-mcp": {
+  #     "axolink": {
   #       "command": "omni",
   #       "args": ["axo-link"],
   #       "env": {

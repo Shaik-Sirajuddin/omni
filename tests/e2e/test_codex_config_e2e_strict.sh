@@ -121,7 +121,7 @@ HOOKTOML
 
   # Send the probe prompt.
   EXEC_OUT=$(cd "$WS_S1" && omni agent exec "$AGENT_S1" \
-    --prompt "$EXPECTED_PROMPT" --resume 2>&1) || true
+    --prompt "$EXPECTED_PROMPT" --bg 2>&1) || true
   echo "    exec output: ${EXEC_OUT:0:120}"
 
   # Wait up to 30s for either the receipt file or journalctl event.
@@ -355,7 +355,7 @@ else
   # ── Assertion: exec does not hang or error immediately ────────────────────────
   EXEC_S4_OUT=$(timeout 15 bash -c "
     cd '${WS_S4}' && omni agent exec '${AGENT_S4}' \
-      --prompt 'reply with: ok' --resume 2>&1
+      --prompt 'reply with: ok' --bg 2>&1
   ") || EXEC_S4_EXIT=$?
   EXEC_S4_EXIT=${EXEC_S4_EXIT:-0}
 

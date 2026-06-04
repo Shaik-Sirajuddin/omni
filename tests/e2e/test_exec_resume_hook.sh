@@ -76,7 +76,7 @@ echo "==> [TEST 1] exec --resume background launch"
 
 START_TS=$(date +%s%N)
 EXEC1_OUT=$(cd "$WS" && omni agent exec "$AGENT_NAME" \
-  --prompt "reply with: pong" --resume 2>&1)
+  --prompt "reply with: pong" --bg 2>&1)
 EXEC_EXIT=$?
 END_TS=$(date +%s%N)
 ELAPSED_MS=$(( (END_TS - START_TS) / 1000000 ))
@@ -153,7 +153,7 @@ echo "==> [TEST 3] multiple prompts in sequence"
 BEFORE=$(grep -c "event=UserPromptSubmit\|UserPromptSubmit\|exec in session" "$JRNL_LOG" 2>/dev/null || echo 0)
 
 (cd "$WS" && omni agent exec "$AGENT_NAME" \
-  --prompt "second prompt: count two" --resume)
+  --prompt "second prompt: count two" --bg)
 EXEC2_EXIT=$?
 
 if [[ $EXEC2_EXIT -eq 0 ]]; then

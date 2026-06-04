@@ -11,12 +11,11 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 )
 
-var (
-	mcpJsonMu     sync.RWMutex
-	agySettingsMu sync.RWMutex
-)
+// mcpFileMu guards all reads and writes to mcp_config.json for MCP state.
+// It coordinates goroutines within this process; mtime checks handle cross-process races.
+var mcpFileMu sync.RWMutex
 
-// rawMCPServer is the JSON shape for mcp.json and agy settings.json.
+// rawMCPServer is the JSON shape Gemini CLI stores in mcp_config.json under mcpServers.
 type rawMCPServer struct {
 	Type    string            `json:"type,omitempty"`
 	Command string            `json:"command,omitempty"`
@@ -29,12 +28,18 @@ type rawMCPServer struct {
 
 var errMtimeChanged = fmt.Errorf("mcp: settings file modified concurrently")
 
-func mcpDotJsonPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+// geminiMCPConfigPath returns the MCP config path for global or workspace scope.
+// Global: ~/.gemini/config/mcp_config.json
+// Workspace: <workDir>/.gemini/config/mcp_config.json
+func geminiMCPConfigPath(global bool, workDir string) (string, error) {
+	if global {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("agy: resolve home dir: %w", err)
+		}
+		return filepath.Join(home, ".gemini", "config", "mcp_config.json"), nil
 	}
-	return filepath.Join(home, ".mcp.json"), nil
+	return filepath.Join(workDir, ".gemini", "config", "mcp_config.json"), nil
 }
 
 func readMCPRaw(path string) (raw map[string]json.RawMessage, servers map[string]rawMCPServer, mtime time.Time, err error) {
@@ -70,15 +75,11 @@ func writeMCPRaw(path string, raw map[string]json.RawMessage, servers map[string
 		}
 	}
 
-	if len(servers) > 0 {
-		blob, err := json.Marshal(servers)
-		if err != nil {
-			return fmt.Errorf("marshal servers: %w", err)
-		}
-		raw["mcpServers"] = blob
-	} else {
-		delete(raw, "mcpServers")
+	blob, err := json.Marshal(servers)
+	if err != nil {
+		return fmt.Errorf("marshal servers: %w", err)
 	}
+	raw["mcpServers"] = blob
 
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
@@ -106,86 +107,17 @@ func writeMCPRaw(path string, raw map[string]json.RawMessage, servers map[string
 	return os.Rename(tmpName, path)
 }
 
-func readAgySettingsRaw(path string) (raw map[string]json.RawMessage, enabled []string, mtime time.Time, err error) {
-	if info, statErr := os.Stat(path); statErr == nil {
-		mtime = info.ModTime()
-	}
-
-	raw = map[string]json.RawMessage{}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return raw, []string{}, mtime, nil
-	}
-	if err != nil {
-		return nil, nil, mtime, fmt.Errorf("read %s: %w", path, err)
-	}
-	if err = json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, mtime, fmt.Errorf("decode %s: %w", path, err)
-	}
-
-	enabled = []string{}
-	if blob, ok := raw["enabledMcpjsonServers"]; ok {
-		if err = json.Unmarshal(blob, &enabled); err != nil {
-			return nil, nil, mtime, fmt.Errorf("decode enabledMcpjsonServers in %s: %w", path, err)
-		}
-	}
-	return raw, enabled, mtime, nil
-}
-
-func writeAgySettingsRaw(path string, raw map[string]json.RawMessage, enabled []string, expectedMtime time.Time) error {
-	if !expectedMtime.IsZero() {
-		if info, statErr := os.Stat(path); statErr == nil && !info.ModTime().Equal(expectedMtime) {
-			return errMtimeChanged
-		}
-	}
-
-	if len(enabled) > 0 {
-		blob, err := json.Marshal(enabled)
-		if err != nil {
-			return fmt.Errorf("marshal enabledMcpjsonServers: %w", err)
-		}
-		raw["enabledMcpjsonServers"] = blob
-	} else {
-		delete(raw, "enabledMcpjsonServers")
-	}
-
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
-	if err != nil {
-		return fmt.Errorf("temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-	return os.Rename(tmpName, path)
-}
-
-func withRetry(mu *sync.RWMutex, op func() error) error {
+func withMCPWrite(op func() error) error {
 	const maxRetries = 3
 	for i := 0; i < maxRetries; i++ {
-		mu.Lock()
+		mcpFileMu.Lock()
 		err := op()
-		mu.Unlock()
+		mcpFileMu.Unlock()
 		if err != errMtimeChanged {
 			return err
 		}
 	}
-	return fmt.Errorf("file updated concurrently %d times, giving up", maxRetries)
+	return fmt.Errorf("mcp: config file updated concurrently %d times, giving up", maxRetries)
 }
 
 func mcpToRaw(s codeagent.MCPServer) rawMCPServer {
@@ -231,124 +163,47 @@ func rawToMCP(name string, r rawMCPServer) codeagent.MCPServer {
 	return s
 }
 
+// ============================================================
+// MCPManager implementation
+// ============================================================
+
 func (a *agyAgent) AddMCP(p codeagent.AddMCPParams) (*codeagent.AddMCPResult, error) {
-	var settingsPath string
-	if p.Global {
-		sp, err := agyUserSettingsPath()
-		if err != nil {
-			return nil, err
-		}
-		settingsPath = sp
-	} else {
-		a.mu.RLock()
-		settingsPath = agyWorkspaceSettingsPath(a.workDir)
-		a.mu.RUnlock()
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+
+	path, err := geminiMCPConfigPath(p.Global, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("agy: AddMCP: resolve path: %w", err)
 	}
-
-	if p.Global {
-		err := withRetry(&agySettingsMu, func() error {
-			raw, enabled, mtime, err := readAgySettingsRaw(settingsPath)
-			if err != nil {
-				return err
-			}
-			servers := map[string]rawMCPServer{}
-			if blob, ok := raw["mcpServers"]; ok {
-				json.Unmarshal(blob, &servers)
-			}
-			servers[p.Server.Name] = mcpToRaw(p.Server)
-			if blob, err := json.Marshal(servers); err == nil {
-				raw["mcpServers"] = blob
-			}
-
-			found := false
-			for _, n := range enabled {
-				if n == p.Server.Name {
-					found = true
-					break
-				}
-			}
-			if !found {
-				enabled = append(enabled, p.Server.Name)
-			}
-			return writeAgySettingsRaw(settingsPath, raw, enabled, mtime)
-		})
+	if err := withMCPWrite(func() error {
+		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
-			return nil, fmt.Errorf("agy: AddMCP global: %w", err)
+			return err
 		}
-	} else {
-		mcpPath, err := mcpDotJsonPath()
-		if err != nil {
-			return nil, err
-		}
-		err = withRetry(&mcpJsonMu, func() error {
-			raw, servers, mtime, err := readMCPRaw(mcpPath)
-			if err != nil {
-				return err
-			}
-			servers[p.Server.Name] = mcpToRaw(p.Server)
-			return writeMCPRaw(mcpPath, raw, servers, mtime)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("agy: AddMCP local (mcp.json): %w", err)
-		}
-
-		err = withRetry(&agySettingsMu, func() error {
-			raw, enabled, mtime, err := readAgySettingsRaw(settingsPath)
-			if err != nil {
-				return err
-			}
-			found := false
-			for _, n := range enabled {
-				if n == p.Server.Name {
-					found = true
-					break
-				}
-			}
-			if !found {
-				enabled = append(enabled, p.Server.Name)
-			}
-			return writeAgySettingsRaw(settingsPath, raw, enabled, mtime)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("agy: AddMCP local (settings.json): %w", err)
-		}
+		servers[p.Server.Name] = mcpToRaw(p.Server)
+		return writeMCPRaw(path, raw, servers, mtime)
+	}); err != nil {
+		return nil, fmt.Errorf("agy: AddMCP %q: %w", p.Server.Name, err)
 	}
-
 	return &codeagent.AddMCPResult{}, nil
 }
 
 func (a *agyAgent) ListMCP(p codeagent.ListMCPParams) (*codeagent.ListMCPResult, error) {
-	var servers map[string]rawMCPServer
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
 
-	if p.Global {
-		path, err := agyUserSettingsPath()
-		if err != nil {
-			return nil, err
-		}
-		agySettingsMu.RLock()
-		raw, _, _, err := readAgySettingsRaw(path)
-		agySettingsMu.RUnlock()
-		if err != nil {
-			return nil, fmt.Errorf("agy: ListMCP global: %w", err)
-		}
-		servers = map[string]rawMCPServer{}
-		if blob, ok := raw["mcpServers"]; ok {
-			json.Unmarshal(blob, &servers)
-		}
-	} else {
-		path, err := mcpDotJsonPath()
-		if err != nil {
-			return nil, err
-		}
-		mcpJsonMu.RLock()
-		_, srvs, _, err := readMCPRaw(path)
-		mcpJsonMu.RUnlock()
-		if err != nil {
-			return nil, fmt.Errorf("agy: ListMCP local: %w", err)
-		}
-		servers = srvs
+	path, err := geminiMCPConfigPath(p.Global, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("agy: ListMCP: resolve path: %w", err)
 	}
-
+	mcpFileMu.RLock()
+	_, servers, _, err := readMCPRaw(path)
+	mcpFileMu.RUnlock()
+	if err != nil {
+		return nil, fmt.Errorf("agy: ListMCP: %w", err)
+	}
 	result := make([]codeagent.MCPServer, 0, len(servers))
 	for name, r := range servers {
 		result = append(result, rawToMCP(name, r))
@@ -357,86 +212,27 @@ func (a *agyAgent) ListMCP(p codeagent.ListMCPParams) (*codeagent.ListMCPResult,
 }
 
 func (a *agyAgent) DeleteMCP(p codeagent.DeleteMCPParams) (*codeagent.DeleteMCPResult, error) {
-	var settingsPath string
-	if p.Global {
-		sp, err := agyUserSettingsPath()
-		if err != nil {
-			return nil, err
-		}
-		settingsPath = sp
-	} else {
-		a.mu.RLock()
-		settingsPath = agyWorkspaceSettingsPath(a.workDir)
-		a.mu.RUnlock()
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+
+	path, err := geminiMCPConfigPath(p.Global, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("agy: DeleteMCP: resolve path: %w", err)
 	}
-
-	if p.Global {
-		err := withRetry(&agySettingsMu, func() error {
-			raw, enabled, mtime, err := readAgySettingsRaw(settingsPath)
-			if err != nil {
-				return err
-			}
-			servers := map[string]rawMCPServer{}
-			if blob, ok := raw["mcpServers"]; ok {
-				json.Unmarshal(blob, &servers)
-			}
-			delete(servers, p.Name)
-			if len(servers) > 0 {
-				blob, _ := json.Marshal(servers)
-				raw["mcpServers"] = blob
-			} else {
-				delete(raw, "mcpServers")
-			}
-
-			newEnabled := make([]string, 0, len(enabled))
-			for _, n := range enabled {
-				if n != p.Name {
-					newEnabled = append(newEnabled, n)
-				}
-			}
-			return writeAgySettingsRaw(settingsPath, raw, newEnabled, mtime)
-		})
+	if err := withMCPWrite(func() error {
+		raw, servers, mtime, err := readMCPRaw(path)
 		if err != nil {
-			return nil, fmt.Errorf("agy: DeleteMCP global: %w", err)
+			return err
 		}
-	} else {
-		mcpPath, err := mcpDotJsonPath()
-		if err != nil {
-			return nil, err
-		}
-		err = withRetry(&mcpJsonMu, func() error {
-			raw, servers, mtime, err := readMCPRaw(mcpPath)
-			if err != nil {
-				return err
-			}
-			delete(servers, p.Name)
-			return writeMCPRaw(mcpPath, raw, servers, mtime)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("agy: DeleteMCP local (mcp.json): %w", err)
-		}
-
-		err = withRetry(&agySettingsMu, func() error {
-			raw, enabled, mtime, err := readAgySettingsRaw(settingsPath)
-			if err != nil {
-				return err
-			}
-			newEnabled := make([]string, 0, len(enabled))
-			for _, n := range enabled {
-				if n != p.Name {
-					newEnabled = append(newEnabled, n)
-				}
-			}
-			return writeAgySettingsRaw(settingsPath, raw, newEnabled, mtime)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("agy: DeleteMCP local (settings.json): %w", err)
-		}
+		delete(servers, p.Name)
+		return writeMCPRaw(path, raw, servers, mtime)
+	}); err != nil {
+		return nil, fmt.Errorf("agy: DeleteMCP %q: %w", p.Name, err)
 	}
-
 	return &codeagent.DeleteMCPResult{}, nil
 }
 
-func (a *agyAgent) SetMCPToolPrompt(p codeagent.SetMCPToolPromptParams) (*codeagent.SetMCPToolPromptResult, error) {
+func (a *agyAgent) SetMCPToolPrompt(_ codeagent.SetMCPToolPromptParams) (*codeagent.SetMCPToolPromptResult, error) {
 	return nil, fmt.Errorf("agy: SetMCPToolPrompt not supported")
 }

@@ -82,8 +82,8 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 		logger.Warn("Create: could not sync model to config", "err", syncErr)
 	}
 
-	// Auto-approve tunnel_mcp tool calls so Codex never pauses for MCP approval.
-	if mcpErr := ensureMCPApprovalMode("tunnel_mcp"); mcpErr != nil {
+	// Auto-approve axolink tool calls so Codex never pauses for MCP approval.
+	if mcpErr := a.ensureMCPApprovalMode("axolink"); mcpErr != nil {
 		logger.Warn("Create: could not set MCP approval mode", "err", mcpErr)
 	}
 
@@ -164,15 +164,23 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 	return nil
 }
 
-// bootstrapSession runs `codex exec "." --json` briefly to register a real
-// codex session and capture its thread_id from the first JSON line:
+// bootstrapSession runs `codex exec "." --json` to register a real codex session
+// and capture its thread_id. The codex JSON output sequence is:
 //
-//	{"type":"thread.started","thread_id":"<id>"}
+//	{"type":"thread.started","thread_id":"<id>"}   ← session ID captured here
+//	{"type":"turn.started"}
+//	... (model processing) ...
+//	{"type":"turn.completed"}                       ← SIGTERM sent here
 //
-// The process is killed as soon as the thread_id is found so we don't wait
-// for the full exec to finish.
+// We wait for turn.completed (not just thread.started) because codex only flushes
+// the session file to disk at the end of a completed turn. Sending SIGTERM earlier
+// — or using SIGKILL at any point — leaves the session file incomplete, causing
+// "No saved session found" errors on subsequent Resume calls.
+//
+// A 20 s context timeout acts as a backstop: if codex hangs or never reaches
+// turn.completed, the context cancels and cmd.Wait() unblocks via SIGKILL.
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "-C", workDir}
@@ -191,15 +199,23 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 		return "", fmt.Errorf("bootstrap: start: %w", err)
 	}
 
-	// Read lines as they arrive — no polling, no buffering delay.
-	// Stop as soon as thread_id is found.
+	// Drain stdout lines; wait for thread_id (thread.started) then turn.completed
+	// before signalling — codex must complete its first turn to have flushed session state.
+	// Draining is required so codex is never blocked on a full pipe.
 	found := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		var capturedID string
 		for scanner.Scan() {
-			if id := parseBootstrapSessionID(scanner.Text()); id != "" {
-				found <- id
-				return
+			line := scanner.Text()
+			if capturedID == "" {
+				capturedID = parseBootstrapSessionID(line)
+			}
+			if capturedID != "" && strings.Contains(line, `"turn.completed"`) {
+				select {
+				case found <- capturedID:
+				default:
+				}
 			}
 		}
 		close(found)
@@ -209,10 +225,15 @@ func bootstrapSession(workDir, binPath, model string, env []string) (string, err
 	select {
 	case id = <-found:
 	case <-ctx.Done():
+		_ = cmd.Wait()
+		logger.Debug("bootstrapSession: timed out", "sessionID", id)
+		return id, nil
 	}
 
-	cancel()
+	// SIGTERM lets codex flush the session file before exiting.
+	_ = cmd.Process.Signal(os.Interrupt)
 	_ = cmd.Wait()
+
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil

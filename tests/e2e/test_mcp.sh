@@ -25,26 +25,26 @@ CLAUDE_MCP_CFG="${HOME}/.claude.json"
 if [[ ! -f "$CLAUDE_MCP_CFG" ]]; then
   fail "claude global config not found at $CLAUDE_MCP_CFG (seed_mcp_configs did not run)"
 else
-  if grep -q '"tunnel-mcp"' "$CLAUDE_MCP_CFG"; then
-    pass "tunnel-mcp present in $CLAUDE_MCP_CFG"
+  if grep -q '"axolink"' "$CLAUDE_MCP_CFG"; then
+    pass "axolink present in $CLAUDE_MCP_CFG"
   else
-    fail "tunnel-mcp missing from $CLAUDE_MCP_CFG"
+    fail "axolink missing from $CLAUDE_MCP_CFG"
     echo "    --- $CLAUDE_MCP_CFG ---"
     cat "$CLAUDE_MCP_CFG"
   fi
 
   if grep -q '"http://127.0.0.1:18062/mcp"' "$CLAUDE_MCP_CFG"; then
-    pass "tunnel-mcp URL is http://127.0.0.1:18062/mcp"
+    pass "axolink URL is http://127.0.0.1:18062/mcp"
   else
-    fail "tunnel-mcp URL absent or wrong in $CLAUDE_MCP_CFG"
+    fail "axolink URL absent or wrong in $CLAUDE_MCP_CFG"
   fi
 
-  # Permissions: settings.json must allow mcp__tunnel-mcp__*
+  # Permissions: settings.json must allow mcp__axolink__*
   CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
-  if [[ -f "$CLAUDE_SETTINGS" ]] && grep -q '"mcp__tunnel-mcp__\*"' "$CLAUDE_SETTINGS"; then
-    pass "tunnel-mcp wildcard permission in $CLAUDE_SETTINGS"
+  if [[ -f "$CLAUDE_SETTINGS" ]] && grep -q '"mcp__axolink__\*"' "$CLAUDE_SETTINGS"; then
+    pass "axolink wildcard permission in $CLAUDE_SETTINGS"
   else
-    fail "mcp__tunnel-mcp__* permission missing from $CLAUDE_SETTINGS"
+    fail "mcp__axolink__* permission missing from $CLAUDE_SETTINGS"
   fi
 fi
 
@@ -98,7 +98,7 @@ sleep 8
 # exec resolves agents via os.Getwd() when no --workspace flag exists; cd into
 # the test workspace so the agent lookup finds the agent we just created there.
 (cd "$MCP_WORKSPACE" && omni agent exec "$MCP_AGENT" \
-  --prompt "List all MCP tool names available to you from tunnel-mcp. Just output the names and stop.")
+  --prompt "List all MCP tool names available to you from axolink. Just output the names and stop.")
 
 echo "==> waiting for tool listing propagation..."
 sleep 20
@@ -121,7 +121,7 @@ fi
 
 # ─── Test 3: AddMCP idempotency ───────────────────────────────────────────────
 # Calling seed_mcp_json twice for the same server name must produce exactly one
-# "tunnel-mcp" entry in ~/.claude.json (map-key assignment is idempotent).
+# "axolink" entry in ~/.claude.json (map-key assignment is idempotent).
 echo ""
 echo "==> [TEST 3] AddMCP idempotency"
 
@@ -130,11 +130,11 @@ CLAUDE_MCP_CFG="${HOME}/.claude.json"
 if [[ ! -f "$CLAUDE_MCP_CFG" ]]; then
   fail "idempotency: $CLAUDE_MCP_CFG not found, cannot check"
 else
-  TUNNEL_COUNT=$(grep -o '"tunnel-mcp"' "$CLAUDE_MCP_CFG" | wc -l)
+  TUNNEL_COUNT=$(grep -o '"axolink"' "$CLAUDE_MCP_CFG" | wc -l)
   if [[ "$TUNNEL_COUNT" -eq 1 ]]; then
-    pass "exactly 1 tunnel-mcp entry in $CLAUDE_MCP_CFG"
+    pass "exactly 1 axolink entry in $CLAUDE_MCP_CFG"
   else
-    fail "expected 1 tunnel-mcp entry, found $TUNNEL_COUNT in $CLAUDE_MCP_CFG"
+    fail "expected 1 axolink entry, found $TUNNEL_COUNT in $CLAUDE_MCP_CFG"
     cat "$CLAUDE_MCP_CFG"
   fi
 
@@ -147,7 +147,7 @@ else
   }
   seed_mcp_json_guard "$CLAUDE_MCP_CFG"
 
-  AFTER_COUNT=$(grep -o '"tunnel-mcp"' "$CLAUDE_MCP_CFG" | wc -l)
+  AFTER_COUNT=$(grep -o '"axolink"' "$CLAUDE_MCP_CFG" | wc -l)
   if [[ "$TUNNEL_COUNT" -eq "$AFTER_COUNT" ]]; then
     pass "second seed call left entry count unchanged ($AFTER_COUNT)"
   else
