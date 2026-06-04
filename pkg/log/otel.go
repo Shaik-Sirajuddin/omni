@@ -4,12 +4,24 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
+	goruntime "go.opentelemetry.io/contrib/instrumentation/runtime"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otellog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 )
+
+// Version is embedded in the OTel resource as service.version. The calling
+// binary should set this at startup (e.g. pkglog.Version = buildVersion).
+var Version = "dev"
 
 // OtelTarget describes a single OTLP log destination.
 type OtelTarget struct {
@@ -103,4 +115,70 @@ func (m multiHandler) WithGroup(name string) slog.Handler {
 		hs[i] = h.WithGroup(name)
 	}
 	return multiHandler{hs}
+}
+
+// metricsEndpoint resolves the OTLP metrics endpoint in priority order:
+//  1. OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (signal-specific)
+//  2. OTEL_EXPORTER_OTLP_ENDPOINT (shared with logs)
+//  3. http://localhost:4318 (standard local/internal default)
+func metricsEndpoint() string {
+	if v := os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"); v != "" {
+		return v
+	}
+	if v := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" {
+		return v
+	}
+	return "http://localhost:4318"
+}
+
+// InitOtelMetrics starts the OTLP metrics pipeline and Go runtime instrumentation.
+// It resolves the endpoint automatically (see metricsEndpoint) so no flags are
+// required; set OMNI_OTEL_METRICS=off to disable entirely.
+// The returned func flushes and shuts down the MeterProvider — call it on SIGTERM.
+func InitOtelMetrics(targets ...OtelTarget) (shutdown func(context.Context) error) {
+	if strings.EqualFold(os.Getenv("OMNI_OTEL_METRICS"), "off") {
+		return func(context.Context) error { return nil }
+	}
+
+	endpoint := metricsEndpoint()
+
+	// Override endpoint from the first non-empty explicit target, if provided.
+	for _, t := range targets {
+		if t.Endpoint != "" {
+			endpoint = t.Endpoint
+			break
+		}
+	}
+
+	opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(endpoint)}
+	for _, t := range targets {
+		if t.Endpoint != "" && len(t.Headers) > 0 {
+			opts = append(opts, otlpmetrichttp.WithHeaders(t.Headers))
+			break
+		}
+	}
+
+	exp, err := otlpmetrichttp.New(context.Background(), opts...)
+	if err != nil {
+		return func(context.Context) error { return nil }
+	}
+
+	res, _ := resource.New(context.Background(),
+		resource.WithAttributes(
+			semconv.ServiceName("omni-svc"),
+			semconv.ServiceVersion(Version),
+		),
+	)
+
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(30*time.Second))),
+		sdkmetric.WithResource(res),
+	)
+	otel.SetMeterProvider(mp)
+
+	// runtime.Start registers Go runtime/GC/memory metrics using runtime/metrics
+	// (not the legacy ReadMemStats stop-the-world path). Errors are non-fatal.
+	_ = goruntime.Start(goruntime.WithMeterProvider(mp))
+
+	return mp.Shutdown
 }
