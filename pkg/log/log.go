@@ -17,7 +17,8 @@
 //  5. Otherwise → ~/.omni/log/omni.log  (silent; no terminal output for CLI users)
 //     All CLI invocations append to this shared file. It is auto-truncated to
 //     zero when it exceeds 10 MB (omniLogMaxBytes) at process startup.
-//     Session files older than 30 days are auto-deleted (cleanOldLogs).
+//     Call CleanOldLogs() (or install omni-log-clean.timer) to remove session
+//     files older than 30 days.
 //
 // OTLP targets registered via InitOtel() always receive records regardless
 // of the text destination above.
@@ -166,7 +167,6 @@ func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Wri
 			_ = os.MkdirAll(logDir, 0o755)
 			path = filepath.Join(logDir, "omni.log")
 			clearIfNeeded(path)
-			cleanOldLogs(logDir)
 		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -192,30 +192,32 @@ func clearIfNeeded(path string) {
 
 const logMaxAge = 30 * 24 * time.Hour // 30 days
 
-var cleanOldLogsOnce sync.Once
-
-// cleanOldLogs removes log files in dir that have not been modified in 30 days.
-// Runs at most once per process. Best-effort — failures are silently ignored.
-func cleanOldLogs(dir string) {
-	cleanOldLogsOnce.Do(func() {
-		entries, err := os.ReadDir(dir)
+// CleanOldLogs removes files in ~/.omni/log/ that have not been modified in 30
+// days. Intended to be called by a systemd timer or OS cron job — not inline
+// during normal logging. Best-effort; failures are silently ignored.
+func CleanOldLogs() {
+	home, err := omniHome()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, "log")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-logMaxAge)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
 		if err != nil {
-			return
+			continue
 		}
-		cutoff := time.Now().Add(-logMaxAge)
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Before(cutoff) {
-				_ = os.Remove(filepath.Join(dir, e.Name()))
-			}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
-	})
+	}
 }
 
 func sanitizeComponent(s string) string {
