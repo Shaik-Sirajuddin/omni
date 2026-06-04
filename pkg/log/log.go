@@ -13,8 +13,12 @@
 //  1. UseStderrForAll() called → stderr (all loggers in the process)
 //  2. WithStderr() option → stderr (this logger only)
 //  3. OMNI_LOG_FILE env var set → that file, all levels
-//  4. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log
-//  5. Otherwise → stderr
+//  4. Debug mode → ~/.omni/debug/<component>.log
+//  5. Otherwise → ~/.omni/log/omni.log  (silent; no terminal output for CLI users)
+//     All CLI invocations append to this shared file. It is auto-truncated to
+//     zero when it exceeds 10 MB (omniLogMaxBytes) at process startup.
+//     Call CleanOldLogs() (or install omni-log-clean.timer) to remove session
+//     files older than 30 days.
 //
 // OTLP targets registered via InitOtel() always receive records regardless
 // of the text destination above.
@@ -22,7 +26,7 @@
 // Daemon startup: call UseStderrForAll() before the first log write so every
 // sub-package logger lands in journald without needing WithStderr() everywhere.
 //
-// CLI startup: call InitSessionLog() to set OMNI_LOG_FILE to
+// CLI with session: call InitSessionLog() to set OMNI_LOG_FILE to
 // ~/.omni/log/session-<pid>.log so all in-process components share one file.
 //
 // No internal module dependencies — safe to import from any module.
@@ -36,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Option configures Logger construction.
@@ -70,10 +75,11 @@ func UseStderrForAll() {
 	processWriterMu.Unlock()
 }
 
-// InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
-// if it is not already set. Call once at CLI startup (before the first log
-// write) so all in-process components and child subprocesses share one file.
-// Long-lived daemon processes should NOT call this — use UseStderrForAll().
+// InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log if it
+// is not already set, giving each CLI session its own isolated log file.
+// All in-process components and child subprocesses (code agents, MCP stdio)
+// inherit OMNI_LOG_FILE and write to the same file.
+// Long-lived daemon processes must NOT call this — use UseStderrForAll().
 func InitSessionLog() {
 	if os.Getenv("OMNI_LOG_FILE") != "" {
 		return
@@ -87,10 +93,7 @@ func InitSessionLog() {
 		return
 	}
 	path := filepath.Join(logDir, fmt.Sprintf("session-%d.log", os.Getpid()))
-	if err := os.Setenv("OMNI_LOG_FILE", path); err != nil {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "omni: session log → %s\n", path)
+	_ = os.Setenv("OMNI_LOG_FILE", path)
 }
 
 // NewLogger returns a structured logger tagged with the given key/value pair.
@@ -134,8 +137,6 @@ func (lw *lazyWriter) Write(p []byte) (int, error) {
 	return lw.w.Write(p)
 }
 
-var announcedPaths sync.Map
-
 func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Writer {
 	processWriterMu.RLock()
 	pw := processWriter
@@ -148,26 +149,75 @@ func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Wri
 	}
 	path := os.Getenv("OMNI_LOG_FILE")
 	if path == "" {
-		if level > slog.LevelDebug {
+		home, err := omniHome()
+		if err != nil {
+			// No home dir — fall back to stderr rather than polluting /tmp.
 			return os.Stderr
 		}
-		if home, err := omniHome(); err == nil {
+		if level <= slog.LevelDebug {
+			// Debug mode: per-component file for easy filtering.
 			debugDir := filepath.Join(home, "debug")
 			_ = os.MkdirAll(debugDir, 0o755)
 			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
 		} else {
-			path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+			// Info mode: shared persistent log — silent to the terminal.
+			// Auto-cleared (truncated) when it exceeds omniLogMaxBytes.
+			// Per-session files use OMNI_LOG_FILE set by InitSessionLog().
+			logDir := filepath.Join(home, "log")
+			_ = os.MkdirAll(logDir, 0o755)
+			path = filepath.Join(logDir, "omni.log")
+			clearIfNeeded(path)
 		}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "omni: failed to open log %s: %v; falling back to stderr\n", path, err)
+		// Can't open the log file — fall back to stderr silently.
 		return os.Stderr
 	}
-	if _, loaded := announcedPaths.LoadOrStore(path, struct{}{}); !loaded {
-		fmt.Fprintf(os.Stderr, "omni: log → %s\n", path)
-	}
 	return f
+}
+
+// omniLogMaxBytes is the size threshold at which omni.log is auto-cleared.
+const omniLogMaxBytes = 10 * 1024 * 1024 // 10 MB
+
+// clearIfNeeded truncates path to zero when it exceeds omniLogMaxBytes.
+// Best-effort — failures are silently ignored so logging always continues.
+func clearIfNeeded(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < omniLogMaxBytes {
+		return
+	}
+	_ = os.Truncate(path, 0)
+}
+
+const logMaxAge = 30 * 24 * time.Hour // 30 days
+
+// CleanOldLogs removes files in ~/.omni/log/ that have not been modified in 30
+// days. Intended to be called by a systemd timer or OS cron job — not inline
+// during normal logging. Best-effort; failures are silently ignored.
+func CleanOldLogs() {
+	home, err := omniHome()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, "log")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-logMaxAge)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 func sanitizeComponent(s string) string {
