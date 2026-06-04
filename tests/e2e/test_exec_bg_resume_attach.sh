@@ -75,24 +75,36 @@ $OMNI agent init "$AGENT_NAME" \
 echo ""
 echo "==> [T1] Flag rename: --bg accepted; --resume rejected as unknown flag"
 
-# --resume must now be unknown (flag renamed to --bg).
-RESUME_OUT=$($OMNI agent exec "$AGENT_NAME" \
-  --workspace "$WS" --prompt "test" --resume 2>&1) || RESUME_EXIT=$?
+# Run from WS dir to avoid needing --workspace on exec (not a local exec flag in all versions).
+# --resume must now be unknown (flag renamed to --bg). Test without extra flags for clean signal.
+RESUME_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" --prompt "test" --resume 2>&1) || RESUME_EXIT=$?
 RESUME_EXIT=${RESUME_EXIT:-0}
 
-if [[ $RESUME_EXIT -ne 0 ]] && echo "$RESUME_OUT" | grep -qiE "unknown flag|unknown shorthand|flag provided but not defined"; then
-  pass "T1: --resume rejected as unknown flag (flag renamed to --bg)"
+RESUME_HAS_UNKNOWN=$(echo "$RESUME_OUT" | grep -cE "unknown flag|unknown shorthand|flag provided but not defined" || true)
+if [[ $RESUME_EXIT -ne 0 ]] && [[ $RESUME_HAS_UNKNOWN -gt 0 ]]; then
+  # Confirm the unknown flag is specifically --resume, not some other flag
+  if echo "$RESUME_OUT" | grep -qiE "unknown flag.*resume|--resume"; then
+    pass "T1: --resume specifically rejected as unknown flag"
+  else
+    pass "T1: --resume rejected (exit=$RESUME_EXIT, unknown flag error — may be another flag conflict; see note)"
+    echo "    Note: flag rejection output: $(echo "$RESUME_OUT" | grep -m1 "unknown flag" || true)"
+  fi
+elif [[ $RESUME_EXIT -ne 0 ]]; then
+  # Non-zero exit without 'unknown flag' means the binary accepted --resume but the op failed
+  echo "    --resume exit=$RESUME_EXIT (non-zero, no 'unknown flag' — old binary still has --resume)"
+  fail "T1: --resume still accepted by exec (old binary or rename not applied)"
 else
-  fail "T1: --resume should be unknown flag but exited $RESUME_EXIT (output: ${RESUME_OUT:0:120})"
+  fail "T1: --resume exits 0 — flag still valid in this binary (rename not deployed)"
 fi
 
-# --bg must be accepted (exit 0 or a non-flag-error).
-BG_OUT=$($OMNI agent exec "$AGENT_NAME" \
-  --workspace "$WS" --prompt "flag-test-bg" --bg 2>&1) || BG_EXIT=$?
+# --bg must be accepted: exit must be non-zero without "unknown flag" error.
+# (Agent may not exist in session yet, so exit non-zero for op failure is OK — just not flag failure.)
+BG_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" --prompt "flag-test-bg" --bg 2>&1) || BG_EXIT=$?
 BG_EXIT=${BG_EXIT:-0}
 
 if echo "$BG_OUT" | grep -qiE "unknown flag|unknown shorthand|flag provided but not defined"; then
-  fail "T1: --bg flag not recognized by exec command"
+  fail "T1: --bg flag not recognized by exec command (binary not rebuilt with df907a6)"
+  echo "    NOTE: system binary still has --resume. Deploy/rebuild omni CLI to activate --bg."
 else
   pass "T1: --bg flag accepted by exec command (exit=$BG_EXIT)"
 fi
@@ -102,8 +114,7 @@ echo ""
 echo "==> [T2] exec --bg starts background PTY session (non-blocking)"
 
 START_TS=$(date +%s%N)
-BG2_OUT=$($OMNI agent exec "$AGENT_NAME" \
-  --workspace "$WS" --prompt "reply with: pong" --bg 2>&1) || BG2_EXIT=$?
+BG2_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" --prompt "reply with: pong" --bg 2>&1) || BG2_EXIT=$?
 BG2_EXIT=${BG2_EXIT:-0}
 END_TS=$(date +%s%N)
 ELAPSED_MS=$(( (END_TS - START_TS) / 1000000 ))
@@ -111,7 +122,9 @@ ELAPSED_MS=$(( (END_TS - START_TS) / 1000000 ))
 echo "    exec --bg returned in ${ELAPSED_MS}ms (exit=$BG2_EXIT)"
 echo "    output: ${BG2_OUT:0:120}"
 
-if [[ $BG2_EXIT -eq 0 ]]; then
+if echo "$BG2_OUT" | grep -qiE "unknown flag|flag provided but not defined"; then
+  fail "T2: exec --bg rejected as unknown flag — binary not rebuilt with df907a6"
+elif [[ $BG2_EXIT -eq 0 ]]; then
   pass "T2: exec --bg exits 0"
 else
   fail "T2: exec --bg exited $BG2_EXIT"
@@ -202,8 +215,7 @@ echo ""
 echo "==> [T4] exec --bg on already-active PTY does NOT attach (Detached=true)"
 
 # Session should still be running from T2/T3.
-BG4_OUT=$($OMNI agent exec "$AGENT_NAME" \
-  --workspace "$WS" --prompt "second bg prompt" --bg 2>&1) || BG4_EXIT=$?
+BG4_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" --prompt "second bg prompt" --bg 2>&1) || BG4_EXIT=$?
 BG4_EXIT=${BG4_EXIT:-0}
 
 echo "    exec --bg (second call) exit=$BG4_EXIT output: ${BG4_OUT:0:120}"
@@ -228,8 +240,7 @@ fi
 echo ""
 echo "==> [T5] Short flag -b works identically to --bg"
 
-B5_OUT=$($OMNI agent exec "$AGENT_NAME" \
-  --workspace "$WS" --prompt "short-flag-b" -b 2>&1) || B5_EXIT=$?
+B5_OUT=$(cd "$WS" && $OMNI agent exec "$AGENT_NAME" --prompt "short-flag-b" -b 2>&1) || B5_EXIT=$?
 B5_EXIT=${B5_EXIT:-0}
 
 if echo "$B5_OUT" | grep -qiE "unknown flag|unknown shorthand|flag provided but not defined"; then
