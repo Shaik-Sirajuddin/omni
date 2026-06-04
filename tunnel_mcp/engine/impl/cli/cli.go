@@ -20,7 +20,7 @@ func New(binaryPath string) *OmniCLI {
 func (c *OmniCLI) ExecInSession(ctx context.Context, agentID, agentName, workspace, prompt string) error {
 	logger.Debug("exec in session", "agent_id", agentID, "agent_name", agentName, "workspace", workspace, "binary", c.binaryPath)
 
-	cmd := exec.CommandContext(ctx, c.binaryPath, "agent", "exec", agentName, "--resume", "--prompt", prompt)
+	cmd := exec.CommandContext(ctx, c.binaryPath, "agent", "exec", agentName, "--bg", "--prompt", prompt)
 	cmd.Dir = workspace
 	out, err := cmd.CombinedOutput()
 	if err != nil {
