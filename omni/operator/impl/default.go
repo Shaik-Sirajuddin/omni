@@ -664,11 +664,14 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
 				if info != nil && info.AgentID == agent.ID && info.SessionID == sessionID && info.Status == "active" {
-					// Terminal is already running — leave it as-is regardless of Detached flag.
-					// Callers that need to write a prompt should use ExecInSession (Exec/Pipe,
-					// no attachment), keeping the PTY available for an interactive attach.
-					logger.Info("ResumeAgent: PTY terminal already active, leaving running", "agentID", agent.ID, "sessionID", sessionID, "detached", params.Detached)
-					return nil
+					if params.Detached {
+						logger.Info("ResumeAgent: PTY terminal already active, leaving running in background", "agentID", agent.ID, "sessionID", sessionID)
+						return nil
+					}
+					logger.Info("ResumeAgent: PTY terminal already active, attaching", "agentID", agent.ID, "sessionID", sessionID)
+					attachCtx, cancelAttach := newResumeContext()
+					defer cancelAttach()
+					return o.ptyDaemon.Attach(attachCtx, sessionID)
 				}
 			}
 		} else {
