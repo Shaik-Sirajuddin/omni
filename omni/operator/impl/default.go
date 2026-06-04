@@ -26,12 +26,14 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
 	// "github.com/Shaik-Sirajuddin/memory/operator/impl/defaults" // re-enable with sandbox wiring
+	"github.com/Shaik-Sirajuddin/memory/provision"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
+	"github.com/Shaik-Sirajuddin/memory/terminal"
 	"github.com/google/uuid"
 )
 
@@ -1091,25 +1093,134 @@ func (o *DefaultOperator) TeamInit(params operator.TeamInitParams) error {
 		logger.Error("TeamInit: guide agent initialisation failed", "workspace", workspace, "err", err)
 		return fmt.Errorf("operator: team-init: ensure guide agent: %w", err)
 	}
+
+	// Provision agents from layout file when provided.
+	var provisionedAgents []provision.AgentEntry
+	if params.Layout != "" {
+		layout, err := provision.GetLayoutFromFile(params.Layout)
+		if err != nil {
+			logger.Error("TeamInit: layout file load failed", "layout", params.Layout, "err", err)
+			return fmt.Errorf("operator: team-init: load layout: %w", err)
+		}
+		logger.Info("TeamInit: provisioning agents from layout", "layout", params.Layout, "count", len(layout.Agents))
+		for _, entry := range layout.Agents {
+			if err := o.CreateAgent(operator.CreateAgentParams{
+				Workspace:   workspace,
+				Name:        entry.Name,
+				Provider:    entry.Model.Provider,
+				Model:       entry.Model.ModelName,
+				Interactive: false,
+			}); err != nil {
+				logger.Error("TeamInit: agent provision failed", "agent", entry.Name, "err", err)
+				return fmt.Errorf("operator: team-init: provision agent %q: %w", entry.Name, err)
+			}
+			provisionedAgents = append(provisionedAgents, entry)
+			logger.Info("TeamInit: agent provisioned", "agent", entry.Name, "provider", entry.Model.Provider)
+		}
+	}
+
+	// Start terminal session when both terminal name and layout file are provided.
+	if params.Terminal != "" && params.TerminalLayout != "" {
+		term, err := getTerminal(params.Terminal)
+		if err != nil {
+			logger.Error("TeamInit: terminal lookup failed", "terminal", params.Terminal, "err", err)
+			return fmt.Errorf("operator: team-init: %w", err)
+		}
+		if err := term.CheckInstallation(); err != nil {
+			logger.Error("TeamInit: terminal not installed", "terminal", params.Terminal, "err", err)
+			return fmt.Errorf("operator: team-init: terminal %q not installed: %w", params.Terminal, err)
+		}
+		sessionLayout, err := loadTerminalLayout(term, params.TerminalLayout, provisionedAgents)
+		if err != nil {
+			logger.Error("TeamInit: terminal layout load failed", "terminalLayout", params.TerminalLayout, "err", err)
+			return fmt.Errorf("operator: team-init: load terminal layout: %w", err)
+		}
+		sessionName := filepath.Base(string(workspace))
+		logger.Info("TeamInit: starting terminal session", "terminal", params.Terminal, "session", sessionName)
+		if err := term.InitializeSession(terminal.SessionParams{
+			Name:   sessionName,
+			Layout: sessionLayout,
+		}); err != nil {
+			logger.Error("TeamInit: terminal session failed", "terminal", params.Terminal, "session", sessionName, "err", err)
+			return fmt.Errorf("operator: team-init: terminal session: %w", err)
+		}
+		logger.Info("TeamInit: terminal session started", "terminal", params.Terminal, "session", sessionName)
+	}
+
 	logger.Info("TeamInit: completed", "workspace", workspace)
 	return nil
 }
 
-// ListTemplates returns the short-name (version field) of every embedded agent template.
+// loadTerminalLayout reads and parses a terminal layout file via the provider's
+// transformer, falling back to a generated layout from provisioned agents when
+// the file is not found.
+func loadTerminalLayout(term terminal.Terminal, layoutFile string, agents []provision.AgentEntry) (terminal.Layout, error) {
+	data, err := os.ReadFile(layoutFile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return terminal.Layout{}, fmt.Errorf("read terminal layout %s: %w", layoutFile, err)
+	}
+	if err == nil {
+		layout, err := term.Transformer().FromNative(data)
+		if err != nil {
+			return terminal.Layout{}, fmt.Errorf("parse terminal layout %s: %w", layoutFile, err)
+		}
+		return layout, nil
+	}
+	// File not found — generate a layout: one tab per provisioned agent.
+	if len(agents) == 0 {
+		return terminal.Layout{}, fmt.Errorf("terminal layout file %s not found and no agents to generate layout from", layoutFile)
+	}
+	tabs := make([]terminal.TabLayout, len(agents))
+	for i, a := range agents {
+		tabs[i] = terminal.TabLayout{
+			Name:  a.Name,
+			Panes: []terminal.PaneLayout{{Command: "omni agent resume " + a.Name, StartSuspended: false}},
+		}
+	}
+	return terminal.Layout{Tabs: tabs}, nil
+}
+
+// ListTemplates returns the short-names of available provision file templates.
 func (o *DefaultOperator) ListTemplates() ([]string, error) {
-	return operator.ListTemplateVersions()
+	templates := provision.GetTemplates()
+	names := make([]string, len(templates))
+	for i, t := range templates {
+		names[i] = t.Name
+	}
+	logger.Debug("ListTemplates: completed", "count", len(names))
+	return names, nil
 }
 
-// DoctorTerminals checks whether each registered terminal provider binary is present.
-// Terminal provider registry is not yet wired — returns an empty result.
+// DoctorTerminals checks whether each registered terminal provider is installed.
 func (o *DefaultOperator) DoctorTerminals() (*operator.DoctorTerminalsResult, error) {
-	return &operator.DoctorTerminalsResult{}, nil
+	result := &operator.DoctorTerminalsResult{
+		Terminals: make([]operator.TerminalStatus, 0, len(terminalRegistry)),
+	}
+	for _, r := range terminalRegistry {
+		status := operator.TerminalStatus{Name: r.name, Installed: true}
+		if err := r.terminal.CheckInstallation(); err != nil {
+			status.Installed = false
+			status.Error = err.Error()
+		}
+		result.Terminals = append(result.Terminals, status)
+		logger.Debug("DoctorTerminals: checked", "terminal", r.name, "installed", status.Installed)
+	}
+	return result, nil
 }
 
-// InstallTerminal runs the install procedure for the named terminal provider.
-// Terminal provider registry is not yet wired.
+// InstallTerminal runs the install routine for the named terminal provider.
 func (o *DefaultOperator) InstallTerminal(name string) error {
-	return fmt.Errorf("operator: install terminal: provider %q not registered", name)
+	term, err := getTerminal(name)
+	if err != nil {
+		return err
+	}
+	logger.Info("InstallTerminal: installing", "terminal", name)
+	if err := term.Install(); err != nil {
+		logger.Error("InstallTerminal: install failed", "terminal", name, "err", err)
+		return fmt.Errorf("operator: install terminal %q: %w", name, err)
+	}
+	logger.Info("InstallTerminal: completed", "terminal", name)
+	return nil
 }
 
 // UpgradeAgent applies a newer template version to an existing agent's memory directory.

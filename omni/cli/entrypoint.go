@@ -24,6 +24,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/mcp/runner"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	"github.com/Shaik-Sirajuddin/memory/operator"
+	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
 	"github.com/Shaik-Sirajuddin/memory/operator/impl/defaults"
 	omnisandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
@@ -274,10 +275,13 @@ func (c *DefaultCli) newTeamInitCommand() *cobra.Command {
 			existed := existedErr == nil
 
 			if err := c.operator.TeamInit(operator.TeamInitParams{
-				Workspace: sandbox.WorkspaceDir(wd),
-				RepoURL:   resolved.RepoURL,
-				Name:      teamName,
-				Remote:    remote,
+				Workspace:      sandbox.WorkspaceDir(wd),
+				RepoURL:        resolved.RepoURL,
+				Name:           teamName,
+				Remote:         remote,
+				Layout:         resolved.Layout,
+				TerminalLayout: resolved.TerminalLayout,
+				Terminal:       resolved.Terminal,
 			}); err != nil {
 				return err
 			}
@@ -291,6 +295,9 @@ func (c *DefaultCli) newTeamInitCommand() *cobra.Command {
 	}
 
 	cmd.Flags().String("repo_url", flags.RepoURL, "Optional git repository URL used to add memory as submodule")
+	cmd.Flags().String("layout", flags.Layout, "Path to provision YAML layout file")
+	cmd.Flags().String("t-layout", flags.TerminalLayout, "Path to terminal layout file (e.g. KDL for zellij)")
+	cmd.Flags().String("terminal", flags.Terminal, "Terminal multiplexer to launch (e.g. zellij)")
 	cmd.Flags().StringVar(&teamName, "name", "", "Team name (defaults to workspace folder basename)")
 	cmd.Flags().StringVar(&remote, "remote", "localhost", "Remote address this workspace belongs to")
 	return cmd
@@ -318,7 +325,75 @@ func (c *DefaultCli) newDoctorCommand() *cobra.Command {
 	doctorCmd.AddCommand(c.newDoctorHooksCommand())
 	// doctorCmd.AddCommand(c.newDoctorCheckCommand())
 	// doctorCmd.AddCommand(c.newDoctorInstallCommand())
+	doctorCmd.AddCommand(c.newDoctorTerminalCommand())
 	return doctorCmd
+}
+
+func (c *DefaultCli) newDoctorTerminalCommand() *cobra.Command {
+	terminalCmd := &cobra.Command{
+		Use:   "terminal",
+		Short: "Manage terminal multiplexer prerequisites",
+	}
+	terminalCmd.AddCommand(c.newDoctorTerminalCheckCommand())
+	terminalCmd.AddCommand(c.newDoctorTerminalInstallCommand())
+	return terminalCmd
+}
+
+func (c *DefaultCli) newDoctorTerminalCheckCommand() *cobra.Command {
+	flags := config.ProvisionDoctorTerminalFlags()
+
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Check terminal multiplexer availability",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved := flags
+			if err := loadFlags(cmd, &resolved); err != nil {
+				return err
+			}
+			var result interface{}
+			var err error
+			if c.operator != nil {
+				result, err = c.operator.DoctorTerminals()
+			} else {
+				// standalone: no operator daemon required for terminal health checks
+				result, err = operatorimpl.DoctorTerminalsStandalone()
+			}
+			if err != nil {
+				return err
+			}
+			return printOutput("doctor.terminal.check", resolved.Output, result)
+		},
+	}
+
+	cmd.Flags().StringP("output", "o", flags.Output, "Output format: table|yaml|json")
+	return cmd
+}
+
+func (c *DefaultCli) newDoctorTerminalInstallCommand() *cobra.Command {
+	flags := config.ProvisionDoctorTerminalFlags()
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install a terminal multiplexer by name",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved := flags
+			if err := loadFlags(cmd, &resolved); err != nil {
+				return err
+			}
+			if resolved.Name == "" {
+				return errors.New("--name is required")
+			}
+			if c.operator != nil {
+				return c.operator.InstallTerminal(resolved.Name)
+			}
+			// standalone: no operator daemon required for terminal install
+			return operatorimpl.InstallTerminalStandalone(resolved.Name)
+		},
+	}
+
+	cmd.Flags().String("name", flags.Name, "Terminal provider name (e.g. zellij)")
+	_ = cmd.MarkFlagRequired("name")
+	return cmd
 }
 
 func (c *DefaultCli) newDoctorCheckCommand() *cobra.Command {
@@ -533,10 +608,13 @@ func (c *DefaultCli) newTeamInitSubcommand() *cobra.Command {
 			existed := existedErr == nil
 
 			if err := c.operator.TeamInit(operator.TeamInitParams{
-				Workspace: sandbox.WorkspaceDir(wd),
-				RepoURL:   resolved.RepoURL,
-				Name:      teamName,
-				Remote:    remote,
+				Workspace:      sandbox.WorkspaceDir(wd),
+				RepoURL:        resolved.RepoURL,
+				Name:           teamName,
+				Remote:         remote,
+				Layout:         resolved.Layout,
+				TerminalLayout: resolved.TerminalLayout,
+				Terminal:       resolved.Terminal,
 			}); err != nil {
 				return err
 			}
@@ -550,6 +628,9 @@ func (c *DefaultCli) newTeamInitSubcommand() *cobra.Command {
 	}
 
 	cmd.Flags().String("repo_url", flags.RepoURL, "Optional git repository URL used to add memory as submodule")
+	cmd.Flags().String("layout", flags.Layout, "Path to provision YAML layout file")
+	cmd.Flags().String("t-layout", flags.TerminalLayout, "Path to terminal layout file (e.g. KDL for zellij)")
+	cmd.Flags().String("terminal", flags.Terminal, "Terminal multiplexer to launch (e.g. zellij)")
 	cmd.Flags().StringVar(&teamName, "name", "", "Team name (defaults to workspace folder basename)")
 	cmd.Flags().StringVar(&remote, "remote", "localhost", "Remote address this workspace belongs to")
 	return cmd
@@ -1337,6 +1418,8 @@ func printTable(kind string, v any) error {
 		return printTeamListTable(v)
 	case "doctor.check", "doctor.install":
 		return printDoctorTable(v)
+	case "doctor.terminal.check":
+		return printDoctorTerminalsTable(v)
 	default:
 		return printJSON(v)
 	}
@@ -1465,6 +1548,24 @@ func printDoctorTable(v any) error {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "STATUS\tOS\tPROVIDER\tINSTALLED\tBINARY\tMISSING\tNEXT")
 	fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\t%s\t%s\n", state, status.OS, status.Provider, status.Installed, status.Binary, missing, next)
+	return tw.Flush()
+}
+
+func printDoctorTerminalsTable(v any) error {
+	result, ok := v.(*operator.DoctorTerminalsResult)
+	if !ok || result == nil {
+		return errors.New("invalid doctor terminals payload for table output")
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tINSTALLED\tERROR")
+	for _, t := range result.Terminals {
+		errStr := t.Error
+		if errStr == "" {
+			errStr = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%t\t%s\n", t.Name, t.Installed, errStr)
+	}
 	return tw.Flush()
 }
 

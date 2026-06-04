@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omni.sh/provision/v1/provision_schema.json",
+  "$ref": "#/$defs/ProvisionLayout",
+  "$defs": {
+    "AgentEntry": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Name",
+          "description": "Agent name"
+        },
+        "model": {
+          "$ref": "#/$defs/Model",
+          "title": "Model",
+          "description": "Provider and model for this agent"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "model"
+      ]
+    },
+    "Model": {
+      "properties": {
+        "provider": {
+          "type": "string",
+          "title": "Provider",
+          "description": "Agent provider (claude|codex|gemini)"
+        },
+        "model": {
+          "type": "string",
+          "title": "Model",
+          "description": "Provider-specific model name; validated at runtime via DiscoverAgents()"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "provider",
+        "model"
+      ]
+    },
+    "ProvisionLayout": {
+      "properties": {
+        "team": {
+          "$ref": "#/$defs/TeamEntry",
+          "title": "Team",
+          "description": "Team metadata"
+        },
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/AgentEntry"
+          },
+          "type": "array",
+          "title": "Agents",
+          "description": "List of agents to provision"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "team",
+        "agents"
+      ]
+    },
+    "TeamEntry": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Name",
+          "description": "Team name"
+        },
+        "repo_url": {
+          "type": "string",
+          "title": "Repo URL",
+          "description": "Git repository URL for the team workspace"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

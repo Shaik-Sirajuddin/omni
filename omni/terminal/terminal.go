@@ -1,18 +1,49 @@
 package terminal
 
-type Tab struct {
-	Name    string
-	Command string
+type Layout struct {
+	Dir  string
+	Tabs []TabLayout
 }
 
-// Provision terminal with no duplicate Names
-type ProvisionParams struct {
+type TabLayout struct {
+	Name    string
+	Command string
+	Panes   []PaneLayout
+}
+
+type PaneLayout struct {
+	Command        string
+	Dir            string
+	StartSuspended bool
+}
+
+type Template struct {
+	Name   string
+	Layout Layout
+}
+
+type Session struct {
 	Name string
-	Tabs []Tab
+}
+
+type SessionParams struct {
+	Name       string
+	Layout     Layout
+	FocusedTab int
+}
+
+type Transformer interface {
+	ToNative(Layout) ([]byte, error)
+	FromNative([]byte) (Layout, error)
 }
 
 type Terminal interface {
-	Provider() string
-	Provision(ProvisionParams) error
-	ListSessions()
+	CheckInstallation() error
+	Install() error
+	Templates() []Template
+	InitializeSession(SessionParams) error
+	ListSessions() ([]Session, error)
+	CheckSessionExists(name string) (bool, error)
+	GetSession(name string) (*Session, error)
+	Transformer() Transformer
 }

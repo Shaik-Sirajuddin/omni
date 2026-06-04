@@ -12,7 +12,16 @@ type CLITeamListFlags struct {
 
 // CLITeamInitFlags is a koanf-compatible flag schema for `team init`.
 type CLITeamInitFlags struct {
-	RepoURL string `koanf:"repo_url" json:"repo_url"`
+	RepoURL        string `koanf:"repo_url" json:"repo_url"`
+	Layout         string `koanf:"layout" json:"layout"`
+	TerminalLayout string `koanf:"t-layout" json:"t_layout"`
+	Terminal       string `koanf:"terminal" json:"terminal"`
+}
+
+// CLIDoctorTerminalFlags is a koanf-compatible flag schema for `doctor terminal check/install`.
+type CLIDoctorTerminalFlags struct {
+	Output string `koanf:"output" json:"output"`
+	Name   string `koanf:"name" json:"name"`
 }
 
 // CLITeamGetFlags is a koanf-compatible flag schema for `team get`.
@@ -109,7 +118,11 @@ func ProvisionTeamListFlags() CLITeamListFlags {
 }
 
 func ProvisionTeamInitFlags() CLITeamInitFlags {
-	return CLITeamInitFlags{}
+	return CLITeamInitFlags{Terminal: "zellij"}
+}
+
+func ProvisionDoctorTerminalFlags() CLIDoctorTerminalFlags {
+	return CLIDoctorTerminalFlags{Output: "table"}
 }
 
 func ProvisionTeamGetFlags() CLITeamGetFlags {
@@ -169,9 +182,7 @@ func ProvisionDefaultOmniConfig() *OmniConfig {
 			AutoSync:         true,
 			RandomAgentNames: true,
 		},
-		Dev: &Developer{
-			Debug: false,
-		},
+		Dev: &Developer{Debug: false},
 	}
 }
 
@@ -189,9 +200,7 @@ func ApplyOmniConfigDefaults(cfg *OmniConfig) *OmniConfig {
 	}
 
 	if cfg.Dev == nil {
-		cfg.Dev = &Developer{
-			Debug: false,
-		}
+		cfg.Dev = &Developer{Debug: false}
 	}
 
 	return cfg

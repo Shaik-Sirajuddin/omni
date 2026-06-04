@@ -73,24 +73,26 @@ type TeamInitParams struct {
 	Name string `json:"name,omitempty"`
 	// Remote is the remote address this workspace belongs to. Defaults to "localhost".
 	Remote string `json:"remote,omitempty"`
-	// Layout is an optional path to a provision layout YAML file. When set the
-	// operator batch-creates all agents declared in the file.
+	// Layout is an optional path to a provision YAML file. When set all agents
+	// defined in the layout are created (non-interactive) as part of team-init.
 	Layout string `json:"layout,omitempty"`
-	// TerminalLayout is an optional path to a terminal-native layout file
-	// (e.g. a KDL file for zellij). Used together with Terminal.
+	// TerminalLayout is an optional path to a terminal layout file (e.g. KDL for
+	// zellij). Requires Terminal to be set.
 	TerminalLayout string `json:"terminal_layout,omitempty"`
-	// Terminal names the terminal provider to use for the session (e.g. "zellij").
+	// Terminal is the name of the terminal multiplexer to use (e.g. "zellij").
+	// When set together with TerminalLayout a terminal session is started after
+	// all agents have been initialised.
 	Terminal string `json:"terminal,omitempty"`
 }
 
-// TerminalStatus reports the health of a single terminal provider.
+// TerminalStatus reports the installation state of a single terminal provider.
 type TerminalStatus struct {
 	Name      string `json:"name"`
 	Installed bool   `json:"installed"`
-	Binary    string `json:"binary,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
-// DoctorTerminalsResult holds health status for all registered terminal providers.
+// DoctorTerminalsResult holds the health check results for all registered terminal providers.
 type DoctorTerminalsResult struct {
 	Terminals []TerminalStatus `json:"terminals"`
 }
@@ -260,13 +262,12 @@ type Operator interface {
 	DetachSession(DetachSessionParams) (*DetachSessionResult, error)
 	Pipe(PipeParams) error
 
-	// ListTemplates returns the short-names of all embedded agent templates.
+	// ListTemplates returns the short-names of available provision file templates.
 	ListTemplates() ([]string, error)
 
-	// DoctorTerminals checks whether each registered terminal provider binary
-	// is present on the system.
+	// DoctorTerminals checks whether each registered terminal provider is installed.
 	DoctorTerminals() (*DoctorTerminalsResult, error)
 
-	// InstallTerminal runs the install procedure for the named terminal provider.
+	// InstallTerminal runs the install routine for the named terminal provider.
 	InstallTerminal(name string) error
 }

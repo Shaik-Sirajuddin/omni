@@ -1,0 +1,79 @@
+openapi: "3.0.3"
+info:
+  title: Provision
+  description: Schema for omni provision files — team and agent initialization layout.
+  version: v1
+
+paths: {}
+
+components:
+  schemas:
+    Provider:
+      type: string
+      enum: [claude, codex, gemini]
+      description: >
+        Compile-time-validated agent provider. Model name is validated at runtime
+        via DiscoverAgents().
+
+    Model:
+      type: object
+      required: [provider, model]
+      additionalProperties: false
+      properties:
+        provider:
+          $ref: "#/components/schemas/Provider"
+        model:
+          type: string
+          description: Provider-specific model name (e.g. claude-sonnet-4-6).
+          example: claude-sonnet-4-6
+
+    AgentEntry:
+      type: object
+      required: [name, model]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Unique agent name within the provision layout.
+        model:
+          $ref: "#/components/schemas/Model"
+
+    TeamEntry:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Team name.
+        repo_url:
+          type: string
+          format: uri
+          description: Git repository URL for the team workspace.
+
+    ProvisionLayout:
+      type: object
+      required: [team, agents]
+      additionalProperties: false
+      description: Root object for a provision YAML file.
+      properties:
+        team:
+          $ref: "#/components/schemas/TeamEntry"
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentEntry"
+          description: List of agents to provision. Agent names must be unique.
+
+  examples:
+    MinimalProvision:
+      summary: Single-agent team provision
+      value:
+        team:
+          name: my-team
+          repo_url: https://github.com/org/my-team
+        agents:
+          - name: coder
+            model:
+              provider: claude
+              model: claude-sonnet-4-6

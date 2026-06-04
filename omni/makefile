@@ -52,6 +52,7 @@ generate-schema-from-structs:
 .PHONY: export-config-schema
 export-config-schema:
 	$(MAKE) -C config export-config-schema
+
 # Clean generated file
 .PHONY: clean
 clean:
