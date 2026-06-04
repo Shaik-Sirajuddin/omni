@@ -176,6 +176,14 @@ func InitOtelMetrics(targets ...OtelTarget) (shutdown func(context.Context) erro
 	)
 	otel.SetMeterProvider(mp)
 
+	// Route OTel internal errors (e.g. per-tick "connection refused" when no
+	// collector is reachable) through slog at DEBUG instead of the default
+	// stdlib log.Println, which bypasses slog and spams journalctl.
+	otelErrLogger := NewLogger("component", "otel")
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		otelErrLogger.Debug("otel internal error", "err", err)
+	}))
+
 	// runtime.Start registers Go runtime/GC/memory metrics using runtime/metrics
 	// (not the legacy ReadMemStats stop-the-world path). Errors are non-fatal.
 	_ = goruntime.Start(goruntime.WithMeterProvider(mp))
