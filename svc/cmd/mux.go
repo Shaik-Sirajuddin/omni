@@ -140,8 +140,6 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 				} else {
 					log.Info("axolink-mcp: registered with connector", "provider", provider, "command", omniPath, "args", []string{"axolink"})
 				}
-			} else {
-				log.Info("axolink-mcp: registered tunnel-mcp with connector", "provider", provider, "endpoint", mcpEndpoint)
 			}
 		}
 		wg.Add(1)
