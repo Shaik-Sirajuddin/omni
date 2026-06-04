@@ -25,7 +25,7 @@ func TestTaskDeliveryStore(t *testing.T) {
 	t.Run("StartDelivery inserts row and GetInProgress returns it", func(t *testing.T) {
 		store := newStore(t)
 
-		err := store.StartDelivery(ctx, "task-1", "agent-1", "msg-1")
+		err := store.StartDelivery(ctx, "task-1", "agent-1", "creator-1", "msg-1")
 		require.NoError(t, err, "StartDelivery must not error")
 
 		deliveries, err := store.GetInProgress(ctx, "agent-1")
@@ -33,6 +33,7 @@ func TestTaskDeliveryStore(t *testing.T) {
 		require.Len(t, deliveries, 1, "GetInProgress must return the inserted delivery")
 		assert.Equal(t, "task-1", deliveries[0].TaskID)
 		assert.Equal(t, "agent-1", deliveries[0].AgentID)
+		assert.Equal(t, "creator-1", deliveries[0].CreatorAgentID)
 		assert.Equal(t, "msg-1", deliveries[0].LastMessageID)
 		assert.Equal(t, "in_progress", deliveries[0].Status)
 		assert.Greater(t, deliveries[0].UpdatedAt, int64(0), "UpdatedAt must be set")
@@ -41,13 +42,13 @@ func TestTaskDeliveryStore(t *testing.T) {
 	t.Run("StartDelivery twice upserts: last_message_id and updated_at updated", func(t *testing.T) {
 		store := newStore(t)
 
-		require.NoError(t, store.StartDelivery(ctx, "task-up", "agent-up", "msg-first"))
+		require.NoError(t, store.StartDelivery(ctx, "task-up", "agent-up", "creator-up", "msg-first"))
 		first, err := store.GetInProgress(ctx, "agent-up")
 		require.NoError(t, err)
 		require.Len(t, first, 1)
 		firstUpdatedAt := first[0].UpdatedAt
 
-		require.NoError(t, store.StartDelivery(ctx, "task-up", "agent-up", "msg-second"))
+		require.NoError(t, store.StartDelivery(ctx, "task-up", "agent-up", "creator-up", "msg-second"))
 		second, err := store.GetInProgress(ctx, "agent-up")
 		require.NoError(t, err)
 		require.Len(t, second, 1, "upsert must not create a duplicate row")
@@ -58,7 +59,7 @@ func TestTaskDeliveryStore(t *testing.T) {
 	t.Run("CompleteDelivery: status becomes completed, not in GetInProgress", func(t *testing.T) {
 		store := newStore(t)
 
-		require.NoError(t, store.StartDelivery(ctx, "task-done", "agent-done", "msg-done"))
+		require.NoError(t, store.StartDelivery(ctx, "task-done", "agent-done", "creator-done", "msg-done"))
 		err := store.CompleteDelivery(ctx, "task-done", "agent-done")
 		require.NoError(t, err, "CompleteDelivery must not error")
 
@@ -79,8 +80,8 @@ func TestTaskDeliveryStore(t *testing.T) {
 	t.Run("GetInProgress returns only in_progress deliveries for the agent", func(t *testing.T) {
 		store := newStore(t)
 
-		require.NoError(t, store.StartDelivery(ctx, "task-a", "agent-multi", "msg-a"))
-		require.NoError(t, store.StartDelivery(ctx, "task-b", "agent-multi", "msg-b"))
+		require.NoError(t, store.StartDelivery(ctx, "task-a", "agent-multi", "creator-a", "msg-a"))
+		require.NoError(t, store.StartDelivery(ctx, "task-b", "agent-multi", "creator-b", "msg-b"))
 		require.NoError(t, store.CompleteDelivery(ctx, "task-b", "agent-multi"))
 
 		deliveries, err := store.GetInProgress(ctx, "agent-multi")
@@ -92,8 +93,8 @@ func TestTaskDeliveryStore(t *testing.T) {
 	t.Run("GetInProgress scoped to agent: other agents not returned", func(t *testing.T) {
 		store := newStore(t)
 
-		require.NoError(t, store.StartDelivery(ctx, "task-x", "agent-x", "msg-x"))
-		require.NoError(t, store.StartDelivery(ctx, "task-y", "agent-y", "msg-y"))
+		require.NoError(t, store.StartDelivery(ctx, "task-x", "agent-x", "creator-x", "msg-x"))
+		require.NoError(t, store.StartDelivery(ctx, "task-y", "agent-y", "creator-y", "msg-y"))
 
 		deliveries, err := store.GetInProgress(ctx, "agent-x")
 		require.NoError(t, err)

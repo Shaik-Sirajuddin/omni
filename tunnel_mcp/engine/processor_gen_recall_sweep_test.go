@@ -150,6 +150,8 @@ func TestPreprocessingRecall(t *testing.T) {
 
 		// Preprocessing recall uses buildWarmUpPrompt (YAML), not plain-text buildRecallPrompt.
 		// Check for YAML field presence instead of the plain-text callback notice.
+		assert.Contains(t, e1.prompt, "messages:",
+			"preprocessing recall must use YAML format (buildWarmUpPrompt), not plain text (buildRecallPrompt)")
 		assert.Contains(t, e1.prompt, "prep-query-1",
 			"preprocessing recall YAML must embed the processing message ID")
 		assert.Contains(t, e1.prompt, "send_response",

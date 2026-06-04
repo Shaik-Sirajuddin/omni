@@ -335,7 +335,7 @@ func (e *ProcessingEngine) hydrateState(ctx context.Context) {
 				logger.Warn("hydrate state: task delivery lookup failed", "agent_id", agentID, "err", err)
 			}
 			for _, d := range deliveries {
-				e.state.SetTaskMux(agentID, &TaskKey{TaskID: d.TaskID})
+				e.state.SetTaskMux(agentID, &TaskKey{TaskID: d.TaskID, CreatorAgentID: d.CreatorAgentID})
 				logger.Info("hydrate state: restoring in-progress task delivery", "agent_id", agentID, "task_id", d.TaskID, "last_message_id", d.LastMessageID)
 			}
 		}
@@ -503,6 +503,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 			msg.Retries++
 			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
 				logger.Error("execute loop: preprocessing recall — retries increment failed", "message_id", msg.ID, "err", err)
+				return // avoid building recall with inconsistently incremented retries
 			}
 		}
 		recallPrompt = buildWarmUpPrompt(msgs)
@@ -581,7 +582,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 
 		// T5: checkpoint execute delivery so it can be resumed on restart.
 		if e.taskDelivery != nil && msgs[0].RequestType == reqTypeExecute && msgs[0].TaskID != "" {
-			if err := e.taskDelivery.StartDelivery(ctx, msgs[0].TaskID, agentID, msgs[0].ID); err != nil {
+			if err := e.taskDelivery.StartDelivery(ctx, msgs[0].TaskID, agentID, msgs[0].CreatorAgentID, msgs[0].ID); err != nil {
 				logger.Warn("execute loop: task delivery checkpoint failed", "task_id", msgs[0].TaskID, "err", err)
 			}
 		}
