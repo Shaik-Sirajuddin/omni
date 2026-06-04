@@ -80,11 +80,53 @@ func readAll(t *testing.T, h windows.Handle, want []byte, d time.Duration) []byt
 	}
 }
 
-// TestConPTYRelayEndToEnd spawns `cmd /c echo MARKER`, attaches a client, and
-// asserts the client reads the marker bytes relayed over the named pipe.
+// TestConPTYEmitsOutput is a DIRECT diagnostic: it reads the ConPTY output source
+// itself (no relay, no Grant) and asserts the child's marker appears. If this fails
+// but the relay test also fails, the problem is ConPTY setup, not the relay.
+func TestConPTYEmitsOutput(t *testing.T) {
+	probe := "PROBE-CONPTY-7f3a9c"
+	cp, err := NewWinConPTY(Winsize{Cols: 80, Rows: 24}, `cmd.exe /k echo `+probe)
+	if err != nil {
+		t.Fatalf("NewWinConPTY: %v", err)
+	}
+	defer func() { _ = cp.close() }()
+
+	src := cp.output()
+	got := make(chan []byte, 1)
+	go func() {
+		var acc []byte
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := src.Read(buf)
+			if n > 0 {
+				acc = append(acc, buf[:n]...)
+				if bytes.Contains(acc, []byte(probe)) {
+					got <- acc
+					return
+				}
+			}
+			if rerr != nil {
+				got <- acc
+				return
+			}
+		}
+	}()
+	select {
+	case b := <-got:
+		if !bytes.Contains(b, []byte(probe)) {
+			t.Fatalf("ConPTY emitted %d bytes but no probe marker: %q", len(b), string(b))
+		}
+		t.Logf("ConPTY emitted %d bytes including the probe marker", len(b))
+	case <-time.After(8 * time.Second):
+		t.Fatal("ConPTY emitted NOTHING in 8s — conhost/child not producing output")
+	}
+}
+
+// TestConPTYRelayEndToEnd spawns a keep-alive child that echoes MARKER, attaches a
+// client, and asserts the client reads the marker bytes relayed over the named pipe.
 func TestConPTYRelayEndToEnd(t *testing.T) {
 	marker := "HANDOFF-CONPTY-MARKER-7f3a9c"
-	cp, err := NewWinConPTY(Winsize{Cols: 80, Rows: 24}, `cmd.exe /c echo `+marker)
+	cp, err := NewWinConPTY(Winsize{Cols: 80, Rows: 24}, `cmd.exe /k echo `+marker)
 	if err != nil {
 		t.Fatalf("NewWinConPTY: %v", err)
 	}

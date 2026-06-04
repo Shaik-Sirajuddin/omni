@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -383,9 +384,21 @@ func (w *winConPTY) close() error {
 	// outRead is owned by w.out (blockingReader); w.out.Close() above already closed
 	// it (which is also what unblocked the pump's blocking ReadFile). Don't double-close.
 	w.outRead = 0
-	// Now safe: pipes are gone, child is dead.
+	// Now safe: pipes are gone, child is dead. ClosePseudoConsole is KNOWN to
+	// occasionally block (it waits for conhost to drain output); bound it so Close
+	// never hangs. The Job Object already killed the child, so abandoning a stuck
+	// ClosePseudoConsole goroutine is benign.
 	if w.hpc != 0 {
-		procClosePseudoConsole.Call(uintptr(w.hpc))
+		hpc := w.hpc
+		done := make(chan struct{})
+		go func() {
+			procClosePseudoConsole.Call(uintptr(hpc))
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 		w.hpc = 0
 	}
 	if w.thread != 0 {
