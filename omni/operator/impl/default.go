@@ -1132,7 +1132,7 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Info("CreateAgent: memory seeded", "agentID", agentID, "memoryDir", memDir)
 	}
 
-	reportStatus(params.Status, operator.InitPhaseStarting, "Starting session…")
+	reportStatus(params.Status, operator.InitPhaseStarting, "Launching PTY session…")
 	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID, params.Status); err != nil {
 		logger.Warn("CreateAgent: session bootstrap failed — agent persisted; use 'omni agent resume' to start session", "agentID", agentID, "provider", params.Provider, "model", params.Model, "err", err)
 		reportError(params.Status, err)
