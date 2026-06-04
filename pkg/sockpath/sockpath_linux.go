@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package sockpath resolves Unix socket paths for omni services, handling both
 // system-wide installs (/run/omni-<user>/) and user-local installs
 // ($XDG_RUNTIME_DIR/omni/ = /run/user/<uid>/omni/).
