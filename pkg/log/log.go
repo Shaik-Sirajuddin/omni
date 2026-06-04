@@ -6,15 +6,24 @@
 //  3. ~/.config/omni/config.json has dev.debug == true → Debug
 //  4. Otherwise → Info
 //
-// Log destination (in priority order):
-//  1. WithStderr() option → stderr always
-//  2. OMNI_LOG_FILE env var set → that file, all levels
-//  3. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log  (app home, not XDG config)
-//  4. Otherwise → stderr
+// Log destination is resolved lazily on the first write, so process-level
+// configuration set in main() is respected even for package-level loggers.
+// Priority (evaluated at first write):
 //
-// Call InitSessionLog() at process startup to auto-set OMNI_LOG_FILE to
-// ~/.omni/log/session-<pid>.log so all in-process components and
-// child subprocesses share one file for the session.
+//  1. UseStderrForAll() called → stderr (all loggers in the process)
+//  2. WithStderr() option → stderr (this logger only)
+//  3. OMNI_LOG_FILE env var set → that file, all levels
+//  4. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log
+//  5. Otherwise → stderr
+//
+// OTLP targets registered via InitOtel() always receive records regardless
+// of the text destination above.
+//
+// Daemon startup: call UseStderrForAll() before the first log write so every
+// sub-package logger lands in journald without needing WithStderr() everywhere.
+//
+// CLI startup: call InitSessionLog() to set OMNI_LOG_FILE to
+// ~/.omni/log/session-<pid>.log so all in-process components share one file.
 //
 // No internal module dependencies — safe to import from any module.
 package log
@@ -36,17 +45,30 @@ type logOptions struct {
 	useStderr bool
 }
 
-// WithStderr directs all log output to stderr regardless of other settings.
-// Use this for systemd services whose stdout/stderr is captured by journald.
+// WithStderr directs this logger's text output to stderr regardless of other
+// settings. Use for per-logger overrides; prefer UseStderrForAll() for daemons.
 func WithStderr() Option {
 	return func(o *logOptions) { o.useStderr = true }
 }
 
+var (
+	processWriterMu sync.RWMutex
+	processWriter   io.Writer // nil = use per-logger resolution
+)
+
+// UseStderrForAll forces every logger in this process to write to stderr.
+// Call once at daemon startup before any log message is written so that
+// sub-package loggers (constructed at package init) also land in journald.
+func UseStderrForAll() {
+	processWriterMu.Lock()
+	processWriter = os.Stderr
+	processWriterMu.Unlock()
+}
+
 // InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
-// if it is not already set. Call this once at process startup (before any
-// logger is constructed) so that the CLI, operator, code agents, and MCP
-// stdio subprocesses all write to the same file for the session.
-// Long-lived daemon processes should NOT call this.
+// if it is not already set. Call once at CLI startup (before the first log
+// write) so all in-process components and child subprocesses share one file.
+// Long-lived daemon processes should NOT call this — use UseStderrForAll().
 func InitSessionLog() {
 	if os.Getenv("OMNI_LOG_FILE") != "" {
 		return
@@ -66,15 +88,6 @@ func InitSessionLog() {
 	fmt.Fprintf(os.Stderr, "omni: session log → %s\n", path)
 }
 
-// omniHome returns ~/.omni, creating it if necessary.
-func omniHome() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".omni"), nil
-}
-
 // NewLogger returns a structured logger tagged with the given key/value pair.
 func NewLogger(key, component string, opts ...Option) *slog.Logger {
 	level := resolveLevel()
@@ -91,21 +104,45 @@ func buildLogger(key, component string, level slog.Level, opts []Option) *slog.L
 	for _, opt := range opts {
 		opt(o)
 	}
-	w := resolveWriter(component, level, o)
+	lw := &lazyWriter{component: component, level: level, useStderr: o.useStderr}
 	handlerOpts := &slog.HandlerOptions{Level: level, AddSource: level == slog.LevelDebug}
-	handlers := append([]slog.Handler{slog.NewTextHandler(w, handlerOpts)}, activeHandlers()...)
+	// OTEL handlers are always appended regardless of text destination.
+	handlers := append([]slog.Handler{slog.NewTextHandler(lw, handlerOpts)}, activeHandlers()...)
 	return slog.New(multiHandler{handlers}).With(key, component)
+}
+
+// lazyWriter defers destination resolution to the first Write call so that
+// process-level config (UseStderrForAll, InitSessionLog) set in main() is
+// respected even for package-level loggers constructed before main() runs.
+type lazyWriter struct {
+	once      sync.Once
+	component string
+	level     slog.Level
+	useStderr bool
+	w         io.Writer
+}
+
+func (lw *lazyWriter) Write(p []byte) (int, error) {
+	lw.once.Do(func() {
+		lw.w = resolveWriterNow(lw.component, lw.level, lw.useStderr)
+	})
+	return lw.w.Write(p)
 }
 
 var announcedPaths sync.Map
 
-func resolveWriter(component string, level slog.Level, o *logOptions) io.Writer {
-	if o.useStderr {
+func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Writer {
+	processWriterMu.RLock()
+	pw := processWriter
+	processWriterMu.RUnlock()
+	if pw != nil {
+		return pw
+	}
+	if useStderr {
 		return os.Stderr
 	}
 	path := os.Getenv("OMNI_LOG_FILE")
 	if path == "" {
-		// No session file — fall back to auto debug file or stderr.
 		if level > slog.LevelDebug {
 			return os.Stderr
 		}
@@ -138,6 +175,15 @@ func sanitizeComponent(s string) string {
 		out[i] = c
 	}
 	return string(out)
+}
+
+// omniHome returns ~/.omni (app data dir, distinct from XDG config dir).
+func omniHome() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".omni"), nil
 }
 
 // resolveLevel determines the log level for this process.

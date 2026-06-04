@@ -13,9 +13,11 @@ import (
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 )
 
-var logger = pkglog.NewLogger("component", "mcp-main", pkglog.WithStderr())
+var logger = pkglog.NewLogger("component", "mcp-main")
 
 func main() {
+	pkglog.UseStderrForAll() // must be before any logger is first written to
+
 	defaults := runner.DefaultConfig()
 	addr := flag.String("addr", defaults.Addr, "MCP streamable HTTP listen address, or stdio target base URL")
 	interval := flag.Duration("interval", defaults.Interval, "interval for automatic hello sampling requests")
