@@ -16,6 +16,8 @@ import (
 var Version = "dev"
 
 func main() {
+	pkglog.UseStderrForAll() // must be before any logger is first written to
+
 	disablePTY        := flag.Bool("disable-ptydaemon", false, "Disable the PTY daemon service")
 	disableHook       := flag.Bool("disable-hook-operator", false, "Disable the hook operator service")
 	disableMCP        := flag.Bool("disable-axolink-mcp", false, "Disable the Axolink MCP service")
@@ -29,7 +31,7 @@ func main() {
 	}
 
 	initOtel()
-	log := pkglog.NewLogger("component", "svc", pkglog.WithStderr())
+	log := pkglog.NewLogger("component", "svc")
 	username := currentUsername()
 
 	mux := &ServiceMux{
