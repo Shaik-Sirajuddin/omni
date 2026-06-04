@@ -215,6 +215,10 @@ func (t *PTYTerminal) drainLoop() {
 		m := t.master
 		t.mu.Unlock()
 		if m == nil {
+			t.drainMu.Lock()
+			t.drainClosed = true
+			t.drainCond.Broadcast()
+			t.drainMu.Unlock()
 			return
 		}
 
@@ -226,7 +230,14 @@ func (t *PTYTerminal) drainLoop() {
 			if os.IsTimeout(err) {
 				continue
 			}
-			return // EOF / EIO / closed — master is gone
+			// Master is gone (EIO/EOF/closed). Mark drainClosed and broadcast
+			// so any concurrent pauseDrain waiter unblocks instead of waiting
+			// forever for a drainParked signal that will never arrive.
+			t.drainMu.Lock()
+			t.drainClosed = true
+			t.drainCond.Broadcast()
+			t.drainMu.Unlock()
+			return
 		}
 		// bytes discarded; keep draining
 	}
