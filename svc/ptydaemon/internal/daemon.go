@@ -308,6 +308,17 @@ func (d *defaultDaemon) ListSessions(agentID string) ([]*PTYSessionRecord, error
 }
 
 func (d *defaultDaemon) GetSession(agentID, sessionID string) (*PTYSessionRecord, error) {
+	// When the caller does not pin an agent — the client Get sends an empty
+	// agentID and resolves purely by sessionID — look up by sessionID alone.
+	// An exact `WHERE agent_id=?` match otherwise races the Start→adopt window:
+	// ResumeAgent(Detached) Starts the session inserted with agent_id="", and the
+	// adopt path ~2ms later rewrites it to the real agent_id. A fixed
+	// `agent_id=''` predicate therefore flips from matching to not-matching, so
+	// ptySessionLive/waitPTYReady intermittently see "session not found".
+	// SessionIDs are globally unique UUIDs, so resolving by sessionID is safe.
+	if agentID == "" {
+		return d.store.GetBySessionOnly(sessionID)
+	}
 	return d.store.GetBySession(agentID, sessionID)
 }
 
