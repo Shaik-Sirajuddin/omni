@@ -36,10 +36,13 @@ type Message struct {
 	RequestType  RequestType `json:"request_type"`
 	IsResponse   bool        `json:"is_response"`
 	ShouldReply  bool        `json:"should_reply"`
-	RespondedTo  string      `json:"responded_to"`
-	Prompt       string      `json:"prompt"`
-	Refs         string      `json:"refs"` // JSON blob
-	Workspace    string      `json:"workspace"`
+	RespondedTo    string      `json:"responded_to"`
+	Prompt         string      `json:"prompt"`
+	Schema         string      `json:"schema,omitempty"`
+	Refs           string      `json:"refs"` // JSON blob
+	Workspace      string      `json:"workspace"`
+	TaskID         string      `json:"task_id,omitempty"`
+	CreatorAgentID string      `json:"creator_agent_id,omitempty"`
 	Status       Status      `json:"status"`
 	Retries      int         `json:"retries"`
 	QueueTime    int64       `json:"queue_time"`              // unix ms; 0 = not queued
