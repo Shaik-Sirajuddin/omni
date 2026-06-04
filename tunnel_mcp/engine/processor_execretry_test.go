@@ -99,7 +99,9 @@ func TestExecRetry_BelowCap(t *testing.T) {
 
 	// Wait for all 3 ExecInSession calls: 2 failures + 1 success.
 	cli.waitForNCalls(t, 3)
-	// Allow the 3rd (successful) session to complete + onSessionEnd to settle.
+	// The 3rd call returned nil (success). executeLoop now waits on sessionDoneCh
+	// before calling onSessionEnd. Signal it so the goroutine unblocks.
+	engine.SignalSessionDoneForTest(proc, "retry-below")
 	time.Sleep(50 * time.Millisecond)
 
 	assert.Equal(t, 3, cli.totalCalls(),
