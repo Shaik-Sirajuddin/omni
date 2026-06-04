@@ -13,3 +13,5 @@ play/
 website/
 dist/generated/
 .envrc
+.dev
+go.work.sum
