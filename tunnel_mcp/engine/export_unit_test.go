@@ -84,3 +84,10 @@ func RunQueueSweepOnceForTest(e *ProcessingEngine, ctx context.Context) {
 func setDeliveryWindowForTest(e *ProcessingEngine, d time.Duration) {
 	e.deliveryWindow = d
 }
+
+// SignalSessionDoneForTest simulates OnStop signalling session completion.
+// Use in tests that use non-hook CLIs (e.g. failingOmniCLI) so executeLoop
+// doesn't block indefinitely on the sessionDoneCh wait.
+func SignalSessionDoneForTest(e *ProcessingEngine, agentID string) {
+	e.state.SignalSessionDone(agentID)
+}

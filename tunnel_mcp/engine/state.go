@@ -84,6 +84,7 @@ type EngineState struct {
 	sessions     map[string]string            // sessionID → agentID
 	taskMux      map[string]*TaskKey          // agentID → active task (nil = none); retained after execute for T1 priority
 	taskRegistry map[string]map[string]*taskState // agentID → taskID → state (paused flag)
+	sessionDone  map[string]chan struct{}      // agentID → buffered channel closed by OnStop when session fully ends
 }
 
 func newEngineState() *EngineState {
@@ -93,7 +94,39 @@ func newEngineState() *EngineState {
 		sessions:     make(map[string]string),
 		taskMux:      make(map[string]*TaskKey),
 		taskRegistry: make(map[string]map[string]*taskState),
+		sessionDone:  make(map[string]chan struct{}),
 	}
+}
+
+// OpenSessionDone creates a buffered done channel for agentID's current session.
+// The channel is signalled by SignalSessionDone when OnStop fully handles the session end.
+func (s *EngineState) OpenSessionDone(agentID string) chan struct{} {
+	ch := make(chan struct{}, 1)
+	s.mu.Lock()
+	s.sessionDone[agentID] = ch
+	s.mu.Unlock()
+	return ch
+}
+
+// SignalSessionDone closes the done channel for agentID, unblocking any waiter in executeLoop.
+// Safe to call multiple times — extra signals are dropped by the buffered channel.
+func (s *EngineState) SignalSessionDone(agentID string) {
+	s.mu.RLock()
+	ch := s.sessionDone[agentID]
+	s.mu.RUnlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// ClearSessionDone removes and returns the done channel for agentID.
+func (s *EngineState) ClearSessionDone(agentID string) {
+	s.mu.Lock()
+	delete(s.sessionDone, agentID)
+	s.mu.Unlock()
 }
 
 // SetSession records a sessionID → agentID mapping.

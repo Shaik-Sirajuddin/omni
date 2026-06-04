@@ -627,6 +627,13 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	myGeneration := agentState.CodeSession.SessionGeneration
 	prevSessionID := agentState.CodeSession.SessionID
 
+	// Open a session-done channel so we can wait for OnStop to fire before running
+	// onSessionEnd. omni agent exec --bg is non-blocking: it returns in <1s while the
+	// actual Claude session runs asynchronously. Without this wait, onSessionEnd would
+	// mark messages as orphaned/failed before any hooks (OnStop, OnUserPromptSubmit)
+	// have a chance to process them.
+	sessionDoneCh := e.state.OpenSessionDone(agentID)
+
 	logger.Info("execute loop: executing agent",
 		"agent_id", agentID,
 		"message_count", len(msgs),
@@ -657,6 +664,8 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 			logger.Warn("execute loop watchdog: hook timeout, resetting to Ready", "agent_id", agentID)
 			cur.Status = AgentStatusReady
 			e.state.SetAgent(agentID, cur)
+			// Unblock the sessionDoneCh waiter so onSessionEnd can run cleanup.
+			e.state.SignalSessionDone(agentID)
 			go e.executeLoop(agentID)
 		}
 	}(myGeneration, prevSessionID)
@@ -665,6 +674,19 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	if execErr != nil {
 		logger.Error("execute loop: exec failed", "agent_id", agentID, "err", execErr)
 	}
+
+	// If ExecInSession returned without error, wait for OnStop to signal that the session
+	// has truly ended. This handles non-blocking exec implementations (e.g. omni agent exec
+	// --bg) where ExecInSession returns before hooks fire. The watchdog also signals this
+	// channel if OnPreSessionStart never fires within hookFireTimeout.
+	if execErr == nil {
+		select {
+		case <-sessionDoneCh:
+			logger.Debug("execute loop: session done signal received", "agent_id", agentID)
+		case <-e.ctx.Done():
+		}
+	}
+	e.state.ClearSessionDone(agentID)
 
 	// Session-end guard: hooks (OnStop) fire during the session and should have already
 	// cleaned up status and messages. If they didn't (crash / no PostPrompt), do it here.
@@ -1241,6 +1263,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	if err != nil {
 		logger.Error("hook: stop — query processing messages failed", "agent_id", agentID, "err", err)
 		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
@@ -1256,6 +1279,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		agentState.Status = AgentStatusReady
 		e.state.SetAgent(agentID, agentState)
 		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
@@ -1269,6 +1293,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	if len(msgs) > 0 && msgs[0].RequestType == reqTypeInstant {
 		e.markDelivered(ctx, msgs, agentID, agentState)
 		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
@@ -1304,6 +1329,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 
 	e.markDelivered(ctx, msgs, agentID, agentState)
 	e.state.ClearSession(sessionID)
+	e.state.SignalSessionDone(agentID)
 	return nil
 }
 
