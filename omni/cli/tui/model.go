@@ -78,19 +78,11 @@ func (m Model) View() string {
 	}
 
 	if m.phase == PhaseActive {
-		rows := []string{
-			styleOK.Render("✓ Session active"),
-		}
-		if m.agentName != "" {
-			rows = append(rows, styleLabel.Render("Agent   ")+styleValue.Render(m.agentName))
-		}
-		if m.sessionID != "" {
-			rows = append(rows, styleLabel.Render("Session ")+styleValue.Render(shortID(m.sessionID)))
-		}
-		if m.model != "" {
-			rows = append(rows, styleLabel.Render("Model   ")+styleValue.Render(m.model))
-		}
-		return styleBox.Render(strings.Join(rows, "\n")) + "\n"
+		// Return empty string so bubbletea erases the previous spinner frame on
+		// its final render pass, leaving the terminal clean before the PTY takes
+		// over. Rendering a success box here causes it to stay on-screen and
+		// overlap with the agent's own UI.
+		return ""
 	}
 
 	label := phaseLabel(m.phase)

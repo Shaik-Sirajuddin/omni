@@ -11,8 +11,9 @@ import (
 )
 
 // TestReporter_PhaseReady verifies that a Reporter driven through the normal
-// init → starting → waiting → ready sequence renders an active panel and
-// satisfies operator.StatusReporter.
+// init → starting → waiting → ready sequence exits cleanly and satisfies
+// operator.StatusReporter. The success view intentionally renders "" so that
+// bubbletea erases the spinner frame, leaving the terminal clean for the PTY.
 func TestReporter_PhaseReady(t *testing.T) {
 	var buf bytes.Buffer
 	r := clitui.NewReporter(&buf)
@@ -26,12 +27,12 @@ func TestReporter_PhaseReady(t *testing.T) {
 	r.Ready("testagent", "o4-mini", "abc12345-dead-beef-0000-000000000000")
 	r.Wait()
 
+	// The success path renders an empty view so bubbletea erases the spinner
+	// and leaves the terminal clean before the PTY renders. Agent name / session
+	// ID are NOT expected in the output buffer.
 	out := buf.String()
-	if !strings.Contains(out, "testagent") {
-		t.Errorf("expected agent name in output, got:\n%s", out)
-	}
-	if !strings.Contains(out, "abc12345") {
-		t.Errorf("expected session ID prefix in output, got:\n%s", out)
+	if strings.Contains(out, "testagent") {
+		t.Errorf("success view must be empty (clean PTY handoff), got:\n%s", out)
 	}
 }
 

@@ -23,7 +23,8 @@ func drive(msgs ...tea.Msg) tea.Model {
 }
 
 // TestView_PhaseProgression verifies the full Init→Starting→Waiting→Ready phase
-// sequence and that View() shows the success box with all fields.
+// sequence. After MsgReady, View() must return "" so bubbletea erases the
+// spinner frame and leaves the terminal clean for the PTY to take over.
 func TestView_PhaseProgression(t *testing.T) {
 	m := drive(
 		clitui.MsgPhase{Phase: clitui.PhaseInit, Detail: "Resolving agent…"},
@@ -31,11 +32,8 @@ func TestView_PhaseProgression(t *testing.T) {
 		clitui.MsgPhase{Phase: clitui.PhaseWaiting, Detail: "Waiting…"},
 		clitui.MsgReady{AgentName: "myagent", Model: "o4-mini", SessionID: "abc12345-dead-beef-0000-000000000000"},
 	)
-	view := m.View()
-	for _, want := range []string{"✓ Session active", "myagent", "abc12345", "o4-mini"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("View() missing %q:\n%s", want, view)
-		}
+	if got := m.View(); got != "" {
+		t.Errorf("View() after MsgReady must be empty for clean PTY handoff, got:\n%s", got)
 	}
 }
 
@@ -54,8 +52,9 @@ func TestView_ErrorPath(t *testing.T) {
 	}
 }
 
-// TestView_Ready_Fields verifies that View() after MsgReady contains the agent
-// name, session short ID (first 8 chars), and model name.
+// TestView_Ready_Fields verifies that View() after MsgReady returns "" so the
+// TUI erases itself cleanly before the PTY takes over. Fields passed to
+// MsgReady are stored in the model but not rendered (PTY handles its own UI).
 func TestView_Ready_Fields(t *testing.T) {
 	const (
 		agentName = "testagent"
@@ -63,17 +62,8 @@ func TestView_Ready_Fields(t *testing.T) {
 		sessionID = "deadbeef-1234-5678-9abc-000000000000"
 	)
 	m := drive(clitui.MsgReady{AgentName: agentName, Model: modelName, SessionID: sessionID})
-	view := m.View()
-	checks := map[string]string{
-		"success marker": "✓ Session active",
-		"agent name":     agentName,
-		"session prefix": sessionID[:8],
-		"model name":     modelName,
-	}
-	for label, want := range checks {
-		if !strings.Contains(view, want) {
-			t.Errorf("View() missing %s (%q):\n%s", label, want, view)
-		}
+	if got := m.View(); got != "" {
+		t.Errorf("View() after MsgReady must be empty for clean PTY handoff, got:\n%s", got)
 	}
 }
 
