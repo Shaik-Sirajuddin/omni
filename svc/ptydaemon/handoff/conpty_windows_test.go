@@ -191,20 +191,46 @@ func TestConPTYStealDisconnects(t *testing.T) {
 	defer ep.Close()
 	ep.SetClientPID(uint32(os.Getpid()))
 
-	go func() { _, _ = ep.Grant() }()
+	// Wait for Grant to FINISH attaching the sink before stealing — otherwise the
+	// Revoke races ahead of attach (a no-op steal) and the client then reads a
+	// still-connected pipe forever.
+	grantErr := make(chan error, 1)
+	go func() { _, gerr := ep.Grant(); grantErr <- gerr }()
 	name := waitPipeName(t, ep)
 	h := openRelayClient(t, name)
 	defer windows.CloseHandle(h)
+	select {
+	case gerr := <-grantErr:
+		if gerr != nil {
+			t.Fatalf("Grant: %v", gerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Grant did not complete after client connect")
+	}
 
 	// Steal: disconnect the relay.
 	_ = ep.Revoke(context.Background())
 
 	// The client read must now fail (pipe disconnected) or return zero bytes.
-	buf := make([]byte, 64)
-	var done uint32
-	err = windows.ReadFile(h, buf, &done, nil)
-	if err == nil && done > 0 {
-		t.Fatalf("client still read %d bytes after steal/disconnect", done)
+	// Bound it so a regression can't hang the suite.
+	type readRes struct {
+		n   uint32
+		err error
+	}
+	res := make(chan readRes, 1)
+	go func() {
+		buf := make([]byte, 64)
+		var done uint32
+		rerr := windows.ReadFile(h, buf, &done, nil)
+		res <- readRes{done, rerr}
+	}()
+	select {
+	case r := <-res:
+		if r.err == nil && r.n > 0 {
+			t.Fatalf("client still read %d bytes after steal/disconnect", r.n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("client read did not return after steal/disconnect (pipe still connected?)")
 	}
 }
 
@@ -242,7 +268,14 @@ func TestConPTYJobObjectKillsTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWinConPTY: %v", err)
 	}
-	proc := cp.proc
+	// Close() closes cp.proc, so the test must hold its OWN handle to wait on after
+	// Close — otherwise WaitForSingleObject runs on a closed handle and WAIT_FAILEDs.
+	cur := windows.CurrentProcess()
+	var proc windows.Handle
+	if err := windows.DuplicateHandle(cur, cp.proc, cur, &proc, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		t.Fatalf("DuplicateHandle(proc): %v", err)
+	}
+	defer windows.CloseHandle(proc)
 	ep := newWinEndpoint(cp)
 
 	// Child is alive: waiting on it briefly times out (still running).
