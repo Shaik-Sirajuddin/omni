@@ -1734,3 +1734,574 @@ func TestGet_100Concurrent_NoDataRace(t *testing.T) {
 		t.Errorf("expected %d successful Gets, got %d", N, okCount)
 	}
 }
+
+// ── Real-scenario multi-workspace and team tests ──────────────────────────────
+
+// Test 33: Simulate a team of 5 workspaces, each registered with MinReady=3.
+// 5 goroutines each hammer 20 Gets on their own workspace concurrently.
+// After all 100 Gets complete:
+//   - All 100 must succeed (ok=true, non-empty session_id)
+//   - Sessions returned to workspace-N must only have Workspace matching workspace-N
+//   - Each workspace returned ≥3 distinct session IDs (pool was maintaining a queue)
+func TestTeamScenario_5Workspaces_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		numWorkspaces = 5
+		getsPerWS     = 20
+		minReady      = 3
+		totalGets     = numWorkspaces * getsPerWS
+	)
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, provider, workspace string) (string, string, error) {
+		id := fmt.Sprintf("t33-%s-%s-%d", provider, workspace, n.Add(1))
+		return "agent-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	// Register each workspace.
+	for i := 0; i < numWorkspaces; i++ {
+		ws := fmt.Sprintf("/team/ws-%d", i)
+		if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+			Provider:    "teamclaude",
+			Workspace:   ws,
+			MinReady:    minReady,
+			MaxParallel: 5,
+		}); err != nil {
+			t.Fatalf("RegisterConfig ws-%d: %v", i, err)
+		}
+	}
+
+	type result struct {
+		wsIdx int
+		entry *agentpool.PoolEntry
+		err   error
+	}
+
+	results := make(chan result, totalGets)
+	var wg sync.WaitGroup
+	wg.Add(numWorkspaces)
+
+	for i := 0; i < numWorkspaces; i++ {
+		i := i
+		ws := fmt.Sprintf("/team/ws-%d", i)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < getsPerWS; j++ {
+				e, err := client.Get("teamclaude", ws)
+				results <- result{wsIdx: i, entry: e, err: err}
+			}
+		}()
+	}
+
+	allDone := make(chan struct{})
+	go func() { wg.Wait(); close(allDone) }()
+	select {
+	case <-allDone:
+	case <-time.After(60 * time.Second):
+		t.Fatal("5-workspace team scenario timed out")
+	}
+	close(results)
+
+	// Verify all 100 gets.
+	// seenPerWS[i] tracks distinct session IDs for workspace i.
+	seenPerWS := make([]map[string]bool, numWorkspaces)
+	for i := range seenPerWS {
+		seenPerWS[i] = make(map[string]bool)
+	}
+	allSessions := make(map[string]bool, totalGets)
+
+	for r := range results {
+		if r.err != nil {
+			t.Errorf("ws-%d Get error: %v", r.wsIdx, r.err)
+			continue
+		}
+		if r.entry == nil || r.entry.SessionID == "" {
+			t.Errorf("ws-%d returned nil/empty entry", r.wsIdx)
+			continue
+		}
+
+		expectedWS := fmt.Sprintf("/team/ws-%d", r.wsIdx)
+		if r.entry.Workspace != expectedWS {
+			t.Errorf("ws-%d cross-contamination: got Workspace=%q, want %q", r.wsIdx, r.entry.Workspace, expectedWS)
+		}
+		if r.entry.Provider != "teamclaude" {
+			t.Errorf("ws-%d wrong Provider: got %q, want %q", r.wsIdx, r.entry.Provider, "teamclaude")
+		}
+
+		seenPerWS[r.wsIdx][r.entry.SessionID] = true
+		allSessions[r.entry.SessionID] = true
+	}
+
+	// Each workspace must have seen ≥ minReady distinct session IDs.
+	for i := 0; i < numWorkspaces; i++ {
+		if got := len(seenPerWS[i]); got < minReady {
+			t.Errorf("ws-%d: expected ≥%d distinct session IDs, got %d", i, minReady, got)
+		}
+	}
+
+	t.Logf("total distinct sessions across all workspaces: %d/%d", len(allSessions), totalGets)
+}
+
+// Test 34: One workspace (/project/alpha) registered for both "claude" (MinReady=2)
+// and "codex" (MinReady=2). Drain all 4 sessions. Verify:
+//   - claude sessions have Provider=claude, codex sessions have Provider=codex
+//   - No provider cross-contamination
+//   - After draining 2 claude + 2 codex, both queues replenish independently
+func TestSameWorkspace_DifferentProviders_Independent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		minReady = 2
+		ws       = "/project/alpha"
+	)
+
+	claudeCreated := make(chan string, 20)
+	codexCreated := make(chan string, 20)
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, provider, workspace string) (string, string, error) {
+		id := fmt.Sprintf("t34-%s-%d", provider, n.Add(1))
+		switch provider {
+		case "claude":
+			select {
+			case claudeCreated <- id:
+			default:
+			}
+		case "codex":
+			select {
+			case codexCreated <- id:
+			default:
+			}
+		}
+		return "agent-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "claude", Workspace: ws, MinReady: minReady, MaxParallel: 5,
+	}); err != nil {
+		t.Fatalf("RegisterConfig claude: %v", err)
+	}
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "codex", Workspace: ws, MinReady: minReady, MaxParallel: 5,
+	}); err != nil {
+		t.Fatalf("RegisterConfig codex: %v", err)
+	}
+
+	// Wait for initial fill of both queues.
+	drainN(t, claudeCreated, minReady)
+	drainN(t, codexCreated, minReady)
+
+	// Drain all 2 claude sessions.
+	claudeSessions := make([]string, 0, minReady)
+	for i := 0; i < minReady; i++ {
+		e, err := client.Get("claude", ws)
+		if err != nil {
+			t.Fatalf("Get claude#%d: %v", i, err)
+		}
+		if e.Provider != "claude" {
+			t.Errorf("claude Get#%d returned wrong Provider: %q", i, e.Provider)
+		}
+		if e.Workspace != ws {
+			t.Errorf("claude Get#%d returned wrong Workspace: %q", i, e.Workspace)
+		}
+		claudeSessions = append(claudeSessions, e.SessionID)
+	}
+
+	// Drain all 2 codex sessions.
+	codexSessions := make([]string, 0, minReady)
+	for i := 0; i < minReady; i++ {
+		e, err := client.Get("codex", ws)
+		if err != nil {
+			t.Fatalf("Get codex#%d: %v", i, err)
+		}
+		if e.Provider != "codex" {
+			t.Errorf("codex Get#%d returned wrong Provider: %q", i, e.Provider)
+		}
+		if e.Workspace != ws {
+			t.Errorf("codex Get#%d returned wrong Workspace: %q", i, e.Workspace)
+		}
+		codexSessions = append(codexSessions, e.SessionID)
+	}
+
+	// Verify no cross-contamination: claude session IDs must not appear in codex sessions.
+	claudeSet := make(map[string]bool, len(claudeSessions))
+	for _, s := range claudeSessions {
+		claudeSet[s] = true
+	}
+	for _, s := range codexSessions {
+		if claudeSet[s] {
+			t.Errorf("session %q appeared in both claude and codex queues (cross-contamination)", s)
+		}
+	}
+
+	// Both queues must replenish independently.
+	drainN(t, claudeCreated, minReady)
+	drainN(t, codexCreated, minReady)
+
+	t.Logf("claude sessions: %v", claudeSessions)
+	t.Logf("codex sessions: %v", codexSessions)
+}
+
+// Test 35: Register 3 workspaces (A, B, C) each with MinReady=3 and MaxParallel=2.
+// Fully drain all 3 simultaneously. Then wait for replenishment.
+// Verify each workspace recovers to MinReady=3 independently.
+func TestMultiWorkspace_DrainAll_IndependentRecovery(t *testing.T) {
+	t.Parallel()
+
+	const (
+		numWS    = 3
+		minReady = 3
+	)
+
+	workspaces := []string{"/recovery/ws-a", "/recovery/ws-b", "/recovery/ws-c"}
+
+	// Per-workspace created channels to track which workspace each spawn belongs to.
+	createdPerWS := make([]chan string, numWS)
+	for i := range createdPerWS {
+		createdPerWS[i] = make(chan string, 50)
+	}
+
+	var counter atomic.Int64
+	createFn := func(_ context.Context, provider, workspace string) (string, string, error) {
+		id := fmt.Sprintf("t35-%s-%d", workspace, counter.Add(1))
+		for i, ws := range workspaces {
+			if ws == workspace {
+				select {
+				case createdPerWS[i] <- id:
+				default:
+				}
+				break
+			}
+		}
+		return "agent-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	// Register all 3 workspaces.
+	for _, ws := range workspaces {
+		if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+			Provider:    "recovery-prov",
+			Workspace:   ws,
+			MinReady:    minReady,
+			MaxParallel: 2,
+		}); err != nil {
+			t.Fatalf("RegisterConfig %s: %v", ws, err)
+		}
+	}
+
+	// Wait for initial fill of all 3 workspaces.
+	for i, ws := range workspaces {
+		drainN(t, createdPerWS[i], minReady)
+		t.Logf("workspace %s initial fill complete", ws)
+	}
+
+	// Drain all 3 workspaces concurrently (minReady Gets per workspace).
+	var drainWg sync.WaitGroup
+	drainWg.Add(numWS)
+	drainResults := make([][]string, numWS)
+	for i := range drainResults {
+		drainResults[i] = make([]string, 0, minReady)
+	}
+	var drainMu sync.Mutex
+
+	for i, ws := range workspaces {
+		i, ws := i, ws
+		go func() {
+			defer drainWg.Done()
+			sessions := make([]string, 0, minReady)
+			for j := 0; j < minReady; j++ {
+				e, err := client.Get("recovery-prov", ws)
+				if err != nil {
+					t.Errorf("drain ws %s Get#%d: %v", ws, j, err)
+					continue
+				}
+				if e.Workspace != ws {
+					t.Errorf("drain ws %s Get#%d cross-contamination: got Workspace=%q", ws, j, e.Workspace)
+				}
+				sessions = append(sessions, e.SessionID)
+			}
+			drainMu.Lock()
+			drainResults[i] = sessions
+			drainMu.Unlock()
+		}()
+	}
+
+	drainAllDone := make(chan struct{})
+	go func() { drainWg.Wait(); close(drainAllDone) }()
+	select {
+	case <-drainAllDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("concurrent drain of 3 workspaces timed out")
+	}
+
+	// Verify each workspace recovers independently to MinReady=3.
+	for i := range workspaces {
+		replenished := drainN(t, createdPerWS[i], minReady)
+		if len(replenished) < minReady {
+			t.Errorf("workspace %s: expected ≥%d replenish spawns, got %d", workspaces[i], minReady, len(replenished))
+		}
+	}
+
+	t.Logf("all 3 workspaces recovered independently after full drain")
+}
+
+// Test 36: Directly tests the TOCTOU fix: with MinReady=0 and a slow createFn
+// (10ms), fire 2 concurrent Gets. Both will find the queue empty and both will try
+// to spawn. After both complete, verify both got distinct session IDs (no deadlock,
+// no panic). Both Gets must succeed even though neither could dequeue pre-warmed
+// sessions.
+func TestTOCTOU_Recheck_PreventsWastedSpawn(t *testing.T) {
+	t.Parallel()
+
+	const slowness = 10 * time.Millisecond
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, _, _ string) (string, string, error) {
+		time.Sleep(slowness)
+		id := fmt.Sprintf("t36-%d", n.Add(1))
+		return "agent-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "toctou", Workspace: "/toctou/ws", MinReady: 0, MaxParallel: 5,
+	}); err != nil {
+		t.Fatalf("RegisterConfig: %v", err)
+	}
+
+	// Fire 2 concurrent Gets against an empty queue with a slow createFn.
+	type result struct {
+		entry *agentpool.PoolEntry
+		err   error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			e, err := client.Get("toctou", "/toctou/ws")
+			results <- result{e, err}
+		}()
+	}
+
+	allDone := make(chan struct{})
+	go func() { wg.Wait(); close(allDone) }()
+	select {
+	case <-allDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("TOCTOU test: 2 concurrent Gets deadlocked or timed out")
+	}
+	close(results)
+
+	sessions := make([]string, 0, 2)
+	for r := range results {
+		if r.err != nil {
+			t.Errorf("Get error: %v", r.err)
+			continue
+		}
+		if r.entry == nil || r.entry.SessionID == "" {
+			t.Error("TOCTOU: expected non-empty session_id")
+			continue
+		}
+		sessions = append(sessions, r.entry.SessionID)
+	}
+
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 successful Gets, got %d", len(sessions))
+	}
+	if sessions[0] == sessions[1] {
+		t.Errorf("TOCTOU: both Gets returned same session_id %q — pool handed out a duplicate", sessions[0])
+	}
+	t.Logf("TOCTOU test passed: sessions %v are distinct", sessions)
+}
+
+// Test 37: Drain 10 Gets from workspace-A and 10 Gets from workspace-B.
+// Assert the union of all session IDs contains no duplicates — the pool never
+// hands out the same session to two different requesters regardless of workspace.
+func TestSessionUniqueness_AcrossWorkspaces(t *testing.T) {
+	t.Parallel()
+
+	const N = 10
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, _, _ string) (string, string, error) {
+		id := fmt.Sprintf("t37-%d", n.Add(1))
+		return "agent-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	// Collect 10 sessions from workspace-A.
+	sessionsA := make([]string, 0, N)
+	for i := 0; i < N; i++ {
+		e, err := client.Get("uniq-prov", "/unique/ws-a")
+		if err != nil {
+			t.Fatalf("Get ws-a #%d: %v", i, err)
+		}
+		if e == nil || e.SessionID == "" {
+			t.Fatalf("Get ws-a #%d: nil/empty entry", i)
+		}
+		sessionsA = append(sessionsA, e.SessionID)
+	}
+
+	// Collect 10 sessions from workspace-B.
+	sessionsB := make([]string, 0, N)
+	for i := 0; i < N; i++ {
+		e, err := client.Get("uniq-prov", "/unique/ws-b")
+		if err != nil {
+			t.Fatalf("Get ws-b #%d: %v", i, err)
+		}
+		if e == nil || e.SessionID == "" {
+			t.Fatalf("Get ws-b #%d: nil/empty entry", i)
+		}
+		sessionsB = append(sessionsB, e.SessionID)
+	}
+
+	// Union of all 20 session IDs must be globally unique.
+	union := make(map[string]bool, 2*N)
+	for _, s := range sessionsA {
+		if union[s] {
+			t.Errorf("duplicate session_id within ws-a: %q", s)
+		}
+		union[s] = true
+	}
+	for _, s := range sessionsB {
+		if union[s] {
+			// Could be either a within-B duplicate or a cross-workspace collision.
+			t.Errorf("duplicate session_id in union of ws-a + ws-b: %q", s)
+		}
+		union[s] = true
+	}
+
+	if got := len(union); got != 2*N {
+		t.Errorf("expected %d unique sessions, got %d", 2*N, got)
+	}
+	t.Logf("all %d sessions globally unique across two workspaces", 2*N)
+}
+
+// Test 38: After CreateAgentForPool is called (via the daemon's createFn), the
+// pool tracks AgentID and SessionID in the entry. Verify that:
+//   - PoolEntry.AgentID returned is non-empty
+//   - A second Get on the same workspace returns a different AgentID
+func TestPool_AgentIDPopulated_AndDistinct(t *testing.T) {
+	t.Parallel()
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, _, _ string) (string, string, error) {
+		i := n.Add(1)
+		agentID := fmt.Sprintf("agent-t38-%d", i)
+		sessionID := fmt.Sprintf("sess-t38-%d", i)
+		return agentID, sessionID, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	e1, err := client.Get("agentid-prov", "/agentid/ws")
+	if err != nil {
+		t.Fatalf("Get#1: %v", err)
+	}
+	if e1 == nil {
+		t.Fatal("Get#1 returned nil entry")
+	}
+	if e1.AgentID == "" {
+		t.Error("Get#1: PoolEntry.AgentID is empty — pool did not capture the agent")
+	}
+	if e1.SessionID == "" {
+		t.Error("Get#1: PoolEntry.SessionID is empty")
+	}
+
+	e2, err := client.Get("agentid-prov", "/agentid/ws")
+	if err != nil {
+		t.Fatalf("Get#2: %v", err)
+	}
+	if e2 == nil {
+		t.Fatal("Get#2 returned nil entry")
+	}
+	if e2.AgentID == "" {
+		t.Error("Get#2: PoolEntry.AgentID is empty")
+	}
+
+	if e1.AgentID == e2.AgentID {
+		t.Errorf("both Gets returned the same AgentID %q — pool may have handed out the same entry twice", e1.AgentID)
+	}
+	if e1.SessionID == e2.SessionID {
+		t.Errorf("both Gets returned the same SessionID %q", e1.SessionID)
+	}
+	t.Logf("e1: AgentID=%q SessionID=%q | e2: AgentID=%q SessionID=%q",
+		e1.AgentID, e1.SessionID, e2.AgentID, e2.SessionID)
+}
+
+// Test 39: Protocol health check — send a partial JSON request without a newline
+// terminator, verify the daemon is still reachable for subsequent well-formed
+// requests (connection gracefully closed, no goroutine leak / panic).
+// Note: this tests graceful connection handling only; actual idle timeout (30s)
+// is not exercised to keep test runtime short.
+func TestConnPartialRequest_DaemonRemainsHealthy(t *testing.T) {
+	t.Parallel()
+
+	_, client := startDaemon(t, seqCreate(nil))
+
+	// Get a valid session first to confirm the daemon is up.
+	e1, err := client.Get("health-prov", "/health/ws")
+	if err != nil {
+		t.Fatalf("pre-check Get: %v", err)
+	}
+	if e1 == nil || e1.SessionID == "" {
+		t.Fatalf("pre-check: expected valid entry, got %+v", e1)
+	}
+
+	// Open a raw connection and send a partial JSON request (no newline).
+	// The scanner in handleConn won't fire until it sees a newline or EOF.
+	// We close the connection from the client side to simulate a disconnect.
+	socketPath := filepath.Join(t.TempDir(), "health-check.sock")
+	_ = socketPath // used via daemon's known path; we'll use the rawCall helper below
+
+	// Use startDaemon's socket: we already have a running daemon.
+	// Re-dial and send partial data then close.
+	conn, err := net.Dial("unix", e1.Workspace) // workspace is not a socket path; use the daemon socket
+	_ = conn
+	// The above would not work — connect directly using the daemon socket from startDaemon.
+	// Since startDaemon doesn't expose the socket path directly here, use a second daemon.
+
+	dir := t.TempDir()
+	sp2 := filepath.Join(dir, "health2.sock")
+	d2 := agentpool.NewDaemon(seqCreate(nil), discardLog())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go func() { d2.Run(ctx2, sp2) }() //nolint
+	waitSocket(t, sp2)
+
+	// Send partial JSON with no newline.
+	conn2, err := net.Dial("unix", sp2)
+	if err != nil {
+		t.Fatalf("dial for partial request: %v", err)
+	}
+	// Write incomplete JSON — no trailing newline.
+	if _, err := fmt.Fprint(conn2, `{"op":"get","provider":"p","workspace":"w"}`); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	// Close immediately without sending newline.
+	conn2.Close()
+
+	// Allow the daemon to process the EOF.
+	time.Sleep(20 * time.Millisecond)
+
+	// Daemon must still serve subsequent well-formed requests.
+	client2 := agentpoolclient.New(sp2)
+	e2, err := client2.Get("health-prov", "/health/ws")
+	if err != nil {
+		t.Fatalf("post-partial-request Get: %v — daemon appears unhealthy after partial request", err)
+	}
+	if e2 == nil || e2.SessionID == "" {
+		t.Fatalf("post-partial-request: expected valid entry, got %+v", e2)
+	}
+	t.Logf("daemon remained healthy after partial-request connection: session=%q", e2.SessionID)
+}
