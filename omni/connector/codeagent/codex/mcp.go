@@ -76,6 +76,9 @@ func mcpServerToRaw(s codeagent.MCPServer) (map[string]interface{}, error) {
 	if len(s.Env) > 0 {
 		cfg.Env = RawMcpServerConfigEnv(s.Env)
 	}
+	if len(s.EnvVars) > 0 {
+		cfg.EnvVars = s.EnvVars
+	}
 	if len(s.Headers) > 0 {
 		cfg.HttpHeaders = RawMcpServerConfigHttpHeaders(s.Headers)
 	}
