@@ -30,7 +30,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	shutdownMetrics := initOtel()
+	initOtel()
 	log := pkglog.NewLogger("component", "svc")
 	username := currentUsername()
 
@@ -59,10 +59,8 @@ func main() {
 
 	if err := mux.Run(ctx, log); err != nil {
 		log.Error("service error", "err", err)
-		_ = shutdownMetrics(context.Background())
 		os.Exit(1)
 	}
-	_ = shutdownMetrics(context.Background())
 }
 
 func envOr(key, def string) string {

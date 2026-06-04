@@ -333,29 +333,6 @@ func (d *defaultDaemon) removeTerminal(agentID, sessionID string) {
 	d.mu.Unlock()
 }
 
-// chunkPool recycles the short-lived stdin chunks copied out of the relay read
-// buffer. Each chunk lives only for one StdinRelay loop iteration.
-var chunkPool = sync.Pool{New: func() any {
-	b := make([]byte, 0, 4096)
-	return &b
-}}
-
-// getChunk returns a slice of length n backed by pooled storage when possible.
-func getChunk(n int) []byte {
-	ptr := chunkPool.Get().(*[]byte)
-	b := *ptr
-	if cap(b) < n {
-		return make([]byte, n)
-	}
-	return b[:n]
-}
-
-// putChunk returns a chunk to the pool. The caller must not reference it after.
-func putChunk(b []byte) {
-	s := b[:0]
-	chunkPool.Put(&s)
-}
-
 // StdinRelay reads from r in a loop, writing each chunk to the PTY first,
 // then tracking it in the input queue — so the queue only contains what was
 // successfully written.
@@ -373,23 +350,15 @@ func (d *defaultDaemon) StdinRelay(ctx context.Context, agentID, sessionID strin
 		}
 		n, err := r.Read(buf)
 		if n > 0 {
-			// chunk is consumed synchronously by writeUser + trackUserInput (both
-			// copy out the bytes and retain no reference), so it can be pooled
-			// and returned at the end of the iteration instead of heap-allocated
-			// on every read.
-			chunk := getChunk(n)
+			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 			// writeUser serialises against execPrompt so a keystroke can never
 			// land inside an in-flight exec sequence; it is deferred until exec
 			// completes, then surfaces after the prompt.
-			werr := t.writeUser(chunk)
-			if werr == nil {
-				t.trackUserInput(chunk)
-			}
-			putChunk(chunk)
-			if werr != nil {
+			if werr := t.writeUser(chunk); werr != nil {
 				return werr
 			}
+			t.trackUserInput(chunk)
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
