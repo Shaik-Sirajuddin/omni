@@ -15,6 +15,165 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ─── Full recall cycle: no send_response → max retries → force-delivered ─────
+
+// TestFullRecallCycle_MaxRetries simulates an agent that never calls send_response
+// across multiple consecutive prompt turns. The engine must inject a recall prompt
+// each turn (up to maxMandatoryToolRetries=3) and then force-deliver on the fourth
+// OnStop. The message status must be StatusDelivered at the end.
+//
+// Natural flow from Retries=0:
+//   executeLoop picks msg → Retries 0→1 (markMessagesQueued)
+//   OnUserPromptSubmit → StatusProcessing
+//   OnStop turn 1 (no tool): Retries=1 ≤ 3 → recall injected, Retries 1→2
+//   OnStop turn 2 (no tool): Retries=2 ≤ 3 → recall injected, Retries 2→3
+//   OnStop turn 3 (no tool): Retries=3 ≤ 3 → recall injected, Retries 3→4
+//   OnStop turn 4 (no tool): Retries=4 > 3 → force-delivered
+func TestFullRecallCycle_MaxRetries(t *testing.T) {
+	ctx := context.Background()
+	msgStore := message.WithTestDB(t)
+	omni := newBlockingOmniCLI()
+
+	proc := engine.New(msgStore, engine.WithTestBinary(omni))
+	engine.StartForTest(proc, ctx)
+	engine.RegisterAgentForTest(proc, "recall-cycle", "recall-cycle", "/ws", "team")
+
+	msg := hookMsg("recall-cycle-msg", "recall-cycle", "head", 1000)
+	insertEngineMessages(t, ctx, msgStore, msg)
+
+	proc.MessageArrived(ctx, "recall-cycle", "recall-cycle")
+	e1 := omni.waitForExec(t)
+
+	// Verify initial Retries=1 (executeLoop incremented via markMessagesQueued).
+	m, err := msgStore.GetMessage(ctx, "recall-cycle-msg")
+	require.NoError(t, err)
+	assert.Equal(t, 1, m.Retries, "executeLoop must set Retries=1 before first ExecInSession")
+
+	proc.OnPreSessionStart("recall-cycle", "recall-cycle", "sess-rc", "/ws")
+	proc.OnUserPromptSubmit(ctx, "recall-cycle", "sess-rc", e1.prompt)
+
+	// Turn 1: no send_response → recall injected, Retries 1→2.
+	r1 := proc.OnStop(ctx, "recall-cycle", "sess-rc")
+	require.NotNil(t, r1, "turn 1: OnStop must return recall (Retries=1 ≤ 3)")
+	m, _ = msgStore.GetMessage(ctx, "recall-cycle-msg")
+	assert.Equal(t, 2, m.Retries, "turn 1: Retries must advance to 2")
+	assert.Equal(t, message.StatusProcessing, m.Status, "message must stay Processing during recall")
+
+	// Turn 2: no send_response → recall injected, Retries 2→3.
+	r2 := proc.OnStop(ctx, "recall-cycle", "sess-rc")
+	require.NotNil(t, r2, "turn 2: OnStop must return recall (Retries=2 ≤ 3)")
+	m, _ = msgStore.GetMessage(ctx, "recall-cycle-msg")
+	assert.Equal(t, 3, m.Retries, "turn 2: Retries must advance to 3")
+	assert.Equal(t, message.StatusProcessing, m.Status)
+
+	// Turn 3: no send_response → recall injected, Retries 3→4.
+	r3 := proc.OnStop(ctx, "recall-cycle", "sess-rc")
+	require.NotNil(t, r3, "turn 3: OnStop must return recall (Retries=3 ≤ 3)")
+	m, _ = msgStore.GetMessage(ctx, "recall-cycle-msg")
+	assert.Equal(t, 4, m.Retries, "turn 3: Retries must advance to 4")
+	assert.Equal(t, message.StatusProcessing, m.Status)
+
+	// Turn 4: Retries=4 > maxMandatoryToolRetries=3 → force-delivered, no recall.
+	r4 := proc.OnStop(ctx, "recall-cycle", "sess-rc")
+	assert.Nil(t, r4, "turn 4: OnStop must NOT return recall — max retries exceeded")
+
+	m, err = msgStore.GetMessage(ctx, "recall-cycle-msg")
+	require.NoError(t, err)
+	assert.Equal(t, message.StatusDelivered, m.Status,
+		"message must be force-delivered after maxMandatoryToolRetries exceeded")
+	assert.NotNil(t, m.DeliveryTime, "DeliveryTime must be set on force-delivery")
+
+	// Agent must be Ready after force-delivery.
+	st, _ := engine.GetAgentStateForTest(proc, "recall-cycle")
+	assert.Equal(t, engine.AgentStatusReady, st.Status,
+		"agent must be Ready after force-delivery")
+
+	close(e1.relCh)
+}
+
+// TestRecallCycle_PendingMessagesWaitUntilResolved verifies that messages arriving
+// during the recall cycle (while the agent is Running and the mandatory tool is not
+// being invoked) are held and only dispatched after the recall cycle fully resolves
+// (either via send_response or force-delivery). Status stays Running throughout,
+// preventing any concurrent session from picking up the waiting messages early.
+func TestRecallCycle_PendingMessagesWaitUntilResolved(t *testing.T) {
+	ctx := context.Background()
+	msgStore := message.WithTestDB(t)
+	omni := newBlockingOmniCLI()
+
+	proc := engine.New(msgStore, engine.WithTestBinary(omni))
+	engine.StartForTest(proc, ctx)
+	engine.RegisterAgentForTest(proc, "rc-wait", "rc-wait", "/ws", "team")
+
+	// msg1: the task being recalled.
+	msg1 := hookMsg("rc-wait-msg1", "rc-wait", "head", 1000)
+	insertEngineMessages(t, ctx, msgStore, msg1)
+
+	proc.MessageArrived(ctx, "rc-wait", "rc-wait")
+	e1 := omni.waitForExec(t)
+
+	proc.OnPreSessionStart("rc-wait", "rc-wait", "sess-rcw", "/ws")
+	proc.OnUserPromptSubmit(ctx, "rc-wait", "sess-rcw", e1.prompt)
+
+	// Turn 1 recall — status stays Running.
+	r1 := proc.OnStop(ctx, "rc-wait", "sess-rcw")
+	require.NotNil(t, r1, "turn 1 must recall")
+
+	// msg2 arrives during the recall — MessageArrived spawns executeLoop.
+	// Because status is still Running, that loop must return early.
+	msg2 := hookMsg("rc-wait-msg2", "rc-wait", "head", 2000)
+	insertEngineMessages(t, ctx, msgStore, msg2)
+	proc.MessageArrived(ctx, "rc-wait", "rc-wait")
+
+	st, _ := engine.GetAgentStateForTest(proc, "rc-wait")
+	assert.Equal(t, engine.AgentStatusRunning, st.Status,
+		"agent must stay Running during recall — msg2's executeLoop must exit early")
+
+	// No second ExecInSession must fire while the recall session is active.
+	select {
+	case spurious := <-omni.execCh:
+		close(spurious.relCh)
+		t.Fatalf("unexpected ExecInSession for %q during recall cycle — status must block new sessions", spurious.agentID)
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// Turn 2 recall — still running, msg2 still waiting.
+	r2 := proc.OnStop(ctx, "rc-wait", "sess-rcw")
+	require.NotNil(t, r2, "turn 2 must recall")
+
+	select {
+	case spurious := <-omni.execCh:
+		close(spurious.relCh)
+		t.Fatalf("unexpected ExecInSession for %q on turn 2 — msg2 must still be held", spurious.agentID)
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// Turn 3 recall.
+	r3 := proc.OnStop(ctx, "rc-wait", "sess-rcw")
+	require.NotNil(t, r3, "turn 3 must recall")
+
+	// Turn 4: force-delivered — agent becomes Ready, post-loop retry picks msg2.
+	r4 := proc.OnStop(ctx, "rc-wait", "sess-rcw")
+	assert.Nil(t, r4, "turn 4 must force-deliver (max retries exceeded)")
+
+	m1, err := msgStore.GetMessage(ctx, "rc-wait-msg1")
+	require.NoError(t, err)
+	assert.Equal(t, message.StatusDelivered, m1.Status, "msg1 must be force-delivered")
+
+	// Release e1 → post-loop retry fires → picks msg2.
+	close(e1.relCh)
+
+	e2 := omni.waitForExec(t)
+	assert.Equal(t, "rc-wait", e2.agentID, "msg2 must be dispatched after recall cycle resolves")
+	close(e2.relCh)
+
+	time.Sleep(20 * time.Millisecond)
+	m2, err := msgStore.GetMessage(ctx, "rc-wait-msg2")
+	require.NoError(t, err)
+	assert.NotEqual(t, message.StatusInQueue, m2.Status,
+		"msg2 must have been picked after the recall cycle resolved")
+}
+
 // ─── Fix 1: queue_time reset does NOT revert StatusDelivered ─────────────────
 
 // TestFix1_QueueTimeResetPreservesDelivered verifies that the post-ExecInSession
