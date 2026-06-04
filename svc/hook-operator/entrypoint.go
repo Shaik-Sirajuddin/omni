@@ -33,6 +33,21 @@ func (ep *entryPoint) Hook(payload HookPayload) (Result, error) {
 	result := aggregate(results)
 
 	logger.Debug("hook: aggregated result", "event", payload.EventName, "continue", result.Continue, "suppress_output", result.SuppressOutput)
+
+	if result.Continue {
+		logger.Info("hook: continue", "event", payload.EventName)
+	} else {
+		reason := ""
+		if result.StopReason != nil {
+			reason = *result.StopReason
+		}
+		logger.Info("hook: blocked", "event", payload.EventName, "stop_reason", reason)
+	}
+
+	if result.SystemMessage != nil && *result.SystemMessage != "" {
+		logger.Info("hook: system_message", "event", payload.EventName, "message", *result.SystemMessage)
+	}
+
 	return result, nil
 }
 
