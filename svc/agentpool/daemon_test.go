@@ -1313,3 +1313,424 @@ func TestDaemonRestart_StaleSocketCleanedAndReseeds(t *testing.T) {
 		}
 	}
 }
+
+// ── New tests: concurrency limits, error propagation, edge cases ──────────────
+
+// Test 26: MaxParallel=2 — peak concurrent createFn calls never exceeds 2.
+// 8 concurrent Gets with a 50ms slowCreate; peak atomic counter must be ≤ 2.
+func TestMaxParallel_EnforcedConcurrently(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maxP = 2
+		N    = 8
+	)
+
+	var peak atomic.Int32
+	var cur atomic.Int32
+
+	createFn := func(ctx context.Context, _, _ string) (string, string, error) {
+		c := cur.Add(1)
+		for {
+			p := peak.Load()
+			if c <= p || peak.CompareAndSwap(p, c) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		cur.Add(-1)
+		id := fmt.Sprintf("s26-%d", time.Now().UnixNano())
+		return "a-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "p26", Workspace: "w26", WorkspaceMin: 0, MaxParallel: maxP,
+	}); err != nil {
+		t.Fatalf("RegisterConfig: %v", err)
+	}
+
+	type result struct {
+		entry *agentpool.PoolEntry
+		err   error
+	}
+	results := make(chan result, N)
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			e, err := client.Get("p26", "w26")
+			results <- result{e, err}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Gets timed out")
+	}
+	close(results)
+
+	for r := range results {
+		if r.err != nil {
+			t.Errorf("Get error: %v", r.err)
+			continue
+		}
+		if r.entry == nil || r.entry.SessionID == "" {
+			t.Error("nil or empty entry returned")
+		}
+	}
+
+	p := peak.Load()
+	t.Logf("peak concurrent creates: %d (limit %d)", p, maxP)
+	if p > int32(maxP) {
+		t.Errorf("peak concurrent creates %d exceeded MaxParallel=%d", p, maxP)
+	}
+}
+
+// Test 27: MaxParallel=1 — 5 concurrent Gets serialise; no two createFn calls
+// overlap. Verified by recording call start/end times and checking non-overlap.
+func TestMaxParallel_One_Serializes(t *testing.T) {
+	t.Parallel()
+
+	const N = 5
+
+	type span struct {
+		start, end time.Time
+	}
+	spans := make([]span, 0, N)
+	var spanMu sync.Mutex
+
+	createFn := func(ctx context.Context, _, _ string) (string, string, error) {
+		start := time.Now()
+		time.Sleep(20 * time.Millisecond)
+		end := time.Now()
+		spanMu.Lock()
+		spans = append(spans, span{start, end})
+		spanMu.Unlock()
+		id := fmt.Sprintf("s27-%d", time.Now().UnixNano())
+		return "a-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "p27", Workspace: "w27", WorkspaceMin: 0, MaxParallel: 1,
+	}); err != nil {
+		t.Fatalf("RegisterConfig: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			client.Get("p27", "w27") //nolint
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Gets timed out with MaxParallel=1")
+	}
+
+	spanMu.Lock()
+	defer spanMu.Unlock()
+
+	if len(spans) != N {
+		t.Fatalf("expected %d spans, got %d", N, len(spans))
+	}
+
+	// Sort spans by start time.
+	for i := 1; i < len(spans); i++ {
+		for j := i; j > 0 && spans[j].start.Before(spans[j-1].start); j-- {
+			spans[j], spans[j-1] = spans[j-1], spans[j]
+		}
+	}
+
+	// With MaxParallel=1 each call must start after the previous ended.
+	for i := 1; i < len(spans); i++ {
+		if spans[i].start.Before(spans[i-1].end) {
+			overlap := spans[i-1].end.Sub(spans[i].start)
+			t.Errorf("span[%d] overlapped span[%d] by %v (MaxParallel=1 violated)", i, i-1, overlap)
+		}
+	}
+}
+
+// Test 28: createFn always returns an error; Get must return ok=false with a
+// non-empty Error field.
+func TestGet_ErrorFromCreate_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	createFn := func(_ context.Context, _, _ string) (string, string, error) {
+		return "", "", fmt.Errorf("simulated create failure")
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	entry, err := client.Get("p28", "w28")
+	// The client returns (nil, error) when OK=false.
+	if err == nil && entry != nil {
+		t.Fatalf("expected error from failing createFn, got entry %+v", entry)
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error from client.Get when createFn fails")
+	}
+}
+
+// Test 29: Two (provider, workspace) pairs have independent queues and entries.
+// Register min=2 for both; drain both; assert Provider/Workspace fields match.
+func TestGet_MultipleProviderWorkspaceIndependent(t *testing.T) {
+	t.Parallel()
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, provider, workspace string) (string, string, error) {
+		id := fmt.Sprintf("%s:%s:%d", provider, workspace, n.Add(1))
+		return "a-" + id, id, nil
+	}
+
+	createdA := make(chan string, 10)
+	createdB := make(chan string, 10)
+
+	wrappedCreate := func(ctx context.Context, provider, workspace string) (string, string, error) {
+		agentID, sessionID, err := createFn(ctx, provider, workspace)
+		if err != nil {
+			return "", "", err
+		}
+		if provider == "provA29" {
+			select {
+			case createdA <- sessionID:
+			default:
+			}
+		} else {
+			select {
+			case createdB <- sessionID:
+			default:
+			}
+		}
+		return agentID, sessionID, nil
+	}
+
+	_, client := startDaemon(t, wrappedCreate)
+
+	const min = 2
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "provA29", Workspace: "wsA29", WorkspaceMin: min, MaxParallel: 5,
+	}); err != nil {
+		t.Fatalf("RegisterConfig A: %v", err)
+	}
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "provB29", Workspace: "wsB29", WorkspaceMin: min, MaxParallel: 5,
+	}); err != nil {
+		t.Fatalf("RegisterConfig B: %v", err)
+	}
+
+	// Wait for both queues to fill.
+	drainN(t, createdA, min)
+	drainN(t, createdB, min)
+
+	seenA := map[string]bool{}
+	for i := 0; i < min; i++ {
+		e, err := client.Get("provA29", "wsA29")
+		if err != nil {
+			t.Fatalf("Get A#%d: %v", i, err)
+		}
+		if e.Provider != "provA29" || e.Workspace != "wsA29" {
+			t.Errorf("entry A#%d has wrong fields: %+v", i, e)
+		}
+		if seenA[e.SessionID] {
+			t.Errorf("duplicate session in A: %s", e.SessionID)
+		}
+		seenA[e.SessionID] = true
+	}
+
+	seenB := map[string]bool{}
+	for i := 0; i < min; i++ {
+		e, err := client.Get("provB29", "wsB29")
+		if err != nil {
+			t.Fatalf("Get B#%d: %v", i, err)
+		}
+		if e.Provider != "provB29" || e.Workspace != "wsB29" {
+			t.Errorf("entry B#%d has wrong fields: %+v", i, e)
+		}
+		if seenB[e.SessionID] {
+			t.Errorf("duplicate session in B: %s", e.SessionID)
+		}
+		seenB[e.SessionID] = true
+	}
+
+	// All session IDs must be distinct across both providers.
+	for sid := range seenB {
+		if seenA[sid] {
+			t.Errorf("session_id %q appeared in both provA29 and provB29 queues", sid)
+		}
+	}
+}
+
+// Test 30: WorkspaceMin=0 — RegisterConfig with min=0 must not trigger any
+// background creates. After 100ms silence, a Get fires on-demand and returns ok.
+func TestRegisterConfig_ZeroMin_NoReplenish(t *testing.T) {
+	t.Parallel()
+
+	created := make(chan string, 20)
+	_, client := startDaemon(t, seqCreate(created))
+
+	if err := client.RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "p30", Workspace: "w30", WorkspaceMin: 0, MaxParallel: 5,
+	}); err != nil {
+		t.Fatalf("RegisterConfig: %v", err)
+	}
+
+	// Wait 100ms — no background creates should fire for min=0.
+	time.Sleep(100 * time.Millisecond)
+	if n := countReady(created); n != 0 {
+		t.Errorf("expected 0 creates after RegisterConfig(min=0), got %d", n)
+	}
+
+	// Get must succeed via on-demand create.
+	entry, err := client.Get("p30", "w30")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry == nil || entry.SessionID == "" {
+		t.Fatalf("expected valid entry, got %+v", entry)
+	}
+}
+
+// Test 31: Cancel daemon context while a Get is blocking inside a slow createFn.
+// The Get must return (ok or error) within 2 seconds — no goroutine leak.
+func TestGet_ContextCancellation(t *testing.T) {
+	// No t.Parallel() — we control the daemon context directly.
+
+	blocking := make(chan struct{}) // closed when createFn should unblock
+	entered := make(chan struct{}, 1)
+
+	createFn := func(ctx context.Context, _, _ string) (string, string, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-blocking:
+			return "a31", "s31", nil
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		}
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "pool31.sock")
+	d := agentpool.NewDaemon(createFn, discardLog())
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- d.Run(ctx, socketPath) }()
+	waitSocket(t, socketPath)
+
+	if err := agentpoolclient.New(socketPath).RegisterConfig(agentpool.ProviderPoolConfig{
+		Provider: "p31", Workspace: "w31", WorkspaceMin: 0, MaxParallel: 5,
+	}); err != nil {
+		cancel()
+		t.Fatalf("RegisterConfig: %v", err)
+	}
+
+	getDone := make(chan struct{})
+	go func() {
+		defer close(getDone)
+		agentpoolclient.New(socketPath).Get("p31", "w31") //nolint — result irrelevant
+	}()
+
+	// Wait until createFn has been entered.
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("createFn never entered")
+	}
+
+	// Cancel daemon context — all blocking spawnOne calls should unblock.
+	cancel()
+
+	// The Get goroutine must return within 2 seconds.
+	select {
+	case <-getDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Get did not return within 2s after daemon context cancelled")
+	}
+
+	// Daemon Run should also return cleanly.
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("Run returned non-nil error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+
+	// Unblock createFn so any remaining goroutines can exit.
+	close(blocking)
+}
+
+// Test 32: 100 concurrent Gets with a fast createFn — all must succeed with
+// non-empty, unique session IDs. Primary purpose: race detector coverage.
+func TestGet_100Concurrent_NoDataRace(t *testing.T) {
+	t.Parallel()
+
+	const N = 100
+
+	var n atomic.Int64
+	createFn := func(_ context.Context, _, _ string) (string, string, error) {
+		id := fmt.Sprintf("s32-%d", n.Add(1))
+		return "a-" + id, id, nil
+	}
+
+	_, client := startDaemon(t, createFn)
+
+	type result struct {
+		entry *agentpool.PoolEntry
+		err   error
+	}
+	results := make(chan result, N)
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			e, err := client.Get("p32", "w32")
+			results <- result{e, err}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("100 concurrent Gets timed out")
+	}
+	close(results)
+
+	seen := make(map[string]bool, N)
+	okCount := 0
+	for r := range results {
+		if r.err != nil {
+			t.Errorf("Get error: %v", r.err)
+			continue
+		}
+		if r.entry == nil || r.entry.SessionID == "" {
+			t.Error("nil or empty session_id in entry")
+			continue
+		}
+		if seen[r.entry.SessionID] {
+			t.Errorf("duplicate session_id: %s", r.entry.SessionID)
+		}
+		seen[r.entry.SessionID] = true
+		okCount++
+	}
+	if okCount != N {
+		t.Errorf("expected %d successful Gets, got %d", N, okCount)
+	}
+}
