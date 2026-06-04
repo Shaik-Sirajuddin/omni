@@ -13,11 +13,11 @@ import (
 )
 
 type taskPauser interface {
-	PauseTask(agentID, taskID, creatorAgentID string)
+	PauseTask(string, TaskKey)
 }
 
 type taskResumer interface {
-	ResumeTask(ctx context.Context, agentID, taskID, creatorAgentID string)
+	ResumeTask(context.Context, string, TaskKey)
 }
 
 func (s *Service) SendMessageWithMetadata(ctx context.Context, sender SenderSpec, payload PayloadMessage) (SendMessageResponse, error) {
@@ -91,7 +91,7 @@ func (s *Service) SendResponseBatch(ctx context.Context, sender SenderSpec, item
 	groupID := uuid.NewString()
 	msgs := make([]*message.Message, 0, len(items))
 	originals := make([]*message.Message, 0, len(items))
-	results := make([]QueryResultResponse, 0, len(items))
+	results := make([]SendResponseResponse, 0, len(items))
 	for _, item := range items {
 		msg, original, resp, err := s.buildSendResponseMessageForResolvedSender(ctx, sender, item, groupID)
 		if err != nil {
@@ -115,62 +115,102 @@ func (s *Service) SendResponseBatch(ctx context.Context, sender SenderSpec, item
 	return SendResponseBatchResponse{Results: results, Count: len(results), GroupID: groupID}, nil
 }
 
-func (s *Service) PauseTask(agentID string, taskKey TaskKey) error {
+func (s *Service) PauseTask(agentID string, key TaskKey) error {
 	if strings.TrimSpace(agentID) == "" {
 		return BadRequest("agent_id is required")
 	}
-	if strings.TrimSpace(taskKey.TaskID) == "" {
+	if strings.TrimSpace(key.TaskID) == "" {
 		return BadRequest("task_id is required")
 	}
-	if strings.TrimSpace(taskKey.CreatorAgentID) == "" {
+	if strings.TrimSpace(key.CreatorAgentID) == "" {
 		return BadRequest("creator_agent_id is required")
 	}
 	pauser, ok := s.delivery.(taskPauser)
 	if !ok {
-		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task control not yet implemented — PauseTask requires T1/T2/T3 engine changes")}
+		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task pause is not available")}
 	}
-	pauser.PauseTask(agentID, taskKey.TaskID, taskKey.CreatorAgentID)
+	pauser.PauseTask(agentID, key)
 	return nil
 }
 
-func (s *Service) ResumeTask(ctx context.Context, agentID string, taskKey TaskKey) error {
+func (s *Service) ResumeTask(ctx context.Context, agentID string, key TaskKey) error {
 	if strings.TrimSpace(agentID) == "" {
 		return BadRequest("agent_id is required")
 	}
-	if strings.TrimSpace(taskKey.TaskID) == "" {
+	if strings.TrimSpace(key.TaskID) == "" {
 		return BadRequest("task_id is required")
 	}
-	if strings.TrimSpace(taskKey.CreatorAgentID) == "" {
+	if strings.TrimSpace(key.CreatorAgentID) == "" {
 		return BadRequest("creator_agent_id is required")
 	}
 	resumer, ok := s.delivery.(taskResumer)
 	if !ok {
-		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task control not yet implemented — ResumeTask requires T1/T2/T3 engine changes")}
+		return ServiceError{status: http.StatusNotImplemented, err: fmt.Errorf("task resume is not available")}
 	}
-	resumer.ResumeTask(ctx, agentID, taskKey.TaskID, taskKey.CreatorAgentID)
+	resumer.ResumeTask(ctx, agentID, key)
 	return nil
 }
 
-func (s *Service) buildSendResponseMessage(ctx context.Context, sender SenderSpec, item SendResponseItem, groupID string) (*message.Message, *message.Message, QueryResultResponse, error) {
+func (s *Service) buildSendResponseMessage(ctx context.Context, sender SenderSpec, item SendResponseItem, groupID string) (*message.Message, *message.Message, SendResponseResponse, error) {
 	if err := validateQueryResultSender(sender); err != nil {
-		return nil, nil, QueryResultResponse{}, BadRequest(err.Error())
+		return nil, nil, SendResponseResponse{}, BadRequest(err.Error())
 	}
 	sender, err := s.resolveSender(ctx, sender, PayloadMessage{Workspace: sender.Workspace})
 	if err != nil {
-		return nil, nil, QueryResultResponse{}, BadRequest(err.Error())
+		return nil, nil, SendResponseResponse{}, BadRequest(err.Error())
 	}
 	return s.buildSendResponseMessageForResolvedSender(ctx, sender, item, groupID)
 }
 
-func (s *Service) buildSendResponseMessageForResolvedSender(ctx context.Context, sender SenderSpec, item SendResponseItem, groupID string) (*message.Message, *message.Message, QueryResultResponse, error) {
+func (s *Service) buildSendResponseMessageForResolvedSender(ctx context.Context, sender SenderSpec, item SendResponseItem, groupID string) (*message.Message, *message.Message, SendResponseResponse, error) {
 	msg, original, resp, err := s.buildQueryResultMessageForResolvedSender(ctx, sender, QueryResultItem(item), groupID)
 	if err != nil {
-		return nil, nil, QueryResultResponse{}, err
+		return nil, nil, SendResponseResponse{}, err
 	}
 	if err := validateResponseSchema(original.Schema, item.Response); err != nil {
-		return nil, nil, QueryResultResponse{}, ServiceError{status: http.StatusBadRequest, err: err}
+		return nil, nil, SendResponseResponse{}, err
 	}
-	return msg, original, resp, nil
+	msg.TaskID = original.TaskID
+	msg.CreatorAgentID = original.CreatorAgentID
+	return msg, original, SendResponseResponse(resp), nil
+}
+
+func validateResponseSchema(schemaText, response string) error {
+	schemaText = strings.TrimSpace(schemaText)
+	if schemaText == "" {
+		return nil
+	}
+	response = strings.TrimSpace(response)
+	if response == "" {
+		return BadRequest("response is required")
+	}
+	var schemaDoc any
+	if err := json.Unmarshal([]byte(schemaText), &schemaDoc); err != nil {
+		return schemaMismatchError(fmt.Sprintf("invalid stored schema: %v", err))
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("response-schema.json", schemaDoc); err != nil {
+		return schemaMismatchError(fmt.Sprintf("invalid stored schema: %v", err))
+	}
+	schema, err := compiler.Compile("response-schema.json")
+	if err != nil {
+		return schemaMismatchError(fmt.Sprintf("invalid stored schema: %v", err))
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(response), &payload); err != nil {
+		return schemaMismatchError(fmt.Sprintf("response is not valid json: %v", err))
+	}
+	if err := schema.Validate(payload); err != nil {
+		return schemaMismatchError(err.Error())
+	}
+	return nil
+}
+
+func schemaMismatchError(details string) error {
+	return ServiceError{
+		status: http.StatusBadRequest,
+		err:    fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, details),
+	}
 }
 
 // TaskSummary is a lightweight task record returned by ListTasks.
@@ -212,21 +252,20 @@ type ActiveTaskResponse struct {
 }
 
 // ListTasks returns a summary of all tasks (by distinct task_id) received by agentID.
-// If agentID is empty, it defaults to the sender's agent ID (self).
 func (s *Service) ListTasks(ctx context.Context, agentID string) (TaskListResponse, error) {
 	if strings.TrimSpace(agentID) == "" {
 		return TaskListResponse{}, BadRequest("agent_id is required")
 	}
 	msgs, err := s.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id,
+		        status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND task_id != '' ORDER BY sent_time DESC`,
 		agentID,
 	)
 	if err != nil {
 		return TaskListResponse{}, InternalError(err)
 	}
-	// Aggregate by task_id.
 	seen := make(map[string]*TaskSummary)
 	order := make([]string, 0)
 	for _, m := range msgs {
@@ -263,7 +302,8 @@ func (s *Service) GetTask(ctx context.Context, agentID, taskID string) (TaskDeta
 	}
 	msgs, err := s.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id,
+		        status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND task_id = ? ORDER BY sent_time ASC`,
 		agentID, taskID,
 	)
@@ -283,14 +323,14 @@ func (s *Service) GetTask(ctx context.Context, agentID, taskID string) (TaskDeta
 }
 
 // ListActiveTask returns currently in-flight (queued or processing) task messages for agentID.
-// Defaults to self when agentID is empty.
 func (s *Service) ListActiveTask(ctx context.Context, agentID string) (ActiveTaskResponse, error) {
 	if strings.TrimSpace(agentID) == "" {
 		return ActiveTaskResponse{}, BadRequest("agent_id is required")
 	}
 	msgs, err := s.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id,
+		        status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND task_id != '' AND status IN (?, ?, ?)
 		 ORDER BY sent_time DESC`,
 		agentID, string(message.StatusInQueue), string(message.StatusQueued), string(message.StatusProcessing),
@@ -308,31 +348,4 @@ func (s *Service) ListActiveTask(ctx context.Context, agentID string) (ActiveTas
 		})
 	}
 	return ActiveTaskResponse{Tasks: tasks, Count: len(tasks)}, nil
-}
-
-func validateResponseSchema(schemaText, response string) error {
-	schemaText = strings.TrimSpace(schemaText)
-	if schemaText == "" {
-		return nil
-	}
-	var schemaDoc any
-	if err := json.Unmarshal([]byte(schemaText), &schemaDoc); err != nil {
-		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, "invalid stored schema: "+err.Error())
-	}
-	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource("response-schema.json", schemaDoc); err != nil {
-		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, "invalid stored schema: "+err.Error())
-	}
-	schema, err := compiler.Compile("response-schema.json")
-	if err != nil {
-		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, "invalid stored schema: "+err.Error())
-	}
-	var payload any
-	if err := json.Unmarshal([]byte(response), &payload); err != nil {
-		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, "response must be valid JSON: "+err.Error())
-	}
-	if err := schema.Validate(payload); err != nil {
-		return fmt.Errorf(`{"error":"schema_mismatch","details":%q}`, err.Error())
-	}
-	return nil
 }

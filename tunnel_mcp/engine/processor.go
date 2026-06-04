@@ -359,7 +359,7 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 			cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
 			stale, err := e.msgStore.RawQuery(ctx,
 				`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-				        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+				        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 				 FROM messages WHERE status = ? AND queue_time > 0 AND queue_time < ?`,
 				string(statusQueued), cutoff,
 			)
@@ -482,7 +482,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// Case (b): no processing messages — fall through to T3 check + normal pick.
 	processingRecall, procErr := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ? AND request_type != ?`,
 		agentID, string(message.StatusProcessing), string(reqTypeInstant),
 	)
@@ -515,7 +515,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		var activeExecute []*message.Message
 		activeExecute, err = e.msgStore.RawQuery(ctx,
 			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 			 FROM messages WHERE "to" = ? AND status IN (?, ?) AND request_type = ? LIMIT 1`,
 			agentID, string(statusQueued), string(message.StatusProcessing), string(reqTypeExecute),
 		)
@@ -770,7 +770,7 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 	if taskMux != nil && !taskMux.IsZero() {
 		msgs, err = e.msgStore.RawQuery(e.ctx,
 			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 			 FROM messages WHERE "to" = ? AND status = ?
 			 ORDER BY CASE WHEN task_id = ? AND creator_agent_id = ? THEN 0 ELSE 1 END, sent_time ASC LIMIT 20`,
 			agentID, string(message.StatusInQueue), taskMux.TaskID, taskMux.CreatorAgentID,
@@ -778,7 +778,7 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 	} else {
 		msgs, err = e.msgStore.RawQuery(e.ctx,
 			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 			 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
 			agentID, string(message.StatusInQueue),
 		)
@@ -844,7 +844,7 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 func (e *ProcessingEngine) pickBypassQueries(agentID string, key TaskKey) ([]*message.Message, error) {
 	return e.msgStore.RawQuery(e.ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ? AND task_id = ? AND creator_agent_id = ? AND request_type = ?
 		 ORDER BY sent_time ASC LIMIT 5`,
 		agentID, string(message.StatusInQueue), key.TaskID, key.CreatorAgentID, string(reqTypeQuery),
@@ -1086,7 +1086,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	// → Stop turns without being cleared here.
 	stale, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ?`,
 		agentID, string(message.StatusProcessing),
 	)
@@ -1107,7 +1107,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
 	staleQueued, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ? AND queue_time > 0 AND queue_time < ?`,
 		agentID, string(statusQueued), cutoff,
 	)
@@ -1194,7 +1194,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 
 	msgs, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE "to" = ? AND status = ?`,
 		agentID, string(message.StatusProcessing),
 	)

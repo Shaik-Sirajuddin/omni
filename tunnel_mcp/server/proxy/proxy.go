@@ -31,9 +31,6 @@ func WithAuthToken(token string) Option {
 	return func(p *ProxyServer) { p.authToken = token }
 }
 
-// New creates a ProxyServer that forwards calls to the daemon's service HTTP endpoint.
-// When serviceHTTPBind is "unix", connects via unix socket at socketPath.
-// Otherwise connects via TCP to serviceAddr.
 func New(serviceAddr, socketPath, serviceHTTPBind string, opts ...Option) *ProxyServer {
 	var (
 		transport *http.Transport
@@ -87,15 +84,23 @@ func (p *ProxyServer) SendGroupMessage(ctx context.Context, sender service.Sende
 	return resp, err
 }
 
-func (p *ProxyServer) QueryResult(ctx context.Context, sender service.SenderSpec, item service.QueryResultItem) (service.QueryResultResponse, error) {
-	return p.SendResponse(ctx, sender, service.SendResponseItem(item))
-}
-
 func (p *ProxyServer) SendResponse(ctx context.Context, sender service.SenderSpec, item service.SendResponseItem) (service.SendResponseResponse, error) {
-	logger.Debug("proxy query_result", "sender_id", sender.ID, "message_id", item.MessageID)
+	logger.Debug("proxy send_response", "sender_id", sender.ID, "message_id", item.MessageID)
 	var resp service.SendResponseResponse
 	err := p.post(ctx, sender, "/send-response", service.SendResponseRequest{Item: item}, &resp)
 	return resp, err
+}
+
+func (p *ProxyServer) SendResponseBatch(ctx context.Context, sender service.SenderSpec, items []service.SendResponseItem) (service.SendResponseBatchResponse, error) {
+	logger.Debug("proxy send_response_batch", "sender_id", sender.ID, "count", len(items))
+	var resp service.SendResponseBatchResponse
+	err := p.post(ctx, sender, "/send-response-batch", service.SendResponseBatchRequest{Items: items}, &resp)
+	return resp, err
+}
+
+func (p *ProxyServer) QueryResult(ctx context.Context, sender service.SenderSpec, item service.QueryResultItem) (service.QueryResultResponse, error) {
+	resp, err := p.SendResponse(ctx, sender, service.SendResponseItem(item))
+	return service.QueryResultResponse(resp), err
 }
 
 func (p *ProxyServer) QueryResultBatch(ctx context.Context, sender service.SenderSpec, items []service.QueryResultItem) (service.QueryResultBatchResponse, error) {
@@ -103,14 +108,8 @@ func (p *ProxyServer) QueryResultBatch(ctx context.Context, sender service.Sende
 	for _, item := range items {
 		sendItems = append(sendItems, service.SendResponseItem(item))
 	}
-	return p.SendResponseBatch(ctx, sender, sendItems)
-}
-
-func (p *ProxyServer) SendResponseBatch(ctx context.Context, sender service.SenderSpec, items []service.SendResponseItem) (service.SendResponseBatchResponse, error) {
-	logger.Debug("proxy query_result_batch", "sender_id", sender.ID, "count", len(items))
-	var resp service.SendResponseBatchResponse
-	err := p.post(ctx, sender, "/send-response-batch", service.SendResponseBatchRequest{Items: items}, &resp)
-	return resp, err
+	resp, err := p.SendResponseBatch(ctx, sender, sendItems)
+	return service.QueryResultBatchResponse(resp), err
 }
 
 func (p *ProxyServer) GetMessage(ctx context.Context, id string) (*service.MessageResponse, error) {
@@ -175,6 +174,13 @@ func (p *ProxyServer) ResumeAgent(ctx context.Context, sender service.SenderSpec
 	return p.post(ctx, sender, "/agent-resume", service.AgentControlRequest{AgentID: agentID}, nil)
 }
 
+func (p *ProxyServer) CheckStatus(ctx context.Context, sender service.SenderSpec, agentID string) (*service.AgentStatusResponse, error) {
+	logger.Debug("proxy check_status", "agent_id", agentID)
+	var resp service.AgentStatusResponse
+	err := p.get(ctx, sender, "/check-status", url.Values{"agent_id": {agentID}}, &resp)
+	return &resp, err
+}
+
 func (p *ProxyServer) PauseTask(ctx context.Context, sender service.SenderSpec, req service.TaskControlRequest) error {
 	logger.Debug("proxy pause_task", "agent_id", req.AgentID, "task_id", req.TaskID, "creator_agent_id", req.CreatorAgentID)
 	return p.post(ctx, sender, "/pause-task", req, nil)
@@ -183,13 +189,6 @@ func (p *ProxyServer) PauseTask(ctx context.Context, sender service.SenderSpec, 
 func (p *ProxyServer) ResumeTask(ctx context.Context, sender service.SenderSpec, req service.TaskControlRequest) error {
 	logger.Debug("proxy resume_task", "agent_id", req.AgentID, "task_id", req.TaskID, "creator_agent_id", req.CreatorAgentID)
 	return p.post(ctx, sender, "/resume-task", req, nil)
-}
-
-func (p *ProxyServer) CheckStatus(ctx context.Context, sender service.SenderSpec, agentID string) (*service.AgentStatusResponse, error) {
-	logger.Debug("proxy check_status", "agent_id", agentID)
-	var resp service.AgentStatusResponse
-	err := p.get(ctx, sender, "/check-status", url.Values{"agent_id": {agentID}}, &resp)
-	return &resp, err
 }
 
 func (p *ProxyServer) post(ctx context.Context, sender service.SenderSpec, path string, body any, out any) error {

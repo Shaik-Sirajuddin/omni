@@ -36,19 +36,19 @@ type Message struct {
 	RequestType  RequestType `json:"request_type"`
 	IsResponse   bool        `json:"is_response"`
 	ShouldReply  bool        `json:"should_reply"`
-	RespondedTo  string      `json:"responded_to"`
-	Prompt       string      `json:"prompt"`
-	Refs         string      `json:"refs"` // JSON blob
-	Workspace    string      `json:"workspace"`
+	RespondedTo    string      `json:"responded_to"`
+	Prompt         string      `json:"prompt"`
+	Schema         string      `json:"schema,omitempty"`
+	Refs           string      `json:"refs"` // JSON blob
+	Workspace      string      `json:"workspace"`
+	TaskID         string      `json:"task_id,omitempty"`
+	CreatorAgentID string      `json:"creator_agent_id,omitempty"`
 	Status       Status      `json:"status"`
 	Retries      int         `json:"retries"`
 	QueueTime      int64  `json:"queue_time"`              // unix ms; 0 = not queued
 	DeliveryTime   *int64 `json:"delivery_time,omitempty"` // unix ms, nil if not yet delivered
 	SentTime       int64  `json:"sent_time"`               // unix ms
 	GroupID        string `json:"group_id"`
-	TaskID         string `json:"task_id" db:"task_id"`
-	CreatorAgentID string `json:"creator_agent_id" db:"creator_agent_id"`
-	Schema         string `json:"schema" db:"schema"` // compact JSON; empty = no schema
 }
 
 // MessageGroup is a logical batch of related messages.

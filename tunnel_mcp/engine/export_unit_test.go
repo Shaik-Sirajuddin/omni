@@ -61,7 +61,7 @@ func RunQueueSweepOnceForTest(e *ProcessingEngine, ctx context.Context) {
 	cutoff := int64(math.MaxInt64)
 	stale, err := e.msgStore.RawQuery(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id, task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE status = ? AND queue_time > 0 AND queue_time < ?`,
 		string(statusQueued), cutoff,
 	)

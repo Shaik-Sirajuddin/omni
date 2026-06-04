@@ -245,8 +245,7 @@ func (s *Service) List(ctx context.Context, req ListRequest) ([]*message.Message
 	}
 
 	query := `SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id,
-		        task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages`
 	args := []any{}
 	switch {

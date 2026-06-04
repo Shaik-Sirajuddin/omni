@@ -18,7 +18,7 @@ import (
 
 var logger = pkglog.NewLogger("component", "mcp-handler")
 
-const serverInstructions = `You are an agent connected to the tunnel MCP messaging system.
+const serverInstructions = `You are an agent connected to the axolink messaging system.
 
 Authentication headers (set by your runtime — do not override):
   X-SENDER-ID:       your agent id
@@ -113,7 +113,7 @@ func senderFromContext(ctx context.Context) (service.SenderSpec, error) {
 
 func (h *Handler) buildMCPServer() *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
-		"tunnel-mcp",
+		"axolink",
 		h.serviceVersion,
 		mcpserver.WithToolCapabilities(true),
 		mcpserver.WithPromptCapabilities(true),
@@ -125,7 +125,7 @@ func (h *Handler) buildMCPServer() *mcpserver.MCPServer {
 }
 
 func (h *Handler) MCPHandler() http.Handler {
-	logger.Info("mcp streamable handler initializing", "service", "tunnel-mcp", "version", h.serviceVersion)
+	logger.Info("mcp streamable handler initializing", "service", "axolink", "version", h.serviceVersion)
 	return mcpserver.NewStreamableHTTPServer(
 		h.buildMCPServer(),
 		mcpserver.WithHTTPContextFunc(senderContextFromRequest),
@@ -160,7 +160,7 @@ func (h *Handler) registerMCPPrompts(s *mcpserver.MCPServer) {
 				"  to_name: %q  (or use to_id if you know the agent UUID)\n"+
 				"  to_workspace: <workspace directory of the target agent, if known>\n"+
 				"  prompt: <your message text>\n"+
-				"  schema: <optional JSON schema for the expected response>\n"+
+				"  schema: <optional JSON schema string for the expected response>\n"+
 				"  request_type: %q\n\n"+
 				"request_type values:\n"+
 				"  query   — you expect a response; the recipient must call send_response.\n"+
@@ -220,6 +220,17 @@ func (h *Handler) registerMCPPrompts(s *mcpserver.MCPServer) {
 	})
 }
 
+func sendResponseArraySchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"message_id": map[string]any{"type": "string"},
+			"response":   map[string]any{"type": "string"},
+		},
+		"required": []string{"message_id", "response"},
+	}
+}
+
 func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 	logger.Debug("mcp tools registering")
 	mcpServer.AddTool(mcp.NewTool("health",
@@ -234,11 +245,11 @@ func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 		mcp.WithString("to_workspace", mcp.Description("Target workspace for name lookup.")),
 		mcp.WithString("workspace", mcp.Description("Target agent workspace.")),
 		mcp.WithString("prompt", mcp.Required(), mcp.Description("Prompt to send.")),
+		mcp.WithString("schema", mcp.Description("Optional JSON schema for the expected response payload.")),
 		mcp.WithString("refs", mcp.Description("Optional JSON refs object.")),
-		mcp.WithString("schema", mcp.Description("Optional JSON schema that validates the eventual response.")),
-		mcp.WithString("task_id", mcp.Description("Optional task id to persist on the message.")),
-		mcp.WithString("creator_agent_id", mcp.Description("Optional creator agent id to persist on the message.")),
 		mcp.WithString("request_type", mcp.Description("Request type: query, instant, execute.")),
+		mcp.WithString("task_id", mcp.Description("Optional task identifier for related messages.")),
+		mcp.WithString("creator_agent_id", mcp.Description("Optional creator agent id paired with task_id.")),
 	), h.handleMCPSendMessage)
 
 	mcpServer.AddTool(mcp.NewTool("send_group_message",
@@ -264,69 +275,36 @@ func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 
 	mcpServer.AddTool(mcp.NewTool("send_response",
 		mcp.WithDescription("Send a response for one query or execute message."),
-		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original message id.")),
-		mcp.WithString("response", mcp.Required(), mcp.Description("Response text. If the original message stored a schema, this must be valid JSON matching it.")),
+		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original query or execute message id.")),
+		mcp.WithString("response", mcp.Required(), mcp.Description("Response text.")),
 	), h.handleMCPSendResponse)
 
 	mcpServer.AddTool(mcp.NewTool("send_response_batch",
 		mcp.WithDescription("Send responses for multiple query or execute messages."),
-		mcp.WithArray("results",
-			mcp.Required(),
-			mcp.Description("Array of response objects."),
-			mcp.Items(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"message_id": map[string]any{"type": "string"},
-					"response":   map[string]any{"type": "string"},
-				},
-				"required": []string{"message_id", "response"},
-			}),
-		),
+		mcp.WithArray("results", mcp.Required(), mcp.Description("Array of response objects."), mcp.Items(sendResponseArraySchema())),
 	), h.handleMCPSendResponseBatch)
 
 	mcpServer.AddTool(mcp.NewTool("query_result",
-		mcp.WithDescription("Send a response for one query message."),
+		mcp.WithDescription("Legacy alias for send_response."),
 		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original query message id.")),
 		mcp.WithString("response", mcp.Required(), mcp.Description("Response text.")),
-	), h.handleMCPSendResponse)
+	), h.handleMCPQueryResult)
 
 	mcpServer.AddTool(mcp.NewTool("query_result_batch",
-		mcp.WithDescription("Send responses for multiple query messages."),
-		mcp.WithArray("results",
-			mcp.Required(),
-			mcp.Description("Array of query result objects."),
-			mcp.Items(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"message_id": map[string]any{"type": "string"},
-					"response":   map[string]any{"type": "string"},
-				},
-				"required": []string{"message_id", "response"},
-			}),
-		),
-	), h.handleMCPSendResponseBatch)
+		mcp.WithDescription("Legacy alias for send_response_batch."),
+		mcp.WithArray("results", mcp.Required(), mcp.Description("Array of response objects."), mcp.Items(sendResponseArraySchema())),
+	), h.handleMCPQueryResultBatch)
 
 	mcpServer.AddTool(mcp.NewTool("update_message",
-		mcp.WithDescription("Alias for send_response."),
-		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original message id.")),
+		mcp.WithDescription("Legacy alias for send_response."),
+		mcp.WithString("message_id", mcp.Required(), mcp.Description("Original execute message id.")),
 		mcp.WithString("response", mcp.Required(), mcp.Description("Response text.")),
-	), h.handleMCPSendResponse)
+	), h.handleMCPUpdateMessage)
 
 	mcpServer.AddTool(mcp.NewTool("update_messages",
-		mcp.WithDescription("Alias for send_response_batch."),
-		mcp.WithArray("results",
-			mcp.Required(),
-			mcp.Description("Array of response objects."),
-			mcp.Items(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"message_id": map[string]any{"type": "string"},
-					"response":   map[string]any{"type": "string"},
-				},
-				"required": []string{"message_id", "response"},
-			}),
-		),
-	), h.handleMCPSendResponseBatch)
+		mcp.WithDescription("Legacy alias for send_response_batch."),
+		mcp.WithArray("results", mcp.Required(), mcp.Description("Array of response objects."), mcp.Items(sendResponseArraySchema())),
+	), h.handleMCPUpdateMessages)
 
 	mcpServer.AddTool(mcp.NewTool("list_agents",
 		mcp.WithDescription("List agents in the sender workspace."),
@@ -346,24 +324,24 @@ func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
 	), h.handleMCPAgentResume)
 
-	mcpServer.AddTool(mcp.NewTool("pause_task",
-		mcp.WithDescription("Pause delivery for a specific task owned by a creator agent."),
-		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
-		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
-		mcp.WithString("creator_agent_id", mcp.Required(), mcp.Description("Creator agent id.")),
-	), h.handleMCPPauseTask)
-
-	mcpServer.AddTool(mcp.NewTool("resume_task",
-		mcp.WithDescription("Resume delivery for a specific task owned by a creator agent."),
-		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
-		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
-		mcp.WithString("creator_agent_id", mcp.Required(), mcp.Description("Creator agent id.")),
-	), h.handleMCPResumeTask)
-
 	mcpServer.AddTool(mcp.NewTool("check_status",
 		mcp.WithDescription("Fetch agent status."),
 		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
 	), h.handleMCPCheckStatus)
+
+	mcpServer.AddTool(mcp.NewTool("pause_task",
+		mcp.WithDescription("Pause delivery for a specific task on an agent."),
+		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
+		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
+		mcp.WithString("creator_agent_id", mcp.Required(), mcp.Description("Task creator agent id.")),
+	), h.handleMCPPauseTask)
+
+	mcpServer.AddTool(mcp.NewTool("resume_task",
+		mcp.WithDescription("Resume delivery for a specific task on an agent."),
+		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent id.")),
+		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task id.")),
+		mcp.WithString("creator_agent_id", mcp.Required(), mcp.Description("Task creator agent id.")),
+	), h.handleMCPResumeTask)
 
 	mcpServer.AddTool(mcp.NewTool("list_tasks",
 		mcp.WithDescription("List all tasks (by task_id) received by an agent. Defaults to the caller's own agent_id when omitted."),
@@ -386,90 +364,65 @@ func (h *Handler) registerMCPTools(mcpServer *mcpserver.MCPServer) {
 
 func (h *Handler) handleMCPHealth(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	logger.Debug("mcp tool call received", "tool", "health")
-	resp := service.HealthResponse{
-		Status:    "ok",
-		Service:   "tunnel-mcp",
-		Version:   h.serviceVersion,
-		Transport: "mcp",
-	}
-	logger.Debug("mcp tool call succeeded", "tool", "health", "status", resp.Status)
+	resp := service.HealthResponse{Status: "ok", Service: "tunnel-mcp", Version: h.serviceVersion, Transport: "mcp"}
 	return resultJSON(resp, nil)
 }
 
 func (h *Handler) handleMCPSendMessage(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sender, err := senderFromContext(ctx)
 	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "send_message")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
-	logger.Debug("mcp tool call received", "tool", "send_message", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace)
 	payload, err := payloadFromToolRequest(request)
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "send_message", "sender_id", sender.ID)
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
-	logger.Debug("mcp tool payload mapped", "tool", "send_message", "sender_id", sender.ID, "to_type", payload.To.Type, "to_id", payload.To.ID, "to_name", payload.To.Name, "request_type", payload.RequestType, "prompt_bytes", len(payload.Prompt), "refs_bytes", len(payload.Refs))
 	resp, err := h.service.SendMessageWithMetadata(ctx, sender, payload)
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "send_message", "sender_id", sender.ID, "to_type", payload.To.Type, "to_id", payload.To.ID, "to_name", payload.To.Name)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "send_message", "sender_id", sender.ID, "message_id", resp.MessageID)
+		return toolResultError(err), nil
 	}
-	return resultJSON(resp, err)
+	return resultJSON(resp, nil)
 }
 
 func (h *Handler) handleMCPSendGroupMessage(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sender, err := senderFromContext(ctx)
 	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "send_group_message")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
-	logger.Debug("mcp tool call received", "tool", "send_group_message", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace)
 	messagesJSON, err := request.RequireString("messages_json")
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "send_group_message", "sender_id", sender.ID)
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
 	var payloads []service.PayloadMessage
 	if err := json.Unmarshal([]byte(messagesJSON), &payloads); err != nil {
-		logger.Error("mcp tool messages_json decode failed", "err", err, "tool", "send_group_message", "sender_id", sender.ID, "bytes", len(messagesJSON))
 		return mcp.NewToolResultError("messages_json must be a JSON array"), nil
 	}
-	logger.Debug("mcp tool payload mapped", "tool", "send_group_message", "sender_id", sender.ID, "message_count", len(payloads), "payload_bytes", len(messagesJSON))
 	resp, err := h.service.SendGroupMessageWithMetadata(ctx, sender, payloads)
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "send_group_message", "sender_id", sender.ID, "message_count", len(payloads))
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "send_group_message", "sender_id", sender.ID, "group_id", resp.GroupID, "message_count", len(resp.MessageIDs))
+		return toolResultError(err), nil
 	}
-	return resultJSON(resp, err)
+	return resultJSON(resp, nil)
 }
 
 func (h *Handler) handleMCPGetMessage(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	logger.Debug("mcp tool call received", "tool", "get_message")
 	id, err := request.RequireString("id")
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "get_message")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
 	resp, err := h.service.GetMessage(ctx, id)
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "get_message", "message_id", id)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "get_message", "message_id", id, "status", resp.Status)
+		return toolResultError(err), nil
 	}
-	return resultJSON(resp, err)
+	return resultJSON(resp, nil)
 }
 
 func (h *Handler) handleMCPListMessages(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sender, err := senderFromContext(ctx)
 	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "list_messages")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
 	ids, err := idsFromToolRequest(request)
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "list_messages", "sender_id", sender.ID)
 		return mcp.NewToolResultError("ids_json must be a JSON array of strings"), nil
 	}
 	req := service.ListMessagesRequest{
@@ -483,188 +436,260 @@ func (h *Handler) handleMCPListMessages(ctx context.Context, request mcp.CallToo
 			Limit:  request.GetInt("limit", 50),
 		},
 	}
-	logger.Debug("mcp tool call received", "tool", "list_messages", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace, "id", req.ID, "ids_count", len(req.IDs), "group_id", req.GroupID, "from", req.From, "to", req.To, "offset", req.Page.Offset, "limit", req.Page.Limit)
 	resp, err := h.service.ListMessages(ctx, sender, req)
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "list_messages", "sender_id", sender.ID, "id", req.ID, "ids_count", len(req.IDs), "group_id", req.GroupID, "from", req.From, "to", req.To)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "list_messages", "sender_id", sender.ID, "count", len(resp))
+		return toolResultError(err), nil
 	}
-	return resultJSON(listMessagesToolResponse{Messages: nonNilMessages(resp), Count: len(resp)}, err)
+	return resultJSON(listMessagesToolResponse{Messages: nonNilMessages(resp), Count: len(resp)}, nil)
+}
+
+func (h *Handler) handleMCPSendResponse(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sender, err := senderFromContext(ctx)
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	messageID, err := request.RequireString("message_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	response, err := request.RequireString("response")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	resp, err := h.service.SendResponse(ctx, sender, service.SendResponseItem{MessageID: messageID, Response: response})
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	return resultJSON(resp, nil)
+}
+
+func (h *Handler) handleMCPSendResponseBatch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sender, err := senderFromContext(ctx)
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	items, err := sendResponseItemsFromToolRequest(request)
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	resp, err := h.service.SendResponseBatch(ctx, sender, items)
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	return resultJSON(resp, nil)
 }
 
 func (h *Handler) handleMCPQueryResult(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return h.handleMCPSendResponse(ctx, request)
 }
 
-func (h *Handler) handleMCPSendResponse(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sender, err := senderFromContext(ctx)
-	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "send_response")
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	messageID, err := request.RequireString("message_id")
-	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "send_response", "sender_id", sender.ID)
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	response, err := request.RequireString("response")
-	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "send_response", "sender_id", sender.ID, "message_id", messageID)
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	logger.Debug("mcp tool call received", "tool", "send_response", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace, "message_id", messageID, "response_bytes", len(response))
-	resp, err := h.service.SendResponse(ctx, sender, service.SendResponseItem{MessageID: messageID, Response: response})
-	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "send_response", "sender_id", sender.ID, "message_id", messageID)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "send_response", "sender_id", sender.ID, "message_id", resp.MessageID, "responded_to", resp.RespondedTo)
-	}
-	return toolResultJSON(resp, err)
-}
-
 func (h *Handler) handleMCPQueryResultBatch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return h.handleMCPSendResponseBatch(ctx, request)
 }
 
-func (h *Handler) handleMCPSendResponseBatch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sender, err := senderFromContext(ctx)
-	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "send_response_batch")
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	items, err := sendResponseItemsFromToolRequest(request)
-	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "send_response_batch", "sender_id", sender.ID)
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	logger.Debug("mcp tool call received", "tool", "send_response_batch", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace, "count", len(items))
-	resp, err := h.service.SendResponseBatch(ctx, sender, items)
-	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "send_response_batch", "sender_id", sender.ID, "count", len(items))
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "send_response_batch", "sender_id", sender.ID, "count", resp.Count, "group_id", resp.GroupID)
-	}
-	return toolResultJSON(resp, err)
+func (h *Handler) handleMCPUpdateMessage(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return h.handleMCPSendResponse(ctx, request)
+}
+
+func (h *Handler) handleMCPUpdateMessages(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return h.handleMCPSendResponseBatch(ctx, request)
 }
 
 func (h *Handler) handleMCPListAgents(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sender, err := senderFromContext(ctx)
 	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "list_agents")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
-	logger.Debug("mcp tool call received", "tool", "list_agents", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace)
 	resp, err := h.service.ListAgents(sender.Workspace)
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "list_agents", "sender_id", sender.ID, "workspace", sender.Workspace)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "list_agents", "sender_id", sender.ID, "count", len(resp))
+		return toolResultError(err), nil
 	}
-	return resultJSON(listAgentsToolResponse{Agents: nonNilAgents(resp), Count: len(resp)}, err)
+	return resultJSON(listAgentsToolResponse{Agents: nonNilAgents(resp), Count: len(resp)}, nil)
 }
 
-func (h *Handler) handleMCPListTeams(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sender, err := senderFromContext(ctx)
-	if err != nil {
-		logger.Error("mcp tool sender validation failed", "err", err, "tool", "list_teams")
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	logger.Debug("mcp tool call received", "tool", "list_teams", "sender_id", sender.ID, "sender_type", sender.Kind, "workspace", sender.Workspace)
+func (h *Handler) handleMCPListTeams(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	resp, err := h.service.ListTeams()
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "list_teams", "sender_id", sender.ID)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "list_teams", "sender_id", sender.ID, "count", resp.Count)
+		return toolResultError(err), nil
 	}
 	if resp.Teams == nil {
 		resp.Teams = []*operator.TeamInfo{}
 	}
-	return resultJSON(resp, err)
+	return resultJSON(resp, nil)
 }
 
 func (h *Handler) handleMCPAgentInterrupt(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	logger.Debug("mcp tool call received", "tool", "agent_interrupt")
 	agentID, err := request.RequireString("agent_id")
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "agent_interrupt")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
-	err = h.service.InterruptAgent(agentID)
-	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "agent_interrupt", "agent_id", agentID)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "agent_interrupt", "agent_id", agentID)
+	if err := h.service.InterruptAgent(agentID); err != nil {
+		return toolResultError(err), nil
 	}
-	return resultJSON(map[string]string{"status": "interrupted"}, err)
+	return resultJSON(map[string]string{"status": "interrupted"}, nil)
 }
 
 func (h *Handler) handleMCPAgentResume(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	logger.Debug("mcp tool call received", "tool", "agent_resume")
 	agentID, err := request.RequireString("agent_id")
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "agent_resume")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
-	err = h.service.ResumeAgent(ctx, agentID)
-	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "agent_resume", "agent_id", agentID)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "agent_resume", "agent_id", agentID)
+	if err := h.service.ResumeAgent(ctx, agentID); err != nil {
+		return toolResultError(err), nil
 	}
-	return resultJSON(map[string]string{"status": "resumed"}, err)
-}
-
-func (h *Handler) handleMCPPauseTask(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	logger.Debug("mcp tool call received", "tool", "pause_task")
-	agentID, err := request.RequireString("agent_id")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	taskID, err := request.RequireString("task_id")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	creatorAgentID, err := request.RequireString("creator_agent_id")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	err = h.service.PauseTask(agentID, service.TaskKey{TaskID: taskID, CreatorAgentID: creatorAgentID})
-	return resultJSON(map[string]string{"status": "paused"}, err)
-}
-
-func (h *Handler) handleMCPResumeTask(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	logger.Debug("mcp tool call received", "tool", "resume_task")
-	agentID, err := request.RequireString("agent_id")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	taskID, err := request.RequireString("task_id")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	creatorAgentID, err := request.RequireString("creator_agent_id")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	err = h.service.ResumeTask(ctx, agentID, service.TaskKey{TaskID: taskID, CreatorAgentID: creatorAgentID})
-	return resultJSON(map[string]string{"status": "resumed"}, err)
+	return resultJSON(map[string]string{"status": "resumed"}, nil)
 }
 
 func (h *Handler) handleMCPCheckStatus(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	logger.Debug("mcp tool call received", "tool", "check_status")
 	agentID, err := request.RequireString("agent_id")
 	if err != nil {
-		logger.Error("mcp tool payload validation failed", "err", err, "tool", "check_status")
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolResultError(err), nil
 	}
 	resp, err := h.service.CheckStatus(ctx, agentID)
 	if err != nil {
-		logger.Error("mcp tool service call failed", "err", err, "tool", "check_status", "agent_id", agentID)
-	} else {
-		logger.Debug("mcp tool call succeeded", "tool", "check_status", "agent_id", agentID, "status", resp.Status)
+		return toolResultError(err), nil
 	}
-	return resultJSON(resp, err)
+	return resultJSON(resp, nil)
+}
+
+func (h *Handler) handleMCPPauseTask(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	agentID, err := request.RequireString("agent_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	taskID, err := request.RequireString("task_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	creatorAgentID, err := request.RequireString("creator_agent_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	if err := h.service.PauseTask(agentID, service.TaskKey{TaskID: taskID, CreatorAgentID: creatorAgentID}); err != nil {
+		return toolResultError(err), nil
+	}
+	return resultJSON(map[string]string{"status": "paused"}, nil)
+}
+
+func (h *Handler) handleMCPResumeTask(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	agentID, err := request.RequireString("agent_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	taskID, err := request.RequireString("task_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	creatorAgentID, err := request.RequireString("creator_agent_id")
+	if err != nil {
+		return toolResultError(err), nil
+	}
+	if err := h.service.ResumeTask(ctx, agentID, service.TaskKey{TaskID: taskID, CreatorAgentID: creatorAgentID}); err != nil {
+		return toolResultError(err), nil
+	}
+	return resultJSON(map[string]string{"status": "resumed"}, nil)
+}
+
+func payloadFromToolRequest(request mcp.CallToolRequest) (service.PayloadMessage, error) {
+	prompt, err := request.RequireString("prompt")
+	if err != nil {
+		return service.PayloadMessage{}, err
+	}
+	refs := json.RawMessage(request.GetString("refs", "{}"))
+	return service.PayloadMessage{
+		To: service.TargetSpec{
+			Type:      request.GetString("to_type", ""),
+			ID:        request.GetString("to_id", ""),
+			Name:      request.GetString("to_name", ""),
+			Workspace: request.GetString("to_workspace", ""),
+		},
+		Workspace:      request.GetString("workspace", ""),
+		Prompt:         prompt,
+		Schema:         request.GetString("schema", ""),
+		Refs:           refs,
+		RequestType:    request.GetString("request_type", ""),
+		TaskID:         request.GetString("task_id", ""),
+		CreatorAgentID: request.GetString("creator_agent_id", ""),
+	}, nil
+}
+
+func idsFromToolRequest(request mcp.CallToolRequest) ([]string, error) {
+	idsJSON := strings.TrimSpace(request.GetString("ids_json", ""))
+	if idsJSON == "" {
+		return nil, nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(idsJSON), &ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func queryResultItemsFromToolRequest(request mcp.CallToolRequest) ([]service.QueryResultItem, error) {
+	items, err := sendResponseItemsFromToolRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.QueryResultItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, service.QueryResultItem(item))
+	}
+	return out, nil
+}
+
+func sendResponseItemsFromToolRequest(request mcp.CallToolRequest) ([]service.SendResponseItem, error) {
+	raw, ok := request.GetArguments()["results"]
+	if !ok {
+		return nil, fmt.Errorf("results is required")
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("results must be an array")
+	}
+	var items []service.SendResponseItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil, fmt.Errorf("results must be an array of {message_id,response}")
+	}
+	return items, nil
+}
+
+func resultJSON[T any](payload T, err error) (*mcp.CallToolResult, error) {
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	result, err := mcp.NewToolResultJSON(payload)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func toolResultError(err error) *mcp.CallToolResult {
+	if err == nil {
+		return mcp.NewToolResultError("unknown error")
+	}
+	msg := err.Error()
+	if strings.HasPrefix(strings.TrimSpace(msg), "{") {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{mcp.TextContent{Type: "text", Text: msg}},
+		}
+	}
+	return mcp.NewToolResultError(msg)
+}
+
+func nonNilMessages(messages []*message.Message) []*message.Message {
+	if messages == nil {
+		return []*message.Message{}
+	}
+	return messages
+}
+
+func nonNilAgents(list []*agents.AgentInfo) []*agents.AgentInfo {
+	if list == nil {
+		return []*agents.AgentInfo{}
+	}
+	return list
 }
 
 func (h *Handler) handleMCPListTasks(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -726,106 +751,4 @@ func (h *Handler) handleMCPListActiveTasks(ctx context.Context, request mcp.Call
 		logger.Debug("mcp tool call succeeded", "tool", "list_active_tasks", "agent_id", agentID, "count", resp.Count)
 	}
 	return resultJSON(resp, err)
-}
-
-func payloadFromToolRequest(request mcp.CallToolRequest) (service.PayloadMessage, error) {
-	prompt, err := request.RequireString("prompt")
-	if err != nil {
-		return service.PayloadMessage{}, err
-	}
-	refs := json.RawMessage(request.GetString("refs", "{}"))
-	return service.PayloadMessage{
-		To: service.TargetSpec{
-			Type:      request.GetString("to_type", ""),
-			ID:        request.GetString("to_id", ""),
-			Name:      request.GetString("to_name", ""),
-			Workspace: request.GetString("to_workspace", ""),
-		},
-		Workspace:      request.GetString("workspace", ""),
-		Prompt:         prompt,
-		Refs:           refs,
-		Schema:         request.GetString("schema", ""),
-		TaskID:         request.GetString("task_id", ""),
-		CreatorAgentID: request.GetString("creator_agent_id", ""),
-		RequestType:    request.GetString("request_type", ""),
-	}, nil
-}
-
-func idsFromToolRequest(request mcp.CallToolRequest) ([]string, error) {
-	idsJSON := strings.TrimSpace(request.GetString("ids_json", ""))
-	if idsJSON == "" {
-		return nil, nil
-	}
-	var ids []string
-	if err := json.Unmarshal([]byte(idsJSON), &ids); err != nil {
-		return nil, err
-	}
-	return ids, nil
-}
-
-func queryResultItemsFromToolRequest(request mcp.CallToolRequest) ([]service.QueryResultItem, error) {
-	items, err := sendResponseItemsFromToolRequest(request)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]service.QueryResultItem, 0, len(items))
-	for _, item := range items {
-		out = append(out, service.QueryResultItem(item))
-	}
-	return out, nil
-}
-
-func sendResponseItemsFromToolRequest(request mcp.CallToolRequest) ([]service.SendResponseItem, error) {
-	raw, ok := request.GetArguments()["results"]
-	if !ok {
-		return nil, fmt.Errorf("results is required")
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("results must be an array")
-	}
-	var items []service.SendResponseItem
-	if err := json.Unmarshal(data, &items); err != nil {
-		return nil, fmt.Errorf("results must be an array of {message_id,response}")
-	}
-	return items, nil
-}
-
-func resultJSON[T any](payload T, err error) (*mcp.CallToolResult, error) {
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	result, err := mcp.NewToolResultJSON(payload)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func toolResultJSON[T any](payload T, err error) (*mcp.CallToolResult, error) {
-	if err != nil {
-		if service.StatusFromError(err) == http.StatusBadRequest && strings.HasPrefix(err.Error(), `{"error":"schema_mismatch"`) {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	result, err := mcp.NewToolResultJSON(payload)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func nonNilMessages(messages []*message.Message) []*message.Message {
-	if messages == nil {
-		return []*message.Message{}
-	}
-	return messages
-}
-
-func nonNilAgents(list []*agents.AgentInfo) []*agents.AgentInfo {
-	if list == nil {
-		return []*agents.AgentInfo{}
-	}
-	return list
 }

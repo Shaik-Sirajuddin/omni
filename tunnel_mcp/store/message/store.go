@@ -57,14 +57,14 @@ func (s *sqlMessageStore) InsertMessage(ctx context.Context, msg *Message) error
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages
 		 (id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		  responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id,
-		  task_id, creator_agent_id, schema)
+		  responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id,
+		  status, retries, queue_time, delivery_time, sent_time, group_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		msg.ID, msg.To, msg.From, string(msg.FromSpec), string(msg.ToSpec),
 		string(msg.RequestType), boolToInt(msg.IsResponse), boolToInt(msg.ShouldReply),
-		msg.RespondedTo, msg.Prompt, msg.Refs, msg.Workspace, string(msg.Status),
+		msg.RespondedTo, msg.Prompt, msg.Schema, msg.Refs, msg.Workspace,
+		msg.TaskID, msg.CreatorAgentID, string(msg.Status),
 		msg.Retries, msg.QueueTime, msg.DeliveryTime, msg.SentTime, msg.GroupID,
-		msg.TaskID, msg.CreatorAgentID, msg.Schema,
 	)
 	if err != nil {
 		logger.Error("insert message failed", "err", err, "id", msg.ID)
@@ -86,13 +86,11 @@ func (s *sqlMessageStore) UpdateMessage(ctx context.Context, msg *Message) error
 		`UPDATE messages
 		 SET "to" = ?, "from" = ?, from_spec = ?, to_spec = ?, request_type = ?,
 		     is_response = ?, should_reply = ?, responded_to = ?, prompt = ?,
-		     refs = ?, workspace = ?, status = ?, retries = ?, queue_time = ?, delivery_time = ?, sent_time = ?, group_id = ?,
-		     task_id = ?, creator_agent_id = ?, schema = ?
+		     refs = ?, workspace = ?, status = ?, retries = ?, queue_time = ?, delivery_time = ?, sent_time = ?, group_id = ?
 		 WHERE id = ?`,
 		msg.To, msg.From, string(msg.FromSpec), string(msg.ToSpec), string(msg.RequestType),
 		boolToInt(msg.IsResponse), boolToInt(msg.ShouldReply), msg.RespondedTo, msg.Prompt,
 		msg.Refs, msg.Workspace, string(msg.Status), msg.Retries, msg.QueueTime, msg.DeliveryTime, msg.SentTime, msg.GroupID,
-		msg.TaskID, msg.CreatorAgentID, msg.Schema,
 		msg.ID,
 	)
 	if err != nil {
@@ -142,14 +140,14 @@ func (s *sqlMessageStore) InsertMessagesGroup(ctx context.Context, groupID strin
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO messages
 			 (id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			  responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id,
-			  task_id, creator_agent_id, schema)
+			  responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id,
+			  status, retries, queue_time, delivery_time, sent_time, group_id)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			msg.ID, msg.To, msg.From, string(msg.FromSpec), string(msg.ToSpec),
 			string(msg.RequestType), boolToInt(msg.IsResponse), boolToInt(msg.ShouldReply),
-			msg.RespondedTo, msg.Prompt, msg.Refs, msg.Workspace, string(msg.Status),
+			msg.RespondedTo, msg.Prompt, msg.Schema, msg.Refs, msg.Workspace,
+			msg.TaskID, msg.CreatorAgentID, string(msg.Status),
 			msg.Retries, msg.QueueTime, msg.DeliveryTime, msg.SentTime, msg.GroupID,
-			msg.TaskID, msg.CreatorAgentID, msg.Schema,
 		); err != nil {
 			logger.Error("insert group message failed", "err", err, "id", msg.ID)
 			return err
@@ -170,8 +168,7 @@ func (s *sqlMessageStore) GetMessage(ctx context.Context, id string) (*Message, 
 
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id,
-		        task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE id = ?`, id,
 	)
 	msg, err := scanMessage(row)
@@ -189,8 +186,7 @@ func (s *sqlMessageStore) GetMessages(ctx context.Context, groupID string) ([]*M
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id,
-		        task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages WHERE group_id = ? ORDER BY sent_time ASC`, groupID,
 	)
 	if err != nil {
@@ -213,8 +209,7 @@ func (s *sqlMessageStore) GetConversationMessages(ctx context.Context, from, to 
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, refs, workspace, status, retries, queue_time, delivery_time, sent_time, group_id,
-		        task_id, creator_agent_id, schema
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
 		 FROM messages
 		 WHERE (("to" = ? AND "from" = ?) OR ("to" = ? AND "from" = ?))
 		 ORDER BY sent_time ASC
@@ -323,9 +318,9 @@ func (s *sqlMessageStore) RawExec(ctx context.Context, query string, args ...any
 func scanMessage(row *sql.Row) (*Message, error) {
 	var (
 		id, to, from, fromSpec, toSpec, reqType string
-		respondedTo, prompt, refs, workspace    string
+		respondedTo, prompt, schema, refs       string
+		workspace, taskID, creatorAgentID       string
 		status, groupID                         string
-		taskID, creatorAgentID, schema          string
 		isResponse, shouldReply                 int
 		retries                                 int
 		queueTime, sentTime                     int64
@@ -333,9 +328,9 @@ func scanMessage(row *sql.Row) (*Message, error) {
 	)
 	err := row.Scan(
 		&id, &to, &from, &fromSpec, &toSpec, &reqType,
-		&isResponse, &shouldReply, &respondedTo, &prompt, &refs, &workspace, &status,
+		&isResponse, &shouldReply, &respondedTo, &prompt, &schema, &refs, &workspace,
+		&taskID, &creatorAgentID, &status,
 		&retries, &queueTime, &deliveryTime, &sentTime, &groupID,
-		&taskID, &creatorAgentID, &schema,
 	)
 	if err != nil {
 		return nil, err
@@ -345,14 +340,11 @@ func scanMessage(row *sql.Row) (*Message, error) {
 		FromSpec: Spec(fromSpec), ToSpec: Spec(toSpec),
 		RequestType: RequestType(reqType),
 		IsResponse:  isResponse == 1, ShouldReply: shouldReply == 1,
-		RespondedTo: respondedTo, Prompt: prompt, Refs: refs,
-		Workspace: workspace,
-		Status:    Status(status), Retries: retries,
-		QueueTime:      queueTime,
-		DeliveryTime:   deliveryTime, SentTime: sentTime, GroupID: groupID,
-		TaskID:         taskID,
-		CreatorAgentID: creatorAgentID,
-		Schema:         schema,
+		RespondedTo: respondedTo, Prompt: prompt, Schema: schema, Refs: refs,
+		Workspace: workspace, TaskID: taskID, CreatorAgentID: creatorAgentID,
+		Status: Status(status), Retries: retries,
+		QueueTime:    queueTime,
+		DeliveryTime: deliveryTime, SentTime: sentTime, GroupID: groupID,
 	}, nil
 }
 
@@ -361,9 +353,9 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 	for rows.Next() {
 		var (
 			id, to, from, fromSpec, toSpec, reqType string
-			respondedTo, prompt, refs, workspace    string
+			respondedTo, prompt, schema, refs       string
+			workspace, taskID, creatorAgentID       string
 			status, groupID                         string
-			taskID, creatorAgentID, schema          string
 			isResponse, shouldReply                 int
 			retries                                 int
 			queueTime, sentTime                     int64
@@ -371,9 +363,9 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 		)
 		if err := rows.Scan(
 			&id, &to, &from, &fromSpec, &toSpec, &reqType,
-			&isResponse, &shouldReply, &respondedTo, &prompt, &refs, &workspace, &status,
+			&isResponse, &shouldReply, &respondedTo, &prompt, &schema, &refs, &workspace,
+			&taskID, &creatorAgentID, &status,
 			&retries, &queueTime, &deliveryTime, &sentTime, &groupID,
-			&taskID, &creatorAgentID, &schema,
 		); err != nil {
 			return nil, err
 		}
@@ -382,14 +374,11 @@ func scanMessages(rows *sql.Rows) ([]*Message, error) {
 			FromSpec: Spec(fromSpec), ToSpec: Spec(toSpec),
 			RequestType: RequestType(reqType),
 			IsResponse:  isResponse == 1, ShouldReply: shouldReply == 1,
-			RespondedTo: respondedTo, Prompt: prompt, Refs: refs,
-			Workspace: workspace,
-			Status:    Status(status), Retries: retries,
-			QueueTime:      queueTime,
-			DeliveryTime:   deliveryTime, SentTime: sentTime, GroupID: groupID,
-			TaskID:         taskID,
-			CreatorAgentID: creatorAgentID,
-			Schema:         schema,
+			RespondedTo: respondedTo, Prompt: prompt, Schema: schema, Refs: refs,
+			Workspace: workspace, TaskID: taskID, CreatorAgentID: creatorAgentID,
+			Status: Status(status), Retries: retries,
+			QueueTime:    queueTime,
+			DeliveryTime: deliveryTime, SentTime: sentTime, GroupID: groupID,
 		})
 	}
 	return msgs, rows.Err()

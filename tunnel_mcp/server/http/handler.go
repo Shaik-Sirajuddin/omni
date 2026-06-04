@@ -59,15 +59,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/list-agents", h.handleListAgents)
 	mux.HandleFunc("/list-teams", h.handleListTeams)
 	mux.HandleFunc("/message", h.handleMessage)
-	mux.HandleFunc("/query-result", h.handleQueryResult)
-	mux.HandleFunc("/query-result-batch", h.handleQueryResultBatch)
 	mux.HandleFunc("/send-response", h.handleSendResponse)
 	mux.HandleFunc("/send-response-batch", h.handleSendResponseBatch)
+	mux.HandleFunc("/query-result", h.handleQueryResult)
+	mux.HandleFunc("/query-result-batch", h.handleQueryResultBatch)
 	mux.HandleFunc("/agent-interrupt", h.handleAgentInterrupt)
 	mux.HandleFunc("/agent-resume", h.handleAgentResume)
+	mux.HandleFunc("/check-status", h.handleCheckStatus)
 	mux.HandleFunc("/pause-task", h.handlePauseTask)
 	mux.HandleFunc("/resume-task", h.handleResumeTask)
-	mux.HandleFunc("/check-status", h.handleCheckStatus)
 	if h.hooks != nil {
 		h.hooks.RegisterHookRoutes(mux)
 	}
@@ -238,10 +238,6 @@ func (h *Handler) handleMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) handleQueryResult(w http.ResponseWriter, r *http.Request) {
-	h.handleSendResponse(w, r)
-}
-
 func (h *Handler) handleSendResponse(w http.ResponseWriter, r *http.Request) {
 	sender, ok := h.authenticate(w, r)
 	if !ok {
@@ -264,8 +260,8 @@ func (h *Handler) handleSendResponse(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
-func (h *Handler) handleQueryResultBatch(w http.ResponseWriter, r *http.Request) {
-	h.handleSendResponseBatch(w, r)
+func (h *Handler) handleQueryResult(w http.ResponseWriter, r *http.Request) {
+	h.handleSendResponse(w, r)
 }
 
 func (h *Handler) handleSendResponseBatch(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +284,10 @@ func (h *Handler) handleSendResponseBatch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusAccepted, resp)
+}
+
+func (h *Handler) handleQueryResultBatch(w http.ResponseWriter, r *http.Request) {
+	h.handleSendResponseBatch(w, r)
 }
 
 func (h *Handler) handleAgentInterrupt(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +359,7 @@ func (h *Handler) handlePauseTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := h.service.PauseTask(req.AgentID, req.TaskKey); err != nil {
+	if err := h.service.PauseTask(req.AgentID, service.TaskKey{TaskID: req.TaskID, CreatorAgentID: req.CreatorAgentID}); err != nil {
 		writeError(w, service.StatusFromError(err), err.Error())
 		return
 	}
@@ -379,7 +379,7 @@ func (h *Handler) handleResumeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := h.service.ResumeTask(r.Context(), req.AgentID, req.TaskKey); err != nil {
+	if err := h.service.ResumeTask(r.Context(), req.AgentID, service.TaskKey{TaskID: req.TaskID, CreatorAgentID: req.CreatorAgentID}); err != nil {
 		writeError(w, service.StatusFromError(err), err.Error())
 		return
 	}

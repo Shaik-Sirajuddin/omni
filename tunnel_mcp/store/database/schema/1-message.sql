@@ -15,17 +15,17 @@ CREATE TABLE IF NOT EXISTS messages (
     should_reply  INTEGER NOT NULL DEFAULT 1,
     responded_to  TEXT NOT NULL DEFAULT '',
     prompt        TEXT NOT NULL DEFAULT '',
+    schema        TEXT NOT NULL DEFAULT '',
     refs          TEXT NOT NULL DEFAULT '{}',
     workspace     TEXT NOT NULL DEFAULT '',
+    task_id       TEXT NOT NULL DEFAULT '',
+    creator_agent_id TEXT NOT NULL DEFAULT '',
     status        TEXT NOT NULL DEFAULT 'in_queue',
     retries       INTEGER NOT NULL DEFAULT 0,
     queue_time    INTEGER NOT NULL DEFAULT 0,
     delivery_time INTEGER,
     sent_time     INTEGER NOT NULL DEFAULT 0,
     group_id      TEXT NOT NULL DEFAULT '',
-    task_id       TEXT NOT NULL DEFAULT '',
-    creator_agent_id TEXT NOT NULL DEFAULT '',
-    schema        TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (group_id) REFERENCES message_groups(id)
 );
 
