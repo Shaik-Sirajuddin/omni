@@ -9,64 +9,43 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// overlapped_windows.go: the overlappedReader (outputSource impl) and the relay
-// pipe sink. Both use overlapped I/O so the daemon's always-on ConPTY reader is
-// cancellable (M3) without ever stopping reading mid-session (B1).
+// overlapped_windows.go: the blockingReader (ConPTY output source) and the relay
+// pipe sink.
 
-// overlappedReader reads the ConPTY output pipe with overlapped I/O. It is the
-// SOLE reader (B1). Cancellation discipline (M3): Close() calls CancelIoEx THEN
-// GetOverlappedResult(bWait=TRUE) so any byte that raced the cancel is accounted
-// for before we declare the read parked/closed — never leave an overlapped op in
-// flight.
+// blockingReader is the SOLE reader of the ConPTY output ANONYMOUS pipe (B1).
+// Anonymous pipes do not support overlapped I/O, and ConPTY does not reliably emit
+// to a named-pipe output, so the proven model is a plain blocking ReadFile in the
+// always-on pump goroutine, cancelled by CLOSING the handle: a CloseHandle on the
+// read end makes the in-flight blocking ReadFile return ERROR_*, which we map to
+// io.EOF. This is exactly how battle-tested Go ConPTY libraries do it, and it fits
+// the relay design where the reader never pauses mid-session (only at teardown).
 //
-// Child-reap / EOF (H5): the reader does NOT gate EOF on the process handle. It
-// keeps reading until the pipe itself returns ERROR_BROKEN_PIPE / 0-byte EOF (which
-// only happens AFTER the ConPTY has flushed every buffered byte), so the agent's
-// final output is never truncated. The proc handle is held only for kill/reap by
-// the Job Object, not consulted to decide EOF.
-type overlappedReader struct {
-	h    windows.Handle
-	proc windows.Handle
-	ev   windows.Handle
+// Child-reap / EOF (H5): EOF is NOT gated on the process handle. The read returns
+// EOF only when the pipe itself ends (ERROR_BROKEN_PIPE / 0-byte), which happens
+// after ConPTY has flushed every buffered byte, so final output is never truncated.
+type blockingReader struct {
+	h windows.Handle
 
 	mu     sync.Mutex
-	ov     windows.Overlapped
 	closed bool
-	inFlt  bool // an overlapped read is in flight
 }
 
-func newOverlappedReader(h, proc windows.Handle) *overlappedReader {
-	ev, _ := windows.CreateEvent(nil, 1, 0, nil) // manual-reset
-	r := &overlappedReader{h: h, proc: proc, ev: ev}
-	r.ov.HEvent = ev
-	return r
+func newBlockingReader(h windows.Handle) *blockingReader {
+	return &blockingReader{h: h}
 }
 
-// Read performs one overlapped ReadFile and blocks (via WaitForSingleObject on the
-// event) until bytes arrive, EOF, or Close cancels it. Returns io.EOF at true pipe
-// end (H5).
-func (r *overlappedReader) Read(p []byte) (int, error) {
+// Read does one blocking ReadFile. Returns io.EOF at true pipe end or once Close
+// has closed the handle (the blocked ReadFile then returns an error we map to EOF).
+func (r *blockingReader) Read(p []byte) (int, error) {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		return 0, io.EOF
 	}
-	windows.ResetEvent(r.ev)
-	r.inFlt = true
 	r.mu.Unlock()
 
 	var done uint32
-	err := windows.ReadFile(r.h, p, &done, &r.ov)
-	if err == windows.ERROR_IO_PENDING {
-		// Wait for completion or cancellation.
-		_, _ = windows.WaitForSingleObject(r.ev, windows.INFINITE)
-		err = windows.GetOverlappedResult(r.h, &r.ov, &done, true)
-	}
-
-	r.mu.Lock()
-	r.inFlt = false
-	closed := r.closed
-	r.mu.Unlock()
+	err := windows.ReadFile(r.h, p, &done, nil) // blocking
 
 	switch err {
 	case nil:
@@ -76,44 +55,33 @@ func (r *overlappedReader) Read(p []byte) (int, error) {
 		return int(done), nil
 	case windows.ERROR_BROKEN_PIPE, windows.ERROR_HANDLE_EOF:
 		return int(done), io.EOF // true EOF: ConPTY flushed everything (H5)
-	case windows.ERROR_OPERATION_ABORTED:
+	default:
+		// ERROR_INVALID_HANDLE / ERROR_OPERATION_ABORTED after Close closed the
+		// handle, or any other error: treat a post-close error as EOF.
+		r.mu.Lock()
+		closed := r.closed
+		r.mu.Unlock()
 		if closed {
 			return int(done), io.EOF
 		}
-		return int(done), nil // cancelled but not closed; caller may retry
-	default:
 		return int(done), err
 	}
 }
 
-// Close cancels any in-flight read with the M3 discipline (CancelIoEx THEN
-// GetOverlappedResult(bWait=TRUE)) and closes the handle. Idempotent.
-func (r *overlappedReader) Close() error {
+// Close marks the reader closed and closes the handle, which unblocks any in-flight
+// blocking ReadFile so the pump loop exits. Idempotent.
+func (r *blockingReader) Close() error {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		return nil
 	}
 	r.closed = true
-	inFlt := r.inFlt
 	r.mu.Unlock()
-
-	if inFlt {
-		// M3: cancel, THEN wait for the cancellation to land before proceeding.
-		windows.CancelIoEx(r.h, &r.ov)
-		var done uint32
-		_ = windows.GetOverlappedResult(r.h, &r.ov, &done, true)
-	}
-	windows.SetEvent(r.ev) // wake any waiter
-	if r.ev != 0 {
-		windows.CloseHandle(r.ev)
-	}
-	// Note: r.h (outRead) is owned/closed by winConPTY.close(); we don't close it
-	// here to avoid a double close.
-	return nil
+	return windows.CloseHandle(r.h)
 }
 
-var _ outputSource = (*overlappedReader)(nil)
+var _ outputSource = (*blockingReader)(nil)
 
 // pipeSink writes relayed bytes to the connected relay named pipe (overlapped).
 // Close = DisconnectNamedPipe + CloseHandle (the server-only "steal").

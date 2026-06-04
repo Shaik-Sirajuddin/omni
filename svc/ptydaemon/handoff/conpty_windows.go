@@ -48,7 +48,7 @@ type winConPTY struct {
 	thread windows.Handle
 	job    windows.Handle // kill-on-close Job Object (H5 kill-tree)
 
-	out      *overlappedReader // always-on output reader seam (B1)
+	out      *blockingReader // always-on output reader seam (B1)
 	attrList *windows.ProcThreadAttributeListContainer
 
 	pendingName string // relay pipe name currently being served (published pre-connect)
@@ -67,17 +67,17 @@ func NewWinConPTY(size Winsize, commandLine string) (*winConPTY, error) {
 	if err := windows.CreatePipe(&w.inRead, &w.inWrite, nil, 0); err != nil {
 		return nil, fmt.Errorf("CreatePipe(in): %w", err)
 	}
-	// Child stdout MUST be an overlapped-capable pipe: the always-on reader
-	// (overlappedReader) does overlapped ReadFile + CancelIoEx (B1/M3). Anonymous
-	// CreatePipe pipes are SYNCHRONOUS-ONLY — an overlapped ReadFile on one silently
-	// blocks synchronously forever and CancelIoEx cannot cancel it (the cause of the
-	// first Windows CI hang). Use a named-pipe pair whose READ end is FILE_FLAG_OVERLAPPED.
-	outRead, outWrite, oerr := newOverlappedOutputPipe()
-	if oerr != nil {
+	// Child stdout: an anonymous pipe (outWrite written by the ConPTY, outRead read
+	// by us). The always-on pump reads it with a BLOCKING ReadFile and cancels by
+	// CLOSING the handle (blockingReader). ConPTY does not reliably emit to a
+	// named-pipe output, and anonymous pipes don't support overlapped I/O — so
+	// blocking-read + close-to-cancel is the proven model (matches battle-tested Go
+	// ConPTY libraries). The always-on relay reader only stops at teardown, so it
+	// never needs mid-session overlapped cancellation.
+	if err := windows.CreatePipe(&w.outRead, &w.outWrite, nil, 0); err != nil {
 		w.cleanupPartial()
-		return nil, oerr
+		return nil, fmt.Errorf("CreatePipe(out): %w", err)
 	}
-	w.outRead, w.outWrite = outRead, outWrite
 
 	// CreatePseudoConsole(size COORD, hInput, hOutput, dwFlags, &hpcon).
 	coord := packCoord(size)
@@ -103,7 +103,7 @@ func NewWinConPTY(size Winsize, commandLine string) (*winConPTY, error) {
 		return nil, err
 	}
 
-	w.out = newOverlappedReader(w.outRead, w.proc)
+	w.out = newBlockingReader(w.outRead)
 	return w, nil
 }
 
@@ -380,10 +380,9 @@ func (w *winConPTY) close() error {
 		windows.CloseHandle(w.outWrite)
 		w.outWrite = 0
 	}
-	if w.outRead != 0 {
-		windows.CloseHandle(w.outRead)
-		w.outRead = 0
-	}
+	// outRead is owned by w.out (blockingReader); w.out.Close() above already closed
+	// it (which is also what unblocked the pump's blocking ReadFile). Don't double-close.
+	w.outRead = 0
 	// Now safe: pipes are gone, child is dead.
 	if w.hpc != 0 {
 		procClosePseudoConsole.Call(uintptr(w.hpc))
@@ -420,43 +419,6 @@ func (w *winConPTY) cleanupPartial() {
 		w.attrList.Delete()
 		w.attrList = nil
 	}
-}
-
-// newOverlappedOutputPipe creates a byte pipe whose READ end supports overlapped
-// I/O. Anonymous CreatePipe pipes do NOT support overlapped I/O — a ConPTY-killer:
-// an overlapped ReadFile on one blocks synchronously and CancelIoEx cannot cancel
-// it. So the read end is a named-pipe SERVER opened FILE_FLAG_OVERLAPPED, and the
-// write end (handed to CreatePseudoConsole as hOutput) is a synchronous client
-// handle. Both ends connect within this process, so no ConnectNamedPipe is needed:
-// the CreateFile below establishes the connection immediately.
-func newOverlappedOutputPipe() (read, write windows.Handle, err error) {
-	name, err := windows.UTF16PtrFromString(newPipeName())
-	if err != nil {
-		return 0, 0, err
-	}
-	const bufSize = 64 * 1024
-	read, err = windows.CreateNamedPipe(
-		name,
-		windows.PIPE_ACCESS_INBOUND|windows.FILE_FLAG_OVERLAPPED|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
-		windows.PIPE_TYPE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
-		1, bufSize, bufSize, 0, nil,
-	)
-	if err != nil {
-		return 0, 0, fmt.Errorf("CreateNamedPipe(out): %w", err)
-	}
-	write, err = windows.CreateFile(
-		name,
-		windows.GENERIC_WRITE,
-		0, nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_ATTRIBUTE_NORMAL,
-		0,
-	)
-	if err != nil {
-		windows.CloseHandle(read)
-		return 0, 0, fmt.Errorf("CreateFile(out write): %w", err)
-	}
-	return read, write, nil
 }
 
 // packCoord packs a Winsize into the DWORD that CreatePseudoConsole/Resize expect:
