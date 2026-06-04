@@ -437,6 +437,31 @@ func (t *PTYTerminal) setStatus(s Status) {
 	t.mu.Unlock()
 }
 
+// carryBufPool recycles the merged carry+chunk buffers built in trackUserInput
+// when a terminal sequence straddles a read boundary. The buffer is detection-
+// only and never escapes the call.
+var carryBufPool = sync.Pool{New: func() any {
+	b := make([]byte, 0, carrySize+4096)
+	return &b
+}}
+
+// getCarryBuf returns a pooled buffer pointer of length n.
+func getCarryBuf(n int) *[]byte {
+	ptr := carryBufPool.Get().(*[]byte)
+	if cap(*ptr) < n {
+		b := make([]byte, n)
+		return &b
+	}
+	*ptr = (*ptr)[:n]
+	return ptr
+}
+
+// putCarryBuf returns a buffer to the pool. The caller must not reference it after.
+func putCarryBuf(ptr *[]byte) {
+	*ptr = (*ptr)[:0]
+	carryBufPool.Put(ptr)
+}
+
 // trackUserInput is called by the stdin relay before forwarding each chunk
 // to the PTY master. It maintains currentInput — the always-live active buffer
 // the bot reads to reinject user input after sending a prompt.
@@ -445,9 +470,14 @@ func (t *PTYTerminal) trackUserInput(chunk []byte) {
 	defer t.userMu.Unlock()
 
 	// Prepend carry bytes to detect sequences split across chunk boundaries.
+	// buf is used only for local detection and is never retained past this call,
+	// so the merged buffer can be pooled. The carryN==0 fast path aliases chunk
+	// and allocates nothing.
 	var buf []byte
 	if t.carryN > 0 {
-		buf = make([]byte, t.carryN+len(chunk))
+		pooledCarry := getCarryBuf(t.carryN + len(chunk))
+		defer putCarryBuf(pooledCarry)
+		buf = *pooledCarry
 		copy(buf, t.carry[:t.carryN])
 		copy(buf[t.carryN:], chunk)
 		t.carryN = 0

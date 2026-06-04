@@ -32,13 +32,69 @@ type hookRunResult struct {
 	err  error
 }
 
-type executor struct{}
+type executor struct {
+	// httpClient is shared across all plain HTTP/HTTPS hook calls so keep-alive
+	// connections are pooled instead of leaked one-transport-per-request.
+	httpClient *http.Client
+	// unixClients caches one client per unix socket path; the dial closure only
+	// varies by socket path, so a single client per socket is reused for the
+	// lifetime of the operator.
+	mu          sync.Mutex
+	unixClients map[string]*http.Client
+	// resultsPool recycles the per-event result slices used by runAll.
+	resultsPool sync.Pool
+}
 
-func newExecutor() *executor { return &executor{} }
+func newExecutor() *executor {
+	return &executor{
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        32,
+				MaxIdleConnsPerHost: 8,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
+		unixClients: make(map[string]*http.Client),
+		resultsPool: sync.Pool{New: func() any {
+			s := make([]hookRunResult, 0, 8)
+			return &s
+		}},
+	}
+}
+
+// acquireResults returns a zeroed slice of length n, reusing pooled backing
+// storage when one is large enough.
+func (e *executor) acquireResults(n int) []hookRunResult {
+	ptr := e.resultsPool.Get().(*[]hookRunResult)
+	s := *ptr
+	if cap(s) < n {
+		return make([]hookRunResult, n)
+	}
+	s = s[:n]
+	for i := range s {
+		s[i] = hookRunResult{}
+	}
+	return s
+}
+
+// releaseResults returns a slice to the pool after the caller is done reading
+// it. The caller must not retain references into the slice afterwards.
+func (e *executor) releaseResults(results []hookRunResult) {
+	if results == nil {
+		return
+	}
+	for i := range results {
+		results[i] = hookRunResult{}
+	}
+	s := results[:0]
+	e.resultsPool.Put(&s)
+}
 
 // runAll executes all entries in parallel and returns their individual results.
+// The returned slice is pooled — callers should hand it to releaseResults once
+// they have finished reading it.
 func (e *executor) runAll(ctx context.Context, payload HookPayload, entries []config.HookEntry) []hookRunResult {
-	results := make([]hookRunResult, len(entries))
+	results := e.acquireResults(len(entries))
 	var wg sync.WaitGroup
 	for i, entry := range entries {
 		wg.Add(1)
@@ -100,7 +156,7 @@ func (e *executor) runCommand(ctx context.Context, payload HookPayload, command 
 //	https://host/path          — TLS HTTP
 //	unix:///path/to.sock/route — HTTP over unix socket; route is the HTTP path
 func (e *executor) runHTTP(ctx context.Context, payload HookPayload, rawURL string) hookRunResult {
-	client, httpURL, err := resolveHTTPClient(rawURL)
+	client, httpURL, err := e.resolveHTTPClient(rawURL)
 	if err != nil {
 		return hookRunResult{err: err}
 	}
@@ -144,25 +200,38 @@ func (e *executor) runHTTP(ctx context.Context, payload HookPayload, rawURL stri
 // resolveHTTPClient returns the appropriate http.Client and normalised URL.
 // For unix:// URLs the client dials via the unix socket; the returned URL
 // uses http://localhost so net/http can form a valid request.
-func resolveHTTPClient(rawURL string) (*http.Client, string, error) {
+//
+// Clients are reused: the plain HTTP/HTTPS path returns the shared client, and
+// unix:// paths return a per-socket client cached for the operator's lifetime.
+// This keeps keep-alive connection pools alive instead of allocating (and
+// leaking) a fresh transport on every hook invocation.
+func (e *executor) resolveHTTPClient(rawURL string) (*http.Client, string, error) {
 	const unixScheme = "unix://"
 	if !strings.HasPrefix(rawURL, unixScheme) {
-		return &http.Client{}, rawURL, nil
+		return e.httpClient, rawURL, nil
 	}
 
 	// unix:///tmp/hook.sock/route  →  socketPath=/tmp/hook.sock  httpPath=/route
 	rest := strings.TrimPrefix(rawURL, unixScheme)
-	// rest may look like /tmp/hook.sock/route or /tmp/hook.sock
-	// Split on the first occurrence of a path segment after the socket file.
 	socketPath, httpPath := splitUnixURL(rest)
 
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketPath)
-		},
+	e.mu.Lock()
+	client, ok := e.unixClients[socketPath]
+	if !ok {
+		sockPath := socketPath
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sockPath)
+			},
+			MaxIdleConns:    8,
+			IdleConnTimeout: 90 * time.Second,
+		}
+		client = &http.Client{Transport: transport}
+		e.unixClients[socketPath] = client
 	}
-	client := &http.Client{Transport: transport}
+	e.mu.Unlock()
+
 	return client, "http://localhost" + httpPath, nil
 }
 
