@@ -652,10 +652,21 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	e.onSessionEnd(agentID, msgs, execErr != nil, myGeneration)
 
 	// Reset queue_time so the cron sweep doesn't re-flag these messages.
+	// Re-fetch each message from DB: OnStop (inside ExecInSession) may have already marked them
+	// StatusDelivered. Writing the stale local copy (still statusQueued) would overwrite that,
+	// causing the post-loop executeLoop to pick and re-deliver the same message.
 	now := time.Now().UnixMilli()
 	for _, msg := range msgs {
-		msg.QueueTime = now
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		fresh, ferr := e.msgStore.GetMessage(ctx, msg.ID)
+		if ferr != nil {
+			logger.Error("execute loop: get message for queue_time reset failed", "message_id", msg.ID, "err", ferr)
+			continue
+		}
+		if fresh.Status != statusQueued {
+			continue // OnStop already advanced the status; don't overwrite
+		}
+		fresh.QueueTime = now
+		if err := e.msgStore.UpdateMessage(ctx, fresh); err != nil {
 			logger.Error("execute loop: reset queue_time failed", "message_id", msg.ID, "err", err)
 		}
 	}

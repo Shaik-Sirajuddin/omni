@@ -343,3 +343,53 @@ func TestQueueSweepRetry(t *testing.T) {
 			"message with zero queue_time must not be swept (not yet timed out)")
 	})
 }
+
+// ─── TestQueueTimeResetNoDuplicateDelivery ────────────────────────────────────
+
+// TestQueueTimeResetNoDuplicateDelivery verifies that the queue_time reset after
+// ExecInSession does not overwrite a StatusDelivered message back to statusQueued.
+// Regression test for the duplicate-delivery bug: the stale local msg (statusQueued)
+// was passed to UpdateMessage, clobbering StatusDelivered set by OnStop.
+func TestQueueTimeResetNoDuplicateDelivery(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Delivered Message Not Overwritten By QueueTime Reset", func(t *testing.T) {
+		msgStore := message.WithTestDB(t)
+		cli := newLocalBlockingCLI()
+		proc := New(msgStore, WithTestBinary(cli))
+		StartForTest(proc, ctx)
+		RegisterAgentForTest(proc, "ag-nodup", "ag-nodup", "/ws", "team")
+
+		// Seed an instant message for the agent.
+		msg := &message.Message{
+			ID: "nodup-1", To: "ag-nodup", From: "sender",
+			FromSpec: message.SpecOmni, ToSpec: message.SpecOmni,
+			RequestType: message.RequestType("instant"),
+			Status:      message.StatusInQueue,
+			SentTime: 100, Prompt: "response payload", Refs: "{}",
+		}
+		require.NoError(t, msgStore.InsertMessage(ctx, msg))
+
+		proc.MessageArrived(ctx, "sender", "ag-nodup")
+		e1 := cli.waitForExec(t)
+
+		// Simulate OnStop marking the message delivered (as markDelivered would do).
+		fresh, err := msgStore.GetMessage(ctx, "nodup-1")
+		require.NoError(t, err)
+		now := int64(9999)
+		fresh.Status = message.StatusDelivered
+		fresh.DeliveryTime = &now
+		require.NoError(t, msgStore.UpdateMessage(ctx, fresh))
+
+		// Release ExecInSession — triggers queue_time reset in executeLoop.
+		close(e1.relCh)
+
+		// Give executeLoop goroutine time to finish the queue_time reset loop.
+		time.Sleep(50 * time.Millisecond)
+
+		got, err := msgStore.GetMessage(ctx, "nodup-1")
+		require.NoError(t, err)
+		assert.Equal(t, message.StatusDelivered, got.Status,
+			"queue_time reset must not overwrite StatusDelivered back to statusQueued")
+	})
+}
