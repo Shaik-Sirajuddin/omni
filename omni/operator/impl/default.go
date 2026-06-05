@@ -16,6 +16,7 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
+	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
 	agysettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/claude"
@@ -660,6 +661,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if requestedSessionID != "" {
 		sessionID = requestedSessionID
 	}
+	omnilog.InitSessionLog(sessionID)
 	if o.ptyDaemon != nil {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
@@ -1345,6 +1347,7 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	if createResult != nil && createResult.ID != "" {
 		sessionID = createResult.ID
 	}
+	omnilog.InitSessionLog(sessionID)
 	model = resolvedSessionModel(ca, model)
 
 	// Persist the session to the code session store.
