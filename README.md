@@ -4,7 +4,9 @@
 
 ![omni demo](readme.gif)
 
-Supports inter-agent messaging, auto retries, and Claude / Codex / Agy (Gemini) agent sessions out of the box.
+- Inter-agent messaging via axolink MCP transport
+- Auto retries on failed tool calls and hook events
+- Claude Code, OpenAI Codex, and Gemini (Agy) agent sessions
 
 > [!IMPORTANT]
 > ## Install
