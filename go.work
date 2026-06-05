@@ -9,5 +9,6 @@ use (
 	./svc/config_sync
 	./svc/hook-operator
 	./svc/ptydaemon
+	./tests/e2e
 	./tunnel_mcp
 )

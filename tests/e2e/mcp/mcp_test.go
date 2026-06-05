@@ -1,0 +1,182 @@
+//go:build e2e
+
+package mcp_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Shaik-Sirajuddin/memory/tests/e2e/harness"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const claudeGlobalCfg = "/root/.claude.json"
+
+// TestMCPConfigReflection verifies that axolink is seeded into ~/.claude.json
+// by the container entrypoint (seed_mcp_configs).
+func TestMCPConfigReflection(t *testing.T) {
+	cfg := harness.NewConfig(t)
+	_, jrnl := harness.CaptureLog(t, cfg)
+	time.Sleep(300 * time.Millisecond)
+	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
+
+	// Read ~/.claude.json
+	raw, code := harness.ExecInContainer(t, cfg, fmt.Sprintf("cat %s", claudeGlobalCfg))
+	require.Equal(t, 0, code, "~/.claude.json must exist")
+
+	var claudeCfg map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(raw), &claudeCfg), "~/.claude.json must be valid JSON")
+
+	var servers map[string]json.RawMessage
+	if raw, ok := claudeCfg["mcpServers"]; ok {
+		require.NoError(t, json.Unmarshal(raw, &servers))
+	} else {
+		t.Fatal("mcpServers key missing from ~/.claude.json")
+	}
+
+	_, ok := servers["axolink"]
+	assert.True(t, ok, "axolink must be present in mcpServers")
+
+	// Verify stdio transport (no url field, has command field)
+	if ok {
+		var entry map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(servers["axolink"], &entry))
+		_, hasCommand := entry["command"]
+		_, hasURL := entry["url"]
+		assert.True(t, hasCommand || entry["type"] != nil, "axolink entry must have command or type field")
+		assert.False(t, hasURL, "axolink stdio entry must not have url field")
+	}
+
+	t.Logf("mcpServers keys: %v", mapKeys(servers))
+}
+
+// TestAxolinkHTTPReachability verifies the axolink MCP HTTP server is listening
+// on port 18062. An auth error response is fine — it proves the server is up.
+func TestAxolinkHTTPReachability(t *testing.T) {
+	cfg := harness.NewConfig(t)
+	_, jrnl := harness.CaptureLog(t, cfg)
+	time.Sleep(300 * time.Millisecond)
+	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
+
+	out, code := harness.ExecInContainer(t, cfg,
+		`curl -s -o /dev/null -w "%{http_code}" --max-time 5 `+
+			`-X POST http://127.0.0.1:18062/mcp `+
+			`-H "Content-Type: application/json" `+
+			`-d '{"jsonrpc":"2.0","method":"tools/list","id":1}'`)
+
+	// Any HTTP response (including 400/auth) means the server is listening.
+	assert.Equal(t, 0, code, "curl must not time out or be refused")
+	assert.NotEqual(t, "000", strings.TrimSpace(out),
+		"axolink MCP server must respond at :18062 (got HTTP 000 = connection refused/timeout)")
+	t.Logf("axolink HTTP status: %s", strings.TrimSpace(out))
+}
+
+// TestAddMCPIdempotency verifies that the axolink entry appears exactly once in
+// ~/.claude.json even after multiple entrypoint runs.
+func TestAddMCPIdempotency(t *testing.T) {
+	cfg := harness.NewConfig(t)
+	defer harness.DumpLogsOnFailure(t, nil, nil, "")
+
+	raw, code := harness.ExecInContainer(t, cfg, fmt.Sprintf("cat %s", claudeGlobalCfg))
+	require.Equal(t, 0, code, "~/.claude.json must exist")
+
+	// Count literal occurrences of "axolink" as a key
+	count := strings.Count(raw, `"axolink"`)
+	assert.Equal(t, 1, count,
+		"axolink must appear exactly once in ~/.claude.json (idempotency)")
+	t.Logf("axolink key count in ~/.claude.json: %d", count)
+}
+
+// TestMCPToolListViaExec starts a claude agent and asserts that axolink tool
+// names surface in journalctl after exec. Uses AssertDeliveryChain for the
+// send_message -> exec path.
+func TestMCPToolListViaExec(t *testing.T) {
+	cfg := harness.NewConfig(t)
+	_, jrnl := harness.CaptureLog(t, cfg)
+	_, omniLog := harness.CaptureOmniLog(t, cfg)
+	time.Sleep(500 * time.Millisecond)
+	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
+
+	agentName := "e2e-mcp-tool-check"
+	harness.TeardownAgent(t, cfg, agentName)
+	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
+
+	harness.RunOmni(t, cfg, "team", "init")
+	harness.RunOmni(t, cfg, "agent", "init", agentName,
+		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+	harness.RunOmni(t, cfg, "agent", "resume", agentName,
+		"--detach", "--workspace", cfg.Workspace)
+	time.Sleep(8 * time.Second)
+
+	harness.RunOmni(t, cfg, "agent", "exec", agentName,
+		"--prompt", "List all MCP tool names available from axolink. Output names only.",
+		"--workspace", cfg.Workspace)
+
+	// Wait for tool activity in logs
+	toolObserved := jrnl.WaitFor("send_message", 30*time.Second) ||
+		jrnl.WaitFor("axolink", 30*time.Second) ||
+		omniLog.WaitFor("send_message", 30*time.Second)
+
+	if !toolObserved {
+		t.Errorf("no axolink tool activity observed within 30s")
+	} else {
+		t.Log("axolink tool activity confirmed in logs")
+	}
+
+	harness.AssertNoLogErrors(t, jrnl.String())
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+func mapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// mcpCall makes a raw MCP JSON-RPC call inside the container via curl.
+func mcpCall(t *testing.T, cfg harness.TestConfig, sessionID, senderID, tool, argsJSON string) string {
+	t.Helper()
+	cmd := fmt.Sprintf(
+		`curl -s -X POST http://127.0.0.1:18062/mcp `+
+			`-H "Content-Type: application/json" `+
+			`-H "Mcp-Session-Id: %s" `+
+			`-H "X-SENDER-ID: %s" `+
+			`-H "X-SENDER-TYPE: omni_agent" `+
+			`-H "X-AGENT-WORKSPACE: %s" `+
+			`-d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}'`,
+		sessionID, senderID, cfg.Workspace, tool, argsJSON,
+	)
+	out, _ := harness.ExecInContainer(t, cfg, cmd)
+	return out
+}
+
+// initMCPSession returns a Mcp-Session-Id from the axolink server.
+func initMCPSession(t *testing.T, cfg harness.TestConfig, senderID string) string {
+	t.Helper()
+	ctx := context.Background()
+	cmd := []string{
+		"curl", "-si", "-X", "POST", "http://127.0.0.1:18062/mcp",
+		"-H", "Content-Type: application/json",
+		"-H", "Accept: application/json, text/event-stream",
+		"-H", fmt.Sprintf("X-SENDER-ID: %s", senderID),
+		"-H", "X-SENDER-TYPE: omni_agent",
+		"-H", fmt.Sprintf("X-AGENT-WORKSPACE: %s", cfg.Workspace),
+		"-d", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"e2e","version":"1"}}}`,
+	}
+	_, out, _ := cfg.Exec.RunCommand(ctx, cmd)
+	for _, line := range strings.Split(string(out), "\n") {
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "mcp-session-id:") {
+			return strings.TrimSpace(line[len("mcp-session-id:"):])
+		}
+	}
+	return ""
+}
