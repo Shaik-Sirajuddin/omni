@@ -718,6 +718,21 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 
+	// Pre-write the session record so AgentResolver can route hooks that fire during
+	// startup. SessionStart fires while ca.Resume() is blocking — the codesession
+	// record must exist before that point or the first hook drops (resolver returns "").
+	if o.sessionStore != nil && sessionID != "" {
+		preSession := &omniagent.CodeSession{
+			Id:       sessionID,
+			Model:    &codeagent.Model{Provider: provider, Model: model},
+			IsActive: false,
+			Status:   "starting",
+		}
+		if createErr := o.sessionStore.CreateSession(agent.ID, preSession); createErr != nil {
+			_ = o.sessionStore.UpdateSession(agent.ID, preSession)
+		}
+	}
+
 	envs := mcpSessionEnvs(agent)
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
