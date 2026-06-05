@@ -30,7 +30,7 @@ omni agent exec <name> -- <cmd>          # run a command inside a session
 ```
 
 > [!NOTE]
-> Omni uses the MCP hooks lifecycle for agent collaboration — `PreToolUse`, `PostToolUse`, `SessionStart`, and similar events are broadcast to all registered agents. Behaviour in pre-hook handlers is intentionally untended: side-effects from one agent can influence another agent's next action. Use with awareness.
+> Omni broadcasts MCP hook events (`PreToolUse`, `PostToolUse`, `SessionStart`, …) to all agents. Pre-hook side-effects are intentional — one agent can influence another's next action.
 
 ## Development
 
