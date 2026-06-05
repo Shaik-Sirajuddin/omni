@@ -47,38 +47,6 @@
         "response"
       ]
     },
-    "PostSessionStartInput": {
-      "properties": {
-        "session_id": {
-          "type": "string",
-          "title": "Session ID",
-          "description": "Unique identifier for the agent session"
-        },
-        "transcript_path": {
-          "type": "string",
-          "title": "Transcript Path",
-          "description": "Absolute path to the session transcript file"
-        },
-        "cwd": {
-          "type": "string",
-          "title": "Working Directory",
-          "description": "Working directory of the agent process"
-        },
-        "hook_event_name": {
-          "type": "string",
-          "title": "Hook Event Name",
-          "description": "Name of the hook event that fired"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "session_id",
-        "transcript_path",
-        "cwd",
-        "hook_event_name"
-      ]
-    },
     "PostToolUseFailureInput": {
       "properties": {
         "session_id": {
@@ -228,44 +196,6 @@
         "prompt"
       ]
     },
-    "PreSessionStartInput": {
-      "properties": {
-        "session_id": {
-          "type": "string",
-          "title": "Session ID",
-          "description": "Unique identifier for the agent session"
-        },
-        "transcript_path": {
-          "type": "string",
-          "title": "Transcript Path",
-          "description": "Absolute path to the session transcript file"
-        },
-        "cwd": {
-          "type": "string",
-          "title": "Working Directory",
-          "description": "Working directory of the agent process"
-        },
-        "hook_event_name": {
-          "type": "string",
-          "title": "Hook Event Name",
-          "description": "Name of the hook event that fired"
-        },
-        "source": {
-          "type": "string",
-          "title": "Source",
-          "description": "Reason the session is starting — one of: startup | resume | clear | compact"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "session_id",
-        "transcript_path",
-        "cwd",
-        "hook_event_name",
-        "source"
-      ]
-    },
     "PreToolUseInput": {
       "properties": {
         "session_id": {
@@ -346,6 +276,76 @@
         "suppress_output"
       ]
     },
+    "SessionEndInput": {
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "title": "Session ID",
+          "description": "Unique identifier for the agent session"
+        },
+        "transcript_path": {
+          "type": "string",
+          "title": "Transcript Path",
+          "description": "Absolute path to the session transcript file"
+        },
+        "cwd": {
+          "type": "string",
+          "title": "Working Directory",
+          "description": "Working directory of the agent process"
+        },
+        "hook_event_name": {
+          "type": "string",
+          "title": "Hook Event Name",
+          "description": "Name of the hook event that fired"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "session_id",
+        "transcript_path",
+        "cwd",
+        "hook_event_name"
+      ]
+    },
+    "SessionStartInput": {
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "title": "Session ID",
+          "description": "Unique identifier for the agent session"
+        },
+        "transcript_path": {
+          "type": "string",
+          "title": "Transcript Path",
+          "description": "Absolute path to the session transcript file"
+        },
+        "cwd": {
+          "type": "string",
+          "title": "Working Directory",
+          "description": "Working directory of the agent process"
+        },
+        "hook_event_name": {
+          "type": "string",
+          "title": "Hook Event Name",
+          "description": "Name of the hook event that fired"
+        },
+        "source": {
+          "type": "string",
+          "title": "Source",
+          "description": "Reason the session is starting — one of: startup | resume | clear | compact"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "session_id",
+        "transcript_path",
+        "cwd",
+        "hook_event_name",
+        "source"
+      ]
+    },
     "hookPayloads": {
       "properties": {
         "PreToolUse": {
@@ -357,11 +357,11 @@
         "PostToolUseFailure": {
           "$ref": "#/$defs/PostToolUseFailureInput"
         },
-        "PreSessionStart": {
-          "$ref": "#/$defs/PreSessionStartInput"
+        "SessionStart": {
+          "$ref": "#/$defs/SessionStartInput"
         },
-        "PostSessionStart": {
-          "$ref": "#/$defs/PostSessionStartInput"
+        "SessionEnd": {
+          "$ref": "#/$defs/SessionEndInput"
         },
         "PrePrompt": {
           "$ref": "#/$defs/PrePromptInput"
@@ -379,8 +379,8 @@
         "PreToolUse",
         "PostToolUse",
         "PostToolUseFailure",
-        "PreSessionStart",
-        "PostSessionStart",
+        "SessionStart",
+        "SessionEnd",
         "PrePrompt",
         "PostPrompt",
         "Response"

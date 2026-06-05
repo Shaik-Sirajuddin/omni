@@ -9,12 +9,18 @@
           "type": "boolean",
           "title": "Debug",
           "description": "Enable debug logging"
+        },
+        "profiling": {
+          "type": "boolean",
+          "title": "Profiling",
+          "description": "Enable pprof profiling endpoint on 127.0.0.1 (requires dev.debug=true)"
         }
       },
       "additionalProperties": false,
       "type": "object",
       "required": [
-        "debug"
+        "debug",
+        "profiling"
       ]
     },
     "HookEntry": {
@@ -77,6 +83,11 @@
           "$ref": "#/$defs/OtelConfig",
           "title": "Telemetry",
           "description": "OpenTelemetry export settings for omni's own logs and traces"
+        },
+        "theme": {
+          "type": "string",
+          "title": "Theme",
+          "description": "Terminal colour theme"
         }
       },
       "additionalProperties": false,
