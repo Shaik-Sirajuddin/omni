@@ -7,6 +7,8 @@
 - Inter-agent messaging via axolink MCP transport
 - Auto retries on failed tool calls and hook events
 - Claude Code, OpenAI Codex, and Gemini (Agy) agent sessions
+- Edits agent config to register the axolink MCP server automatically
+- First run: approve the axolink tools once when prompted by your agent
 
 > [!IMPORTANT]
 > ## Install
