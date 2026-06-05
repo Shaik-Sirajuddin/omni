@@ -25,13 +25,23 @@ type CommandExecutor interface {
 
 // HostExecutor runs commands directly on the current system via os/exec.
 type HostExecutor struct {
-	env []string // extra env vars appended to os.Environ()
+	env     []string // extra env vars appended to os.Environ()
+	workDir string   // if set, commands run with this working directory
 }
 
-// WithEnv returns a copy of the executor with additional KEY=VALUE env vars.
+// WithEnv returns a copy with additional KEY=VALUE env vars.
 func (e *HostExecutor) WithEnv(vars ...string) *HostExecutor {
 	cp := *e
 	cp.env = append(append([]string(nil), e.env...), vars...)
+	return &cp
+}
+
+// WithWorkDir returns a copy pinned to dir as the working directory.
+// This is critical: omni resolves agent names against the CWD, so all
+// commands for a given workspace must run from that directory.
+func (e *HostExecutor) WithWorkDir(dir string) *HostExecutor {
+	cp := *e
+	cp.workDir = dir
 	return &cp
 }
 
@@ -39,6 +49,9 @@ func (e *HostExecutor) RunCommand(ctx context.Context, cmd []string) (int, []byt
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	if len(e.env) > 0 {
 		c.Env = append(os.Environ(), e.env...)
+	}
+	if e.workDir != "" {
+		c.Dir = e.workDir
 	}
 	out, err := c.CombinedOutput()
 	exitCode := 0
@@ -55,6 +68,9 @@ func (e *HostExecutor) StreamCommand(ctx context.Context, w io.Writer, cmd []str
 	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	if len(e.env) > 0 {
 		c.Env = append(os.Environ(), e.env...)
+	}
+	if e.workDir != "" {
+		c.Dir = e.workDir
 	}
 	c.Stdout = w
 	c.Stderr = w

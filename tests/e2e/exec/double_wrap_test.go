@@ -15,6 +15,7 @@ import (
 // TestDoubleWrapFixClaude verifies that the exec double-wrap fix works for Claude:
 // a nested exec inside a running agent session does not cause duplicate PTY wraps.
 func TestDoubleWrapFixClaude(t *testing.T) {
+	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
@@ -62,6 +63,7 @@ func TestDoubleWrapFixClaude(t *testing.T) {
 
 // TestDoubleWrapFixCodex verifies the same double-wrap fix for Codex.
 func TestDoubleWrapFixCodex(t *testing.T) {
+	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
