@@ -20,7 +20,7 @@
 > curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
 > ```
 >
-> Requires `sudo`. For WSL 2, enable systemd first — add `[boot]\nsystemd=true` to `/etc/wsl.conf` then run `wsl --shutdown`.
+> For WSL 2, enable systemd first — add `[boot]\nsystemd=true` to `/etc/wsl.conf` then run `wsl --shutdown`.
 >
 > → See [docs/quickstart.md](docs/quickstart.md) for upgrade instructions and full setup details.
 
