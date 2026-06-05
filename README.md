@@ -1,14 +1,48 @@
 # omni
 
-Omni is a supervisor for AI coding agents (Claude, Codex, Gemini). It manages agent sessions, hooks, and inter-agent messaging over a local PTY daemon and MCP transport.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
+Omni is a supervisor for AI coding agents (Claude, Codex, Gemini). It manages agent sessions, hooks, and inter-agent messaging over a local communication transport.
+
+![omni demo](readme.gif)
+
+**Multi-agent orchestration in your terminal** — run Claude Code and OpenAI Codex side-by-side, let them message each other, and coordinate across tasks automatically.
+
+### Features
+
+- **Inter-agent messaging** — agents send and receive messages across sessions via the built-in axolink MCP transport
+- **Auto retries** — hook operator automatically retries failed tool calls and session events with configurable back-off
+- **Claude support** — first-class Claude Code integration (Claude API, Haiku, Sonnet, Opus)
+- **Codex support** — OpenAI Codex CLI managed as a full omni agent session
+- **Agy support** — Gemini/Agy agent sessions with the same session and hook lifecycle
 
 ## Install
 
+### Linux (amd64 / arm64)
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/memory/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
 ```
 
-Linux and WSL only (amd64 / arm64). Requires `sudo`.  
+Requires `sudo`. Tested on Ubuntu 22.04+, Debian 12+, and compatible distros.
+
+### Windows (WSL)
+
+Open a WSL terminal (Ubuntu recommended) and run the same command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
+```
+
+Requires WSL 2 with systemd enabled. To enable systemd in WSL, add to `/etc/wsl.conf`:
+
+```ini
+[boot]
+systemd=true
+```
+
+Then restart WSL: `wsl --shutdown` and reopen the terminal.
+
 → See [docs/quickstart.md](docs/quickstart.md) for what gets installed, upgrade instructions, and agent commands.
 
 ## Quick reference
@@ -28,3 +62,7 @@ make docker-connect  # open a shell in the running container
 ```
 
 → See [development/](development/) for docker setup and `.env.docker.example`.
+
+## License
+
+[GNU Affero General Public License v3.0](LICENSE) — see [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) for details.
