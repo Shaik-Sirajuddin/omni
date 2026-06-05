@@ -21,8 +21,9 @@
 // Daemon startup: call UseStderrForAll() before the first log write so every
 // sub-package logger lands in journald without needing WithStderr() everywhere.
 //
-// CLI startup: call InitSessionLog() to set OMNI_LOG_FILE to
-// ~/.omni/log/session-<pid>.log so all in-process components share one file.
+// CLI startup: call InitSessionLog(sessionID) to set OMNI_LOG_FILE to
+// ~/.omni/log/session-<id>.log so all in-process components share one file.
+// Pass the omni session UUID when known; pass "" to fall back to pid-<pid>.
 //
 // No internal module dependencies — safe to import from any module.
 package log
@@ -70,10 +71,11 @@ func UseStderrForAll() {
 }
 
 // InitSessionLog sets OMNI_LOG_FILE to ~/.omni/log/session-<pid>.log
-// if it is not already set. Call once at CLI startup (before the first log
-// write) so all in-process components and child subprocesses share one file.
-// Long-lived daemon processes should NOT call this — use UseStderrForAll().
-func InitSessionLog() {
+// if it is not already set. sessionID is the omni session UUID; if empty,
+// the process ID is used as a fallback. Call once at CLI startup (before the
+// first log write) so all in-process components and child subprocesses share
+// one file. Long-lived daemon processes should NOT call this — use UseStderrForAll().
+func InitSessionLog(sessionID string) {
 	if os.Getenv("OMNI_LOG_FILE") != "" {
 		return
 	}
@@ -85,7 +87,11 @@ func InitSessionLog() {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return
 	}
-	path := filepath.Join(logDir, fmt.Sprintf("session-%d.log", os.Getpid()))
+	id := sessionID
+	if id == "" {
+		id = fmt.Sprintf("pid-%d", os.Getpid())
+	}
+	path := filepath.Join(logDir, fmt.Sprintf("session-%s.log", id))
 	if err := os.Setenv("OMNI_LOG_FILE", path); err != nil {
 		return
 	}

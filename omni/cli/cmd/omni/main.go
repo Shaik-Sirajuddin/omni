@@ -22,7 +22,9 @@ func main() {
 
 	// Set up a session-scoped log file before any loggers are constructed.
 	// All in-process components and child subprocesses inherit OMNI_LOG_FILE.
-	omnilog.InitSessionLog()
+	// Pre-scan args for --session-id/-sid so the log file name matches the
+	// session when one is explicitly provided (e.g. re-attach flows).
+	omnilog.InitSessionLog(extractSessionID(os.Args[1:]))
 
 	var op operator.Operator
 	if commandRequiresOperator(os.Args[1:]) {
@@ -56,6 +58,25 @@ func firstCommandArg(args []string) string {
 			continue
 		}
 		return arg
+	}
+	return ""
+}
+
+// extractSessionID does a lightweight pre-scan of args for --session-id or
+// -sid so InitSessionLog can name the log file after the session before full
+// flag parsing runs. Returns empty string if not found.
+func extractSessionID(args []string) string {
+	for i, arg := range args {
+		switch {
+		case arg == "--session-id" || arg == "-sid":
+			if i+1 < len(args) {
+				return strings.TrimSpace(args[i+1])
+			}
+		case strings.HasPrefix(arg, "--session-id="):
+			return strings.TrimSpace(strings.TrimPrefix(arg, "--session-id="))
+		case strings.HasPrefix(arg, "-sid="):
+			return strings.TrimSpace(strings.TrimPrefix(arg, "-sid="))
+		}
 	}
 	return ""
 }
