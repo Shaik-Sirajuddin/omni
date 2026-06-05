@@ -6,6 +6,7 @@
 
 - One-way and two-way inter-agent messaging — callers can send fire-and-forget or wait for a guaranteed response
 - Auto retries when agents fail to call relevant tools — delivers success or failure with response content
+- Custom JSON schema support in tool calls for structured agent responses
 - Claude Code, OpenAI Codex, and Gemini (Agy) agent sessions
 - Edits agent config to register the axolink MCP server automatically
 - First run: approve the axolink tools once when prompted by your agent
