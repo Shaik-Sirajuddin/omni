@@ -1,57 +1,41 @@
 # omni
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-
-Omni is a supervisor for AI coding agents (Claude, Codex, Gemini). It manages agent sessions, hooks, and inter-agent messaging over a local communication transport.
+> **Omni lets AI coding agents (Claude, Codex, Gemini) collaborate — messaging each other, sharing hooks, and coordinating tasks over a local communication transport.**
 
 ![omni demo](readme.gif)
 
-**Multi-agent orchestration in your terminal** — run Claude Code and OpenAI Codex side-by-side, let them message each other, and coordinate across tasks automatically.
+- One-way and two-way inter-agent messaging — callers can send fire-and-forget or wait for a guaranteed response
+- Auto retries when agents fail to call relevant tools — delivers success or failure with response content
+- Custom JSON schema support in tool calls for structured agent responses
+- Claude Code, OpenAI Codex, and Gemini (Agy) agent sessions
+- Edits agent config to register the axolink MCP server automatically
+- First run: approve the axolink tools once when prompted by your agent
 
-### Features
-
-- **Inter-agent messaging** — agents send and receive messages across sessions via the built-in axolink MCP transport
-- **Auto retries** — hook operator automatically retries failed tool calls and session events with configurable back-off
-- **Claude support** — first-class Claude Code integration (Claude API, Haiku, Sonnet, Opus)
-- **Codex support** — OpenAI Codex CLI managed as a full omni agent session
-- **Agy support** — Gemini/Agy agent sessions with the same session and hook lifecycle
-
-## Install
-
-### Linux (amd64 / arm64)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
-```
-
-Requires `sudo`. Tested on Ubuntu 22.04+, Debian 12+, and compatible distros.
-
-### Windows (WSL)
-
-Open a WSL terminal (Ubuntu recommended) and run the same command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
-```
-
-Requires WSL 2 with systemd enabled. To enable systemd in WSL, add to `/etc/wsl.conf`:
-
-```ini
-[boot]
-systemd=true
-```
-
-Then restart WSL: `wsl --shutdown` and reopen the terminal.
-
-→ See [docs/quickstart.md](docs/quickstart.md) for what gets installed, upgrade instructions, and agent commands.
+> [!IMPORTANT]
+> ## Install
+>
+> **Linux and Windows (WSL 2)**
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
+> ```
+>
+> Requires `sudo`. For WSL 2, enable systemd first — add `[boot]\nsystemd=true` to `/etc/wsl.conf` then run `wsl --shutdown`.
+>
+> → See [docs/quickstart.md](docs/quickstart.md) for upgrade instructions and full setup details.
 
 ## Quick reference
 
 ```bash
+omni team init                           # initialise a team in the current workspace
+omni agent init -r -p claude <name>      # create (or resume) a Claude agent
 omni agent list                          # list running sessions
-omni agent resume <session-id>           # attach to a session
-omni agent exec <session-id> -- <cmd>    # run a command inside a session
+omni agent resume <name>                 # attach to a session
+omni agent exec <name> -- <cmd>          # run a command inside a session
 ```
+
+> [!NOTE]
+> Omni broadcasts MCP hook events (`PreToolUse`, `PostToolUse`, `SessionStart`, …) to all agents. Pre-hook side-effects are intentional — one agent can influence another's next action.
 
 ## Development
 
@@ -65,4 +49,4 @@ make docker-connect  # open a shell in the running container
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE) — see [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) for details.
+Licensed under the [GNU Affero General Public License v3.0](LICENSE).
