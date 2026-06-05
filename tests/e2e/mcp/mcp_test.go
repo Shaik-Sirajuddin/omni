@@ -21,7 +21,6 @@ const claudeGlobalCfg = "/root/.claude.json"
 func TestMCPConfigReflection(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	// Read ~/.claude.json — skip if not present (local env without entrypoint seeding)
@@ -62,7 +61,6 @@ func TestMCPConfigReflection(t *testing.T) {
 func TestAxolinkHTTPReachability(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	out, code := harness.ExecInContainer(t, cfg,

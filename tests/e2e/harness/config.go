@@ -6,9 +6,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var reUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
 // TestConfig holds the runtime parameters for a single e2e test.
 type TestConfig struct {
@@ -81,11 +84,25 @@ func EnvOr(key, def string) string {
 	return def
 }
 
+// AgentNameSuffix returns a short, deterministic, filesystem-safe suffix derived
+// from the test name. Use this instead of time.Now().Format("150405") in agent
+// names to avoid second-resolution collisions in parallel tests.
+func AgentNameSuffix(t *testing.T) string {
+	t.Helper()
+	s := strings.ToLower(reUnsafe.ReplaceAllString(t.Name(), "-"))
+	if len(s) > 24 {
+		s = s[len(s)-24:]
+	}
+	return strings.Trim(s, "-")
+}
+
 // ProvisionWorkspace creates a fresh /tmp/e2e-<test> directory and registers
 // cleanup. Used both as the agent DB workspace and for test file artifacts.
 func ProvisionWorkspace(t *testing.T, ex CommandExecutor) string {
 	t.Helper()
-	safe := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	// Allow only alphanumeric, hyphen, and underscore to avoid invalid paths on
+	// filesystems that reject characters such as ':', '#', or spaces.
+	safe := strings.ToLower(reUnsafe.ReplaceAllString(t.Name(), "_"))
 	dir := fmt.Sprintf("/tmp/e2e-%s", safe)
 	ctx := context.Background()
 	code, _, _ := ex.RunCommand(ctx, []string{"mkdir", "-p", dir})

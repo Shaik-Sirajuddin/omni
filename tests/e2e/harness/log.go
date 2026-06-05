@@ -66,7 +66,8 @@ func (b *SyncBuffer) WaitForWithID(messageID, substr string, timeout time.Durati
 	return false
 }
 
-// CaptureLog starts streaming journalctl (omni-server identifier) into a buffer.
+// CaptureLog starts streaming journalctl (omni-server identifier) into a buffer
+// and waits 300ms for the stream connection to establish before returning.
 // Returns a stop func and the live buffer.
 func CaptureLog(t *testing.T, cfg TestConfig) (stop func(), buf *SyncBuffer) {
 	t.Helper()
@@ -84,6 +85,7 @@ func CaptureLog(t *testing.T, cfg TestConfig) (stop func(), buf *SyncBuffer) {
 		<-done
 	}
 	t.Cleanup(stop)
+	time.Sleep(300 * time.Millisecond)
 	return stop, buf
 }
 

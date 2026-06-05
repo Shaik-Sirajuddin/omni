@@ -19,7 +19,6 @@ func TestDoubleWrapFixClaude(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	out, code := harness.ExecInContainer(t, cfg, "command -v claude 2>/dev/null")
@@ -27,7 +26,7 @@ func TestDoubleWrapFixClaude(t *testing.T) {
 		t.Skip("claude binary not available")
 	}
 
-	agentName := "e2e-double-wrap-claude-" + time.Now().Format("150405")
+	agentName := "e2e-double-wrap-claude-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -67,7 +66,6 @@ func TestDoubleWrapFixCodex(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	out, code := harness.ExecInContainer(t, cfg, "command -v codex 2>/dev/null")
@@ -75,7 +73,7 @@ func TestDoubleWrapFixCodex(t *testing.T) {
 		t.Skip("codex binary not available")
 	}
 
-	agentName := "e2e-double-wrap-codex-" + time.Now().Format("150405")
+	agentName := "e2e-double-wrap-codex-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")

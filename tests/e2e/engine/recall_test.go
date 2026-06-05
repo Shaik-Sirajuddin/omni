@@ -38,10 +38,9 @@ func TestSendMessageRecorded(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	ts := time.Now().Format("150405")
+	ts := harness.AgentNameSuffix(t)
 	sender := "e2e-recall-sender-" + ts
 	receiver := "e2e-recall-recv-" + ts
 	t.Cleanup(func() {
@@ -82,10 +81,9 @@ func TestDeliveryChainMessageID(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	agentName := "e2e-chain-" + time.Now().Format("150405")
+	agentName := "e2e-chain-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -95,7 +93,7 @@ func TestDeliveryChainMessageID(t *testing.T) {
 		"--detach", "--workspace", cfg.Workspace)
 	time.Sleep(5 * time.Second)
 
-	senderChain := "e2e-chain-sender-" + time.Now().Format("150405")
+	senderChain := "e2e-chain-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderChain,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderChain) })
@@ -134,17 +132,16 @@ func TestQueryResultAPI(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	agentName := "e2e-qr-agent-" + time.Now().Format("150405")
+	agentName := "e2e-qr-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 
-	senderQR := "e2e-qr-sender-" + time.Now().Format("150405")
+	senderQR := "e2e-qr-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderQR,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderQR) })
@@ -178,6 +175,13 @@ func TestQueryResultAPI(t *testing.T) {
 	assert.True(t, strings.Contains(qrOut, msgID) || len(qrOut) > 10,
 		"query_result must return data for message_id %s", msgID)
 	t.Logf("query_result: %s", qrOut)
+
+	// A non-existent message_id must return an error, not empty/nil.
+	unknownOut := mcpCli.CallTool("query_result", map[string]any{"message_id": "00000000-0000-0000-0000-000000000000"})
+	assert.True(t,
+		strings.Contains(unknownOut, `"isError":true`) || strings.Contains(unknownOut, "not found") || strings.Contains(unknownOut, "null"),
+		"query_result for unknown id must return error or null (got: %s)", unknownOut)
+	t.Logf("query_result (unknown id): %s", unknownOut)
 }
 
 // TestGetMessageAPI (E5) verifies that get_message returns the stored message.
@@ -185,23 +189,22 @@ func TestGetMessageAPI(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	agentName := "e2e-gm-agent-" + time.Now().Format("150405")
+	agentName := "e2e-gm-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 
-	senderGM := "e2e-gm-sender-" + time.Now().Format("150405")
+	senderGM := "e2e-gm-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderGM,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderGM) })
 
 	mcpCli := harness.NewMCPClient(t, cfg, senderGM)
-	probeMsg := "gm-probe-" + time.Now().Format("150405")
+	probeMsg := "gm-probe-" + harness.AgentNameSuffix(t)
 	inner := mcpCli.CallToolText("send_message", map[string]any{
 		"to_type":   "omni_agent",
 		"to_name":   agentName,
@@ -229,7 +232,7 @@ func TestListAgentsReturnsAgents(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
-	agentName := "e2e-list-agent-" + time.Now().Format("150405")
+	agentName := "e2e-list-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -251,7 +254,7 @@ func TestListTeams(t *testing.T) {
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 
-	senderID := "e2e-list-teams-" + time.Now().Format("150405")
+	senderID := "e2e-list-teams-" + harness.AgentNameSuffix(t)
 	mcpCli := harness.NewMCPClient(t, cfg, senderID)
 	out := mcpCli.CallTool("list_teams", map[string]any{})
 
@@ -281,14 +284,13 @@ func TestAgentInterruptResume(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	if out, code := harness.ExecInContainer(t, cfg, "command -v claude"); code != 0 || strings.TrimSpace(out) == "" {
 		t.Skip("claude not available")
 	}
 
-	agentName := "e2e-interrupt-" + time.Now().Format("150405")
+	agentName := "e2e-interrupt-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -321,17 +323,16 @@ func TestSendResponseAPI(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	agentName := "e2e-sr-agent-" + time.Now().Format("150405")
+	agentName := "e2e-sr-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 
-	senderSR := "e2e-sr-sender-" + time.Now().Format("150405")
+	senderSR := "e2e-sr-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderSR,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderSR) })

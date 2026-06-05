@@ -18,7 +18,6 @@ func TestExecResumeLaunchesPTY(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	provider := detectProvider(t, cfg)
@@ -62,7 +61,6 @@ func TestHookReceiptConfirmsDelivery(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	provider := detectProvider(t, cfg)
@@ -93,7 +91,6 @@ func TestMultiplePromptsSequential(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	provider := detectProvider(t, cfg)
@@ -142,7 +139,6 @@ func TestSessionPersistsAfterExec(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	provider := detectProvider(t, cfg)
@@ -186,5 +182,5 @@ func countOccurrences(s, substr string) int {
 }
 
 func uniqueAgent(prefix string) string {
-	return "e2e-" + prefix + "-" + time.Now().Format("150405.000")
+	return "e2e-" + prefix + "-" + harness.AgentNameSuffix(t)
 }

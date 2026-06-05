@@ -16,10 +16,9 @@ func TestFullSessionExecAndResponse(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	agentName := "e2e-session-full-" + time.Now().Format("150405")
+	agentName := "e2e-session-full-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	provider := detectSessionProvider(t, cfg)
@@ -34,7 +33,7 @@ func TestFullSessionExecAndResponse(t *testing.T) {
 		"--detach", "--workspace", cfg.Workspace)
 	time.Sleep(5 * time.Second)
 
-	probe := "pong-" + time.Now().Format("150405")
+	probe := "pong-" + harness.AgentNameSuffix(t)
 	out, code := harness.RunOmniAllowFail(t, cfg,
 		"agent", "exec", agentName, "--prompt", "respond with exactly: "+probe)
 
@@ -47,7 +46,6 @@ func TestFullSessionExecAndResponse(t *testing.T) {
 func TestSessionNoCrashOnBadInput(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	provider := detectSessionProvider(t, cfg)
@@ -55,7 +53,7 @@ func TestSessionNoCrashOnBadInput(t *testing.T) {
 		t.Skip("no supported agent binary available")
 	}
 
-	agentName := "e2e-bad-input-" + time.Now().Format("150405")
+	agentName := "e2e-bad-input-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -90,7 +88,6 @@ func TestMultiAgentConcurrentExec(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	provider := detectSessionProvider(t, cfg)
@@ -98,7 +95,7 @@ func TestMultiAgentConcurrentExec(t *testing.T) {
 		t.Skip("no supported agent binary available")
 	}
 
-	ts := time.Now().Format("150405")
+	ts := harness.AgentNameSuffix(t)
 	agent1 := "e2e-concurrent-a-" + ts
 	agent2 := "e2e-concurrent-b-" + ts
 	t.Cleanup(func() {
@@ -139,7 +136,6 @@ func TestMultiAgentConcurrentExec(t *testing.T) {
 func TestSessionStopAndStatus(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	provider := detectSessionProvider(t, cfg)
@@ -147,7 +143,7 @@ func TestSessionStopAndStatus(t *testing.T) {
 		t.Skip("no supported agent binary available")
 	}
 
-	agentName := "e2e-stop-status-" + time.Now().Format("150405")
+	agentName := "e2e-stop-status-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -177,7 +173,7 @@ func TestExecAfterTeardown(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
-	agentName := "e2e-teardown-exec-" + time.Now().Format("150405")
+	agentName := "e2e-teardown-exec-" + harness.AgentNameSuffix(t)
 	harness.TeardownAgent(t, cfg, agentName)
 
 	out, code := harness.RunOmniAllowFail(t, cfg,
@@ -196,7 +192,7 @@ func TestWorkspaceIsolation(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	ts := time.Now().Format("150405")
+	ts := harness.AgentNameSuffix(t)
 	agent1 := "e2e-iso-sender-" + ts
 	ghost := "e2e-iso-ghost-" + ts // never created
 
@@ -214,10 +210,10 @@ func TestWorkspaceIsolation(t *testing.T) {
 	})
 
 	t.Logf("send_message to ghost agent: %s", out)
-	// The server must either error or report agent not found — not silently succeed.
-	assert.False(t,
-		strings.Contains(out, `"isError":false`) && !strings.Contains(out, "not found"),
-		"send_message to non-existent agent must not silently succeed")
+	// The server must report an error or "not found" — not silently succeed.
+	assert.True(t,
+		strings.Contains(out, `"isError":true`) || strings.Contains(out, "not found"),
+		"send_message to non-existent agent must return an error or not-found (got: %s)", out)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

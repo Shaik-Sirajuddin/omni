@@ -18,7 +18,7 @@ const bgNonBlockingMs = 10_000
 // cleanup. Returns the unique agent name.
 func initBgAgent(t *testing.T, cfg harness.TestConfig) string {
 	t.Helper()
-	name := "e2e-bg-" + time.Now().Format("150405.000")
+	name := "e2e-bg-" + harness.AgentNameSuffix(t)
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", name,
 		"--workspace", cfg.Workspace, "--provider", "codex")
@@ -51,7 +51,6 @@ func TestExecBgNonBlocking(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	agent := initBgAgent(t, cfg)
@@ -84,7 +83,6 @@ func TestExecBgOnActivePTY(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	agent := initBgAgent(t, cfg)
@@ -113,7 +111,7 @@ func TestExecBgAgentNotFound(t *testing.T) {
 	cfg := harness.NewConfig(t)
 
 	out, code := harness.RunOmniAllowFail(t, cfg,
-		"agent", "exec", "nonexistent-agent-e2e-bg-"+time.Now().Format("150405"), "--prompt", "test", "--bg")
+		"agent", "exec", "nonexistent-agent-e2e-bg-"+harness.AgentNameSuffix(t), "--prompt", "test", "--bg")
 
 	assert.NotEqual(t, 0, code, "exec --bg on nonexistent agent must exit non-zero")
 	t.Logf("nonexistent agent output: %s", out)
@@ -141,7 +139,7 @@ func TestResumeNonExistent(t *testing.T) {
 	cfg := harness.NewConfig(t)
 
 	out, code := harness.RunOmniAllowFail(t, cfg,
-		"agent", "resume", "nonexistent-agent-e2e-"+time.Now().Format("150405"),
+		"agent", "resume", "nonexistent-agent-e2e-"+harness.AgentNameSuffix(t),
 		"--workspace", cfg.Workspace)
 
 	assert.NotEqual(t, 0, code, "resume nonexistent agent must exit non-zero")
@@ -155,7 +153,6 @@ func TestPromptDelivered(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	agent := initBgAgent(t, cfg)
