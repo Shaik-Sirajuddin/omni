@@ -303,8 +303,56 @@ func (d *defaultDaemon) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// ListSessions is the agent-scoped session listing behind the client's
+// List(agentID) call. The in-memory registry is the AUTHORITY for which
+// terminals currently exist; the store supplies the full record fields
+// (timestamps) and covers sessions recovered after a daemon restart.
+//
+// The bug this fixes: a Start-path terminal is created with agent_id="" and
+// only rewritten to the real agent_id ~ms later when adopt runs. The old
+// `SELECT ... WHERE agent_id = ?` query (ListByAgent) therefore could not see a
+// live, un-adopted terminal during that window, so the operator's guard found
+// nothing, re-issued Start, hit "terminal already exists" (the in-memory map had
+// it), and looped forever. We resolve live terminals with the SAME leniency as
+// get() — agent_id=="" matches any requested agent — so List can never miss a
+// terminal that Exec/Attach/GetMasterFd can see. One source of truth.
 func (d *defaultDaemon) ListSessions(agentID string) ([]*PTYSessionRecord, error) {
-	return d.store.ListByAgent(agentID)
+	// Live view: which sessions exist right now, with get()-style leniency.
+	d.mu.RLock()
+	liveSessions := make(map[string]struct{}, len(d.terminals))
+	for _, t := range d.terminals {
+		if agentID != "" && t.AgentID != "" && t.AgentID != agentID {
+			continue // a genuinely different agent colliding on sessionID
+		}
+		liveSessions[t.SessionID] = struct{}{}
+	}
+	d.mu.RUnlock()
+
+	// Persistent records for the agent (full fields, plus restart recovery).
+	records, err := d.store.ListByAgent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(records))
+	for _, r := range records {
+		seen[r.SessionID] = struct{}{}
+	}
+
+	// Add any live session the agent-scoped query missed because it is still
+	// stored with agent_id="" (created but not yet adopted). Create always
+	// inserts the row, so GetBySessionOnly resolves the full record.
+	for sid := range liveSessions {
+		if _, ok := seen[sid]; ok {
+			continue
+		}
+		rec, gerr := d.store.GetBySessionOnly(sid)
+		if gerr != nil || rec == nil {
+			continue
+		}
+		records = append(records, rec)
+		seen[sid] = struct{}{}
+	}
+	return records, nil
 }
 
 func (d *defaultDaemon) GetSession(agentID, sessionID string) (*PTYSessionRecord, error) {
