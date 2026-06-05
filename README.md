@@ -4,7 +4,7 @@
 
 ![omni demo](readme.gif)
 
-- Inter-agent messaging via axolink MCP transport
+- One-way and two-way inter-agent messaging — callers can send fire-and-forget or wait for a guaranteed response
 - Auto retries on failed tool calls and hook events
 - Claude Code, OpenAI Codex, and Gemini (Agy) agent sessions
 - Edits agent config to register the axolink MCP server automatically
