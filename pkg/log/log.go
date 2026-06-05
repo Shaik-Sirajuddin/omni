@@ -13,8 +13,7 @@
 //  1. UseStderrForAll() called → stderr (all loggers in the process)
 //  2. WithStderr() option → stderr (this logger only)
 //  3. OMNI_LOG_FILE env var set → that file, all levels
-//  4. Debug mode, no OMNI_LOG_FILE → ~/.omni/debug/<component>.log
-//  5. Otherwise → stderr
+//  4. Otherwise → ~/.omni/log/omni.log (all levels, silent to terminal)
 //
 // OTLP targets registered via InitOtel() always receive records regardless
 // of the text destination above.
@@ -109,7 +108,7 @@ func buildLogger(key, component string, level slog.Level, opts []Option) *slog.L
 	for _, opt := range opts {
 		opt(o)
 	}
-	lw := &lazyWriter{component: component, level: level, useStderr: o.useStderr}
+	lw := &lazyWriter{useStderr: o.useStderr}
 	handlerOpts := &slog.HandlerOptions{Level: level, AddSource: level == slog.LevelDebug}
 	// OTEL handlers are always appended regardless of text destination.
 	handlers := append([]slog.Handler{slog.NewTextHandler(lw, handlerOpts)}, activeHandlers()...)
@@ -121,22 +120,20 @@ func buildLogger(key, component string, level slog.Level, opts []Option) *slog.L
 // respected even for package-level loggers constructed before main() runs.
 type lazyWriter struct {
 	once      sync.Once
-	component string
-	level     slog.Level
 	useStderr bool
 	w         io.Writer
 }
 
 func (lw *lazyWriter) Write(p []byte) (int, error) {
 	lw.once.Do(func() {
-		lw.w = resolveWriterNow(lw.component, lw.level, lw.useStderr)
+		lw.w = resolveWriterNow(lw.useStderr)
 	})
 	return lw.w.Write(p)
 }
 
 var announcedPaths sync.Map
 
-func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Writer {
+func resolveWriterNow(useStderr bool) io.Writer {
 	processWriterMu.RLock()
 	pw := processWriter
 	processWriterMu.RUnlock()
@@ -146,40 +143,29 @@ func resolveWriterNow(component string, level slog.Level, useStderr bool) io.Wri
 	if useStderr {
 		return os.Stderr
 	}
-	path := os.Getenv("OMNI_LOG_FILE")
-	if path == "" {
-		if level > slog.LevelDebug {
+	if path := os.Getenv("OMNI_LOG_FILE"); path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "omni: failed to open log %s: %v; falling back to stderr\n", path, err)
 			return os.Stderr
 		}
-		if home, err := omniHome(); err == nil {
-			debugDir := filepath.Join(home, "debug")
-			_ = os.MkdirAll(debugDir, 0o755)
-			path = filepath.Join(debugDir, sanitizeComponent(component)+".log")
-		} else {
-			path = filepath.Join(os.TempDir(), "omni-debug-"+sanitizeComponent(component)+".log")
+		if _, loaded := announcedPaths.LoadOrStore(path, struct{}{}); !loaded {
+			fmt.Fprintf(os.Stderr, "omni: log → %s\n", path)
 		}
+		return f
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	home, err := omniHome()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "omni: failed to open log %s: %v; falling back to stderr\n", path, err)
 		return os.Stderr
 	}
-	if _, loaded := announcedPaths.LoadOrStore(path, struct{}{}); !loaded {
-		fmt.Fprintf(os.Stderr, "omni: log → %s\n", path)
+	logDir := filepath.Join(home, "log")
+	_ = os.MkdirAll(logDir, 0o755)
+	path := filepath.Join(logDir, "omni.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return os.Stderr
 	}
 	return f
-}
-
-func sanitizeComponent(s string) string {
-	out := make([]byte, len(s))
-	for i := range s {
-		c := s[i]
-		if c == '/' || c == '\\' || c == ' ' {
-			c = '-'
-		}
-		out[i] = c
-	}
-	return string(out)
 }
 
 // omniHome returns ~/.omni (app data dir, distinct from XDG config dir).
