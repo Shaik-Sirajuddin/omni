@@ -2,7 +2,7 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-Omni is a supervisor for AI coding agents (Claude, Codex, Gemini). It manages agent sessions, hooks, and inter-agent messaging over a local PTY daemon and MCP transport.
+Omni is a supervisor for AI coding agents (Claude, Codex, Gemini). It manages agent sessions, hooks, and inter-agent messaging over a local communication transport.
 
 ![omni demo](readme.gif)
 
