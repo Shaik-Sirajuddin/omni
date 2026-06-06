@@ -478,10 +478,6 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		logger.Info("execute loop: agent interrupted, holding delivery", "agent_id", agentID)
 		return
 	}
-	if agentState.Status == AgentStatusRunning {
-		logger.Debug("execute loop: agent already running, skipping", "agent_id", agentID)
-		return
-	}
 
 	// Throttle at 95% session usage.
 	if agentState.SessionUsage.ConsumedPercent >= sessionUsageThrottlePercent {
@@ -491,6 +487,31 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		)
 		return
 	}
+
+	// T3: atomically claim the run. BeginRunIfIdle collapses the running-check and the
+	// running-set into one locked operation. The old code checked Status==Running here but
+	// only set it ~165 lines later (after recall query, pickNextMessages, queue writes), so
+	// two executeLoop goroutines (launched from any of ~12 dispatch sites) could both observe
+	// Ready and both call ExecInSession — double dispatch into an in-flight session.
+	if !e.state.BeginRunIfIdle(agentID) {
+		logger.Debug("execute loop: agent already running/claimed, skipping", "agent_id", agentID)
+		return
+	}
+	agentState.Status = AgentStatusRunning
+	// If the run is claimed but we decide there is nothing to dispatch (no messages, query
+	// error, no task mux for bypass), release the claim back to Ready so the next trigger
+	// can proceed. Set on the path that actually calls ExecInSession.
+	dispatched := false
+	defer func() {
+		if dispatched {
+			return
+		}
+		cur, ok := e.state.GetAgent(agentID)
+		if ok && cur.Status == AgentStatusRunning {
+			cur.Status = AgentStatusReady
+			e.state.SetAgent(agentID, cur)
+		}
+	}()
 
 	// Preprocessing case (a): check for unacknowledged StatusProcessing non-instant messages FIRST.
 	// This must come before the T3 guard — a processing execute would otherwise trigger T3 and
@@ -655,6 +676,10 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// mark messages as orphaned/failed before any hooks (OnStop, OnUserPromptSubmit)
 	// have a chance to process them.
 	sessionDoneCh := e.state.OpenSessionDone(agentID)
+
+	// Committed to dispatch: the deferred release must not run — session lifecycle
+	// (hooks / onSessionEnd / watchdog) owns Status from here on.
+	dispatched = true
 
 	logger.Info("execute loop: executing agent",
 		"agent_id", agentID,
@@ -1240,16 +1265,16 @@ const maxMandatoryToolRetries = 3
 // so the agent can call the correct tool without re-reading context.
 func buildRecallPrompt(msgs []*message.Message) string {
 	if len(msgs) == 0 {
-		return "Tool callback not received. Please use the appropriate tool to respond."
+		return "Still waiting for your response. Use the `send_response` tool to reply before finishing."
 	}
 	ids := make([]string, len(msgs))
 	for i, m := range msgs {
 		ids[i] = m.ID
 	}
 	if len(msgs) == 1 {
-		return fmt.Sprintf("Tool callback not received. Call `send_response` with message_id=%s, or `send_response_batch` with a single-item array. Do not use send_message to reply.", ids[0])
+		return fmt.Sprintf("Still waiting for your response to message %s. Use the `send_response` tool for this message (message_id=%s) to reply — or `send_response_batch` with a single-item array. Do not use send_message to reply.", ids[0], ids[0])
 	}
-	return fmt.Sprintf("Tool callback not received. Call `send_response` for each or `send_response_batch` for all message_ids: [%s]. Do not use send_message to reply.", joinIDs(ids))
+	return fmt.Sprintf("Still waiting for your response to %d messages. Use the `send_response` tool for each message_id, or `send_response_batch` for all of them: [%s]. Do not use send_message to reply.", len(msgs), joinIDs(ids))
 }
 
 func joinIDs(ids []string) string {
@@ -1300,59 +1325,79 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		agentState.CodeSession.IsInterrupted = false
 		agentState.Status = AgentStatusReady
 		e.state.SetAgent(agentID, agentState)
+		e.state.ClearConfirmed(agentID)
 		e.state.ClearSession(sessionID)
 		e.state.SignalSessionDone(agentID)
 		return nil
 	}
 
-	// Capture the flag into a local before resetting it in agentState.
-	// The local is used for all checks below; agentState (with MandatoryToolInvoked=false)
-	// is persisted via SetAgent only after the check, so no concurrent OnStop can race.
-	mandatoryToolInvoked := agentState.CodeSession.MandatoryToolInvoked
-	agentState.CodeSession.MandatoryToolInvoked = false
-
-	// instant messages: always mark delivered regardless of tool invocation.
-	if len(msgs) > 0 && msgs[0].RequestType == reqTypeInstant {
-		e.markDelivered(ctx, msgs, agentID, agentState, false)
-		e.state.ClearSession(sessionID)
-		e.state.SignalSessionDone(agentID)
-		return nil
-	}
-
-	// execute/query: mandatory tool must be invoked; retry up to maxMandatoryToolRetries.
-	// msg.Retries is persisted in the DB (messages table), so the counter survives process restarts.
-	if len(msgs) > 0 && !mandatoryToolInvoked {
-		retries := msgs[0].Retries
-		if retries <= maxMandatoryToolRetries {
-			recall := buildRecallPrompt(msgs)
-			logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
-				"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
-			// Increment retries before injecting recall so the guard counter advances each turn.
-			// Without this, retries stays constant and the recall loops forever.
-			for _, msg := range msgs {
-				msg.Retries++
-				if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
-					logger.Error("hook: stop — recall retries increment failed", "message_id", msg.ID, "err", err)
-				}
-			}
-			// Keep messages as StatusProcessing and status as Running — the agent continues the
-			// same session. Changing status to Ready here would allow the watchdog or the
-			// post-loop retry to dispatch new messages into a concurrent second session.
-			e.state.SetAgent(agentID, agentState) // persists MandatoryToolInvoked=false only
-			return &recall
+	// Per-message delivery confirmation. The single source of truth for "delivered" is the
+	// agent's tool callback (send_response / batch / legacy alias) naming a specific
+	// message_id this session — recorded in OnPostToolUse. A bare Stop turn confirms nothing;
+	// unconfirmed execute/query messages ride the recall loop until their own retry counter
+	// is exhausted, then force-deliver with a failure callback. Instant (steer) messages need
+	// no confirmation and are always delivered.
+	var confirmed, unconfirmed []*message.Message
+	for _, msg := range msgs {
+		if msg.RequestType == reqTypeInstant || e.state.IsMessageConfirmed(agentID, msg.ID) {
+			confirmed = append(confirmed, msg)
+		} else {
+			unconfirmed = append(unconfirmed, msg)
 		}
-		// Max retries exceeded — fire status callback and fall through to deliver.
-		logger.Warn("hook: stop — mandatory tool not invoked, max retries exceeded, delivering",
-			"agent_id", agentID, "retries", retries, "request_type", msgs[0].RequestType)
+	}
+
+	// Deliver confirmed messages via the normal reply path.
+	if len(confirmed) > 0 {
+		e.markDelivered(ctx, confirmed, agentID, agentState, false)
+		agentState, _ = e.state.GetAgent(agentID) // markDelivered bumped generation / set Ready
+	}
+
+	// Split unconfirmed into still-retriable vs exhausted (msg.Retries is per-message, in DB).
+	var recallable, exhausted []*message.Message
+	for _, msg := range unconfirmed {
+		if msg.Retries <= maxMandatoryToolRetries {
+			recallable = append(recallable, msg)
+		} else {
+			exhausted = append(exhausted, msg)
+		}
+	}
+
+	// Exhausted unconfirmed messages: force-deliver + failure callback to the author.
+	if len(exhausted) > 0 {
+		logger.Warn("hook: stop — recall retries exhausted, force-delivering",
+			"agent_id", agentID, "count", len(exhausted))
 		if e.statusCallback != nil {
-			e.statusCallback.SendStatusCallback(ctx, msgs[0].ID, agentState.Agent.Name, agentState.Agent.Team)
+			e.statusCallback.SendStatusCallback(ctx, exhausted[0].ID, agentState.Agent.Name, agentState.Agent.Team)
 		}
+		e.markDelivered(ctx, exhausted, agentID, agentState, true)
+		agentState, _ = e.state.GetAgent(agentID)
 	}
 
-	// isForceDeliver=true when the agent never invoked the mandatory tool (no send_response).
-	// The author gets a failure callback for any ShouldReply=true message in that path.
-	isForceDeliver := len(msgs) > 0 && !mandatoryToolInvoked
-	e.markDelivered(ctx, msgs, agentID, agentState, isForceDeliver)
+	// Still-retriable unconfirmed messages: inject a recall and keep the SAME session running.
+	if len(recallable) > 0 {
+		// Increment each message's counter before injecting recall so the per-message guard
+		// advances every turn; without this the recall would loop forever.
+		for _, msg := range recallable {
+			msg.Retries++
+			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+				logger.Error("hook: stop — recall retries increment failed", "message_id", msg.ID, "err", err)
+			}
+		}
+		recall := buildRecallPrompt(recallable)
+		logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
+			"agent_id", agentID, "count", len(recallable))
+		// Keep the agent Running for the continued session. Even if we delivered confirmed/
+		// exhausted messages above (markDelivered set Ready), returning while Ready would let
+		// the watchdog or post-loop retry start a concurrent second session. Do NOT clear the
+		// session or signal done — the agent gets another Stop turn.
+		cur, _ := e.state.GetAgent(agentID)
+		cur.Status = AgentStatusRunning
+		e.state.SetAgent(agentID, cur)
+		return &recall
+	}
+
+	// Nothing left pending — settle the session.
+	e.state.ClearConfirmed(agentID)
 	e.state.ClearSession(sessionID)
 	e.state.SignalSessionDone(agentID)
 	return nil
@@ -1446,15 +1491,47 @@ func (e *ProcessingEngine) OnPreToolUse(agentID, sessionID, toolName string, _ m
 }
 
 // OnPostToolUse is called by HookHandler on PostToolUse events (tool succeeded).
-// Sets MandatoryToolInvoked when a delivery-confirming tool completed successfully.
-func (e *ProcessingEngine) OnPostToolUse(agentID, sessionID, toolName string, _ map[string]any) {
+// When a delivery-confirming tool completes successfully, it records per-message
+// confirmation for every message_id named in the tool input. OnStop then delivers
+// only the confirmed messages and recalls the rest — confirmation is per-message,
+// not session-wide, so answering message A no longer settles an untouched message B.
+func (e *ProcessingEngine) OnPostToolUse(agentID, sessionID, toolName string, toolInput map[string]any) {
 	logger.Debug("hook: post tool use", "agent_id", agentID, "session_id", sessionID, "tool_name", toolName)
-	if mandatoryToolNames[toolName] {
-		agentState, _ := e.state.GetAgent(agentID)
-		agentState.CodeSession.MandatoryToolInvoked = true
-		e.state.SetAgent(agentID, agentState)
-		logger.Debug("hook: mandatory tool invoked", "agent_id", agentID, "tool_name", toolName)
+	if !mandatoryToolNames[toolName] {
+		return
 	}
+	ids := messageIDsFromToolInput(toolInput)
+	for _, id := range ids {
+		e.state.ConfirmMessage(agentID, id)
+		logger.Debug("hook: message confirmed by tool callback", "agent_id", agentID, "tool_name", toolName, "message_id", id)
+	}
+	if len(ids) == 0 {
+		logger.Warn("hook: mandatory tool produced no message_id, nothing confirmed", "agent_id", agentID, "tool_name", toolName)
+	}
+}
+
+// messageIDsFromToolInput extracts confirmed message_ids from a delivery-tool input.
+// Single tools (send_response, query_result, update_message) carry a top-level
+// "message_id"; batch tools (send_response_batch, ...) carry a "results" array of
+// {message_id, response} objects.
+func messageIDsFromToolInput(toolInput map[string]any) []string {
+	if toolInput == nil {
+		return nil
+	}
+	var ids []string
+	if v, ok := toolInput["message_id"].(string); ok && v != "" {
+		ids = append(ids, v)
+	}
+	if results, ok := toolInput["results"].([]any); ok {
+		for _, item := range results {
+			if m, ok := item.(map[string]any); ok {
+				if v, ok := m["message_id"].(string); ok && v != "" {
+					ids = append(ids, v)
+				}
+			}
+		}
+	}
+	return ids
 }
 
 // OnPostToolUseFailure is called by HookHandler on PostToolUseFailure events.

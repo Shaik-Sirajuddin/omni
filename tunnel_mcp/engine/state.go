@@ -85,6 +85,7 @@ type EngineState struct {
 	taskMux      map[string]*TaskKey          // agentID → active task (nil = none); retained after execute for T1 priority
 	taskRegistry map[string]map[string]*taskState // agentID → taskID → state (paused flag)
 	sessionDone  map[string]chan struct{}      // agentID → buffered channel closed by OnStop when session fully ends
+	confirmed    map[string]map[string]bool    // agentID → messageID → confirmed by a delivery tool callback this session
 }
 
 func newEngineState() *EngineState {
@@ -95,7 +96,55 @@ func newEngineState() *EngineState {
 		taskMux:      make(map[string]*TaskKey),
 		taskRegistry: make(map[string]map[string]*taskState),
 		sessionDone:  make(map[string]chan struct{}),
+		confirmed:    make(map[string]map[string]bool),
 	}
+}
+
+// BeginRunIfIdle atomically claims the agent for a delivery run.
+// Returns true only if the agent exists, is not already Running, and is not interrupted —
+// setting Status to Running under the same lock. This collapses the check-then-set in
+// executeLoop into one atomic operation, closing the TOCTOU window where two concurrent
+// executeLoop goroutines could both pass a plain Status==Running check and double-dispatch.
+func (s *EngineState) BeginRunIfIdle(agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.agents[agentID]
+	if !ok || st.Status == AgentStatusRunning || st.CodeSession.IsInterrupted {
+		return false
+	}
+	st.Status = AgentStatusRunning
+	return true
+}
+
+// ConfirmMessage records that messageID was acknowledged by a delivery-confirming tool
+// callback during agentID's current session (per-message, not session-wide).
+func (s *EngineState) ConfirmMessage(agentID, messageID string) {
+	if messageID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.confirmed[agentID] == nil {
+		s.confirmed[agentID] = make(map[string]bool)
+	}
+	s.confirmed[agentID][messageID] = true
+}
+
+// IsMessageConfirmed reports whether messageID was confirmed by a tool callback this session.
+func (s *EngineState) IsMessageConfirmed(agentID, messageID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if m := s.confirmed[agentID]; m != nil {
+		return m[messageID]
+	}
+	return false
+}
+
+// ClearConfirmed drops all per-message confirmations for agentID (call at session end).
+func (s *EngineState) ClearConfirmed(agentID string) {
+	s.mu.Lock()
+	delete(s.confirmed, agentID)
+	s.mu.Unlock()
 }
 
 // OpenSessionDone creates a buffered done channel for agentID's current session.
