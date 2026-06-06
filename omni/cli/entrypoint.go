@@ -910,7 +910,7 @@ func (c *DefaultCli) newAgentExecCommand() *cobra.Command {
 			name := args[0]
 			resolvedID := agentID
 			if resolvedID == "" {
-				id, err := c.resolveAgentIDByName(os.Getenv("OMNI_WORKSPACE"), name)
+				id, err := c.resolveAgentIDByName("", name)
 				if err != nil {
 					return err
 				}
