@@ -168,8 +168,9 @@ func applyTemplate(workspaceRoot, destDir, agentName, version string) error {
 		return err
 	}
 	if vc := versionCode(version); vc >= 2 {
-		memDir := filepath.Join(workspaceRoot, MemoryDirName)
-		if err := stampAgentInLock(memDir, agentName, vc); err != nil {
+		// workspaceRoot here is already the memory dir (<ws>/memory),
+		// not the repository root, so pass it directly without re-joining MemoryDirName.
+		if err := stampAgentInLock(workspaceRoot, agentName, vc); err != nil {
 			logger.Error("applyTemplate: stamp lock failed", "agentName", agentName, "version", version, "err", err)
 			return err
 		}
