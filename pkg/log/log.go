@@ -91,10 +91,7 @@ func InitSessionLog(sessionID string) {
 		id = fmt.Sprintf("pid-%d", os.Getpid())
 	}
 	path := filepath.Join(logDir, fmt.Sprintf("session-%s.log", id))
-	if err := os.Setenv("OMNI_LOG_FILE", path); err != nil {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "omni: session log → %s\n", path)
+	_ = os.Setenv("OMNI_LOG_FILE", path)
 }
 
 // NewLogger returns a structured logger tagged with the given key/value pair.

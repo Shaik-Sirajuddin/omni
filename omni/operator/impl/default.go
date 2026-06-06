@@ -660,8 +660,8 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	requestedSessionID := strings.TrimSpace(params.SessionID)
 	if requestedSessionID != "" {
 		sessionID = requestedSessionID
-		omnilog.InitSessionLog(sessionID)
 	}
+	omnilog.InitSessionLog(sessionID)
 	if o.ptyDaemon != nil {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
