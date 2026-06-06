@@ -1341,6 +1341,22 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	if requestedSessionID != "" {
 		createID = requestedSessionID
 	}
+
+	// Pre-write the session record so AgentResolver can route hooks that fire
+	// during ca.Create(). SessionStart fires while Create is blocking — the
+	// codesession record must exist before that point.
+	if o.sessionStore != nil && createID != "" {
+		preSession := &omniagent.CodeSession{
+			Id:       createID,
+			Model:    &codeagent.Model{Provider: provider, Model: model},
+			IsActive: false,
+			Status:   "starting",
+		}
+		if createErr := o.sessionStore.CreateSession(agent.ID, preSession); createErr != nil {
+			_ = o.sessionStore.UpdateSession(agent.ID, preSession)
+		}
+	}
+
 	envs := mcpSessionEnvs(agent)
 	createResult, err := ca.Create(codeagent.CreateSessionParams{
 		ID:        createID,
