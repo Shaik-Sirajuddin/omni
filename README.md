@@ -1,23 +1,41 @@
 # omni
 
-Omni is a supervisor for AI coding agents (Claude, Codex, Gemini). It manages agent sessions, hooks, and inter-agent messaging over a local PTY daemon and MCP transport.
+> **Omni lets AI coding agents (Claude, Codex, Gemini) collaborate — messaging each other, sharing hooks, and coordinating tasks over a local communication transport.**
 
-## Install
+![omni demo](readme.gif)
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/memory/main/install.sh | bash
-```
+- One-way and two-way inter-agent messaging — callers can send fire-and-forget or wait for a guaranteed response
+- Auto retries when agents fail to call relevant tools — delivers success or failure with response content
+- Custom JSON schema support in tool calls for structured agent responses
+- Claude Code, OpenAI Codex, and Gemini (Agy) agent sessions
+- Edits agent config to register the axolink MCP server automatically
+- First run: approve the axolink tools once when prompted by your agent
 
-Linux and WSL only (amd64 / arm64). Requires `sudo`.  
-→ See [docs/quickstart.md](docs/quickstart.md) for what gets installed, upgrade instructions, and agent commands.
+> [!IMPORTANT]
+> ## Install
+>
+> **Linux and Windows (WSL 2)**
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Shaik-Sirajuddin/omni/main/install.sh | bash
+> ```
+>
+> For WSL 2, enable systemd first — add `[boot]\nsystemd=true` to `/etc/wsl.conf` then run `wsl --shutdown`.
+>
+> → See [docs/quickstart.md](docs/quickstart.md) for upgrade instructions and full setup details.
 
 ## Quick reference
 
 ```bash
+omni team init                           # initialise a team in the current workspace
+omni agent init -r -p claude <name>      # create (or resume) a Claude agent
 omni agent list                          # list running sessions
-omni agent resume <session-id>           # attach to a session
-omni agent exec <session-id> -- <cmd>    # run a command inside a session
+omni agent resume <name>                 # attach to a session
+omni agent exec <name> -- <cmd>          # run a command inside a session
 ```
+
+> [!NOTE]
+> Omni broadcasts MCP hook events (`PreToolUse`, `PostToolUse`, `SessionStart`, …) to all agents. Pre-hook side-effects are intentional — one agent can influence another's next action.
 
 ## Development
 
@@ -28,3 +46,7 @@ make docker-connect  # open a shell in the running container
 ```
 
 → See [development/](development/) for docker setup and `.env.docker.example`.
+
+## License
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE).

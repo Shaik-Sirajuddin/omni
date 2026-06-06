@@ -16,10 +16,7 @@ import (
 var logger = pkglog.NewLogger("component", "ptydaemon")
 
 func main() {
-	// Redirect all loggers in this process to stderr so journald captures them.
-	// Must be called before any logger emits its first record.
 	pkglog.UseStderrForAll()
-
 	socketPath := ptydaemon.DefaultSocketPath()
 	dbPath := envOr("PTYDAEMON_DB", "/var/lib/omni-"+currentUsername()+"/ptydaemon.db")
 

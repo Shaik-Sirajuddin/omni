@@ -7,10 +7,8 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
-	"time"
 
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
-	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy"
 	agysettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/agy/settings"
@@ -165,21 +163,6 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 			<-ctx.Done()
 		}()
 	}
-
-	// Log cleanup: run once at startup then every 24h.
-	go func() {
-		pkglog.CleanOldLogs()
-		t := time.NewTicker(24 * time.Hour)
-		defer t.Stop()
-		for {
-			select {
-			case <-t.C:
-				pkglog.CleanOldLogs()
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 
 	go func() {
 		wg.Wait()

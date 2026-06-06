@@ -8,7 +8,7 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/cli"
 	"github.com/Shaik-Sirajuddin/memory/config"
-	operator "github.com/Shaik-Sirajuddin/memory/operator"
+	"github.com/Shaik-Sirajuddin/memory/operator"
 	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
 )
 
