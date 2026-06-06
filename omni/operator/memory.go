@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed all:templates/**
@@ -164,6 +167,13 @@ func applyTemplate(workspaceRoot, destDir, agentName, version string) error {
 	if err := writeAgentCollabTasksDir(ctx, version); err != nil {
 		return err
 	}
+	if vc := versionCode(version); vc >= 2 {
+		memDir := filepath.Join(workspaceRoot, MemoryDirName)
+		if err := stampAgentInLock(memDir, agentName, vc); err != nil {
+			logger.Error("applyTemplate: stamp lock failed", "agentName", agentName, "version", version, "err", err)
+			return err
+		}
+	}
 	return nil
 }
 
@@ -308,7 +318,87 @@ func seedMemoryRoot(memDir, version string) error {
 	if err := copyTemplateTree(memoryTemplateRoot(version), memDir, ctx); err != nil {
 		return err
 	}
+	if vc := versionCode(version); vc >= 2 {
+		if err := seedLockFile(memDir, vc); err != nil {
+			logger.Error("seedMemoryRoot: seed lock failed", "memoryDir", memDir, "version", version, "err", err)
+			return err
+		}
+	}
 	logger.Debug("seedMemoryRoot: completed", "memoryDir", memDir, "version", version)
+	return nil
+}
+
+const lockFileName = ".memory.lock"
+
+// memoryLock is a minimal representation of the lock file shared with
+// memory/tools/migrate. Only the fields needed for seeding are included.
+type memoryLock struct {
+	LockVersion   int            `yaml:"lock_version"`
+	LayoutVersion int            `yaml:"layout_version"`
+	TeamVersion   int            `yaml:"team_version"`
+	MigratedAt    time.Time      `yaml:"migrated_at"`
+	Agents        map[string]int `yaml:"agents"`
+}
+
+// seedLockFile writes an initial .memory.lock when creating a v2+ workspace.
+// Skips if the file already exists (idempotent).
+func seedLockFile(memDir string, layoutVersion int) error {
+	path := filepath.Join(memDir, lockFileName)
+	if _, err := os.Stat(path); err == nil {
+		return nil // already present — leave it to the migrate tool
+	}
+	lf := memoryLock{
+		LockVersion:   1,
+		LayoutVersion: layoutVersion,
+		TeamVersion:   layoutVersion,
+		MigratedAt:    time.Now().UTC().Truncate(time.Second),
+		Agents:        map[string]int{},
+	}
+	return writeLockFile(path, lf)
+}
+
+// stampAgentInLock records the given agent at layoutVersion in .memory.lock.
+// Creates the lock file if absent; no-ops if the agent is already at that version.
+func stampAgentInLock(memDir, agentName string, layoutVersion int) error {
+	path := filepath.Join(memDir, lockFileName)
+
+	// Read existing lock or start fresh.
+	lf := memoryLock{
+		LockVersion:   1,
+		LayoutVersion: layoutVersion,
+		TeamVersion:   layoutVersion,
+		MigratedAt:    time.Now().UTC().Truncate(time.Second),
+		Agents:        map[string]int{},
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = yaml.Unmarshal(data, &lf)
+		if lf.Agents == nil {
+			lf.Agents = map[string]int{}
+		}
+	}
+
+	if lf.Agents[agentName] >= layoutVersion {
+		return nil // already current
+	}
+	lf.Agents[agentName] = layoutVersion
+	lf.MigratedAt = time.Now().UTC().Truncate(time.Second)
+	return writeLockFile(path, lf)
+}
+
+func writeLockFile(path string, lf memoryLock) error {
+	header := []byte("# GENERATED — do not edit. Run memory/tools/migrate to update.\n")
+	body, err := yaml.Marshal(lf)
+	if err != nil {
+		return fmt.Errorf("marshal lock: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(header, body...), 0o644); err != nil {
+		return fmt.Errorf("write lock tmp: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename lock: %w", err)
+	}
 	return nil
 }
 
