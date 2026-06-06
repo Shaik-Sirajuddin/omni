@@ -33,6 +33,7 @@ import (
 	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
+	agentpoolclient "github.com/Shaik-Sirajuddin/memory/svc/agentpool/client"
 	"github.com/google/uuid"
 )
 
@@ -59,6 +60,7 @@ type DefaultOperator struct {
 	agentMemory          operator.AgentMemory
 	provisioner          sandbox.SandboxProvisioner // nil = sandboxing disabled
 	ptyDaemon            ptyclients.Client
+	poolClient           *agentpoolclient.Client
 	newCodeAgent         func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	newCodeAgentForAgent func(agentID string, provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 }
@@ -172,6 +174,63 @@ func (a *codexPTYAdapter) SessionPID(_, sessionID string) (int, error) {
 	return info.PID, nil
 }
 
+
+// SetPoolClient attaches an agent pool client. When set, CreateAgent will
+// attempt to dequeue a pre-warmed session before starting one from scratch.
+func (o *DefaultOperator) SetPoolClient(c *agentpoolclient.Client) {
+	o.poolClient = c
+}
+
+// HasPoolClient reports whether a pool client has been wired via SetPoolClient.
+// Used in tests to assert that the CLI wiring contract is satisfied.
+func (o *DefaultOperator) HasPoolClient() bool {
+	return o.poolClient != nil
+}
+
+// CreateAgentForPool creates a non-interactive agent and returns its agentID
+// and active sessionID. Intended for the pool daemon to pre-warm sessions.
+func (o *DefaultOperator) CreateAgentForPool(ctx context.Context, provider, workspace string) (agentID string, sessionID string, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: context: %w", err)
+	}
+	// Use a deterministic unique name so we can find the agent by name after
+	// creation, avoiding the racy last-element heuristic on ListAgentsByDir.
+	poolName := "pool-" + uuid.NewString()[:8]
+	if err := o.CreateAgent(operator.CreateAgentParams{
+		Workspace: sandbox.WorkspaceDir(workspace),
+		Provider:  codeagent.Provider(provider),
+		Name:      poolName,
+		Interactive: false,
+		SkipPool:  true, // prevent recursive pool → create → pool deadlock
+	}); err != nil {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: create: %w", err)
+	}
+
+	agents, err := o.store.ListAgentsByDir(sandbox.WorkspaceDir(workspace))
+	if err != nil {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: list agents: %w", err)
+	}
+	for _, a := range agents {
+		if a.Name == poolName {
+			agentID = a.ID
+			break
+		}
+	}
+	if agentID == "" {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: agent %q not found after create", poolName)
+	}
+
+	if o.sessionStore != nil {
+		session, sErr := o.sessionStore.GetSession(agentID)
+		if sErr == nil && session != nil {
+			sessionID = session.Id
+		}
+	}
+	if sessionID == "" {
+		return "", "", fmt.Errorf("operator: CreateAgentForPool: session not started for agent %s (provider binary may be missing or not configured)", agentID)
+	}
+	return agentID, sessionID, nil
+}
 
 // SwitchProvider implements [Operator].
 // SwitchProvider when switching between models , if a non fill session exists matching provider , agent , session is reused , override by CleanStart
@@ -865,6 +924,16 @@ func New() (operator.Operator, error) {
 	return op, nil
 }
 
+// NewDefault returns the concrete *DefaultOperator, exposing methods like
+// SetPoolClient and CreateAgentForPool that are not on the Operator interface.
+func NewDefault() (*DefaultOperator, error) {
+	op, err := New()
+	if err != nil {
+		return nil, err
+	}
+	return op.(*DefaultOperator), nil
+}
+
 // memoryEnabled reports whether the agentMemory module should be invoked.
 // Both the module and the feature flag must be active.
 func (o *DefaultOperator) memoryEnabled() bool {
@@ -1055,6 +1124,34 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 			return fmt.Errorf("operator: create agent: seed memory: %w", err)
 		}
 		logger.Info("CreateAgent: memory seeded", "agentID", agentID, "memoryDir", memDir)
+	}
+
+	// Pool fast-path: dequeue a pre-warmed session instead of spinning up a new one.
+	// Skipped when SkipPool=true to prevent recursive calls from CreateAgentForPool.
+	if o.poolClient != nil && !params.SkipPool {
+		entry, poolErr := o.poolClient.Get(string(params.Provider), string(workspace))
+		if poolErr != nil {
+			logger.Warn("CreateAgent: pool get failed, falling through to normal path", "agentID", agentID, "err", poolErr)
+		} else if entry != nil {
+			if o.sessionStore != nil && entry.SessionID != "" {
+				// Deregister the session from the pool agent so only the new
+				// agentID owns it — prevents two agents fighting over the same PTY.
+				if entry.AgentID != "" {
+					_ = o.sessionStore.UpdateSession(entry.AgentID, &omniagent.CodeSession{
+						Id: entry.SessionID, IsActive: false, Status: "transferred",
+					})
+				}
+				if storeErr := o.sessionStore.CreateSession(agentID, &omniagent.CodeSession{
+					Id:       entry.SessionID,
+					IsActive: true,
+					Status:   "ready",
+				}); storeErr != nil {
+					logger.Warn("CreateAgent: pool session store write failed", "agentID", agentID, "sessionID", entry.SessionID, "err", storeErr)
+				}
+			}
+			logger.Info("CreateAgent: pool hit — reusing pre-warmed session", "agentID", agentID, "sessionID", entry.SessionID)
+			return nil
+		}
 	}
 
 	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID); err != nil {

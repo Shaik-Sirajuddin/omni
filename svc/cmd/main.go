@@ -11,6 +11,8 @@ import (
 
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
+	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
+	agentpoolclient "github.com/Shaik-Sirajuddin/memory/svc/agentpool/client"
 )
 
 var Version = "dev"
@@ -22,6 +24,7 @@ func main() {
 	disableHook       := flag.Bool("disable-hook-operator", false, "Disable the hook operator service")
 	disableMCP        := flag.Bool("disable-axolink-mcp", false, "Disable the Axolink MCP service")
 	disableConfigSync := flag.Bool("disable-config-sync", false, "Disable the config sync service")
+	disableAgentPool  := flag.Bool("disable-agent-pool", false, "Disable the agent pool daemon service")
 	printVersion      := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -52,6 +55,21 @@ func main() {
 			WorkspaceDir:  envOr("CONFIG_SYNC_AGY_WORKSPACE_DIR", ""),
 			WatchSettings: true,
 		},
+	}
+
+	if !*disableAgentPool {
+		poolSocketPath := sockpath.AgentPool()
+		op, err := operatorimpl.NewDefault()
+		if err != nil {
+			log.Error("agent-pool: operator init failed", "err", err)
+			os.Exit(1)
+		}
+		op.SetPoolClient(agentpoolclient.New(poolSocketPath))
+		mux.AgentPool = AgentPoolConfig{
+			ServiceConfig: ServiceConfig{Enabled: true},
+			SocketPath:    poolSocketPath,
+			CreateAgent:   op.CreateAgentForPool,
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

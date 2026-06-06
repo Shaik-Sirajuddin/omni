@@ -29,6 +29,7 @@ type CreateAgentParams struct {
 	ResumeIfExists     bool                 `json:"resume_if_exists,omitempty"`
 	Interactive        bool                 `json:"interactive"` // launch after create; default true
 	SessionID          string               `json:"session_id,omitempty"`
+	SkipPool           bool                 `json:"-"` // bypass pool fast-path; set by CreateAgentForPool to prevent recursion
 }
 
 type ResumeAgentParams struct {

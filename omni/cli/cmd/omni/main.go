@@ -10,6 +10,8 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/operator"
 	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
+	agentpoolclient "github.com/Shaik-Sirajuddin/memory/svc/agentpool/client"
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
 var Version = "dev"
@@ -21,11 +23,13 @@ func main() {
 
 	var op operator.Operator
 	if commandRequiresOperator(os.Args[1:]) {
-		var err error
-		op, err = operatorimpl.New()
+		concrete, err := operatorimpl.NewDefault()
 		if err != nil {
 			log.Fatal(err)
 		}
+		// Wire the pool client so agent creates dequeue pre-warmed sessions.
+		concrete.SetPoolClient(agentpoolclient.New(sockpath.AgentPool()))
+		op = concrete
 	}
 
 	c := cli.EntrypointWithVersion(op, &config.DefaultOmniConfigResolver{}, Version)
