@@ -153,7 +153,7 @@ func (s *sqlOmniAgentStore) ListAgents(params ListAgentParams) ListAgentResponse
 		rows *sql.Rows
 		err  error
 	)
-	if params.Workspace == "" {
+	if params.AllWorkspaces {
 		rows, err = s.db.Query(`SELECT id, name, workspace_dir, memory_dir FROM agents`)
 	} else {
 		rows, err = s.db.Query(

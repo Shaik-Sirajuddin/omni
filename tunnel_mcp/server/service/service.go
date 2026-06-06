@@ -629,20 +629,33 @@ func (s *Service) resolveSender(ctx context.Context, sender SenderSpec, payload 
 		}
 	}
 
-	// Global fallback: workspace-scoped lookup missed (e.g. path mismatch between
-	// CLI-stored workspace_dir and header value). Search all agents by name.
-	if all, err := s.listWorkspaceAgents(""); err == nil {
+	// Global fallback: workspace-scoped lookup missed (path mismatch between
+	// CLI-stored workspace_dir and X-AGENT-WORKSPACE header, e.g. symlink or
+	// trailing-slash difference). Search all agents by name, preferring agents
+	// whose workspace_dir matches the expected workspace.
+	if all, err := s.listAllAgents(); err == nil {
+		var best *agents.AgentInfo
 		for _, agent := range all {
-			if agent == nil {
+			if agent == nil || agent.Name != rawID {
 				continue
 			}
-			if agent.Name == rawID {
-				sender.ID = agent.ID
-				if strings.TrimSpace(sender.Workspace) == "" {
-					sender.Workspace = strings.TrimSpace(string(agent.WorkspaceDir))
-				}
-				return sender, nil
+			if best == nil {
+				best = agent
 			}
+			// Prefer workspace match when multiple agents share the same name.
+			if strings.TrimSpace(string(agent.WorkspaceDir)) == workspace {
+				best = agent
+				break
+			}
+		}
+		if best != nil {
+			logger.Warn("resolveSender: workspace-scoped lookup missed, used global name fallback — possible path mismatch",
+				"sender_name", rawID, "expected_workspace", workspace, "found_workspace", best.WorkspaceDir)
+			sender.ID = best.ID
+			if strings.TrimSpace(sender.Workspace) == "" {
+				sender.Workspace = strings.TrimSpace(string(best.WorkspaceDir))
+			}
+			return sender, nil
 		}
 	}
 	return SenderSpec{}, fmt.Errorf("sender agent not found")
@@ -667,6 +680,21 @@ func (s *Service) listWorkspaceAgents(workspace string) ([]*agents.AgentInfo, er
 		return nil, InternalError(fmt.Errorf("agent store is unavailable"))
 	}
 	resp := s.agentStore.ListAgents(agents.ListAgentParams{Workspace: sandbox.WorkspaceDir(workspace)})
+	list := make([]*agents.AgentInfo, 0, len(resp.Agents))
+	for _, agent := range resp.Agents {
+		if agent == nil || agent.Info == nil {
+			continue
+		}
+		list = append(list, agent.Info)
+	}
+	return list, nil
+}
+
+func (s *Service) listAllAgents() ([]*agents.AgentInfo, error) {
+	if s.agentStore == nil {
+		return nil, InternalError(fmt.Errorf("agent store is unavailable"))
+	}
+	resp := s.agentStore.ListAgents(agents.ListAgentParams{AllWorkspaces: true})
 	list := make([]*agents.AgentInfo, 0, len(resp.Agents))
 	for _, agent := range resp.Agents {
 		if agent == nil || agent.Info == nil {
