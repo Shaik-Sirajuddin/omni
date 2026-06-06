@@ -20,12 +20,9 @@ func TestPTYResumeColdStart(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectPTYProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
-	agentName := "e2e-pty-cold-" + time.Now().Format("150405")
+	agentName := "e2e-pty-cold-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -56,12 +53,9 @@ func TestPTYResumeIdempotent(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	provider := detectPTYProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
-	agentName := "e2e-pty-idem-" + time.Now().Format("150405")
+	agentName := "e2e-pty-idem-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -94,12 +88,9 @@ func TestPTYResumeAfterStop(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectPTYProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
-	agentName := "e2e-pty-restart-" + time.Now().Format("150405")
+	agentName := "e2e-pty-restart-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -124,16 +115,3 @@ func TestPTYResumeAfterStop(t *testing.T) {
 	assert.True(t, restarted, "PTY session must restart after stop+resume")
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-
-func detectPTYProvider(t *testing.T, cfg harness.TestConfig) string {
-	t.Helper()
-	for _, provider := range []string{"claude", "codex"} {
-		_, code := harness.ExecInContainer(t, cfg, "command -v "+provider)
-		if code == 0 {
-			t.Logf("provider: %s", provider)
-			return provider
-		}
-	}
-	return ""
-}

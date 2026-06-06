@@ -20,10 +20,7 @@ func TestDetachedExecDelivery(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "detach-route")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -55,10 +52,7 @@ func TestWaitPTYReadyColdStart(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "cold-start")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -90,10 +84,7 @@ func TestNonDetachedRegression(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "non-detach")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")

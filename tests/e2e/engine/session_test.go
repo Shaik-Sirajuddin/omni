@@ -21,10 +21,7 @@ func TestFullSessionExecAndResponse(t *testing.T) {
 	agentName := "e2e-session-full-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
-	provider := detectSessionProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
@@ -48,10 +45,7 @@ func TestSessionNoCrashOnBadInput(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectSessionProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agentName := "e2e-bad-input-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -90,10 +84,7 @@ func TestMultiAgentConcurrentExec(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	provider := detectSessionProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	ts := harness.AgentNameSuffix(t)
 	agent1 := "e2e-concurrent-a-" + ts
@@ -138,10 +129,7 @@ func TestSessionStopAndStatus(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectSessionProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agentName := "e2e-stop-status-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -192,13 +180,15 @@ func TestWorkspaceIsolation(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
+	provider := harness.RequireProvider(t, cfg)
+
 	ts := harness.AgentNameSuffix(t)
 	agent1 := "e2e-iso-sender-" + ts
 	ghost := "e2e-iso-ghost-" + ts // never created
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agent1,
-		"--workspace", cfg.Workspace, "--provider", "codex")
+		"--workspace", cfg.Workspace, "--provider", provider)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agent1) })
 
 	mcpCli := harness.NewMCPClient(t, cfg, agent1)
@@ -216,18 +206,4 @@ func TestWorkspaceIsolation(t *testing.T) {
 		"send_message to non-existent agent must return an error or not-found (got: %s)", out)
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-
-func detectSessionProvider(t *testing.T, cfg harness.TestConfig) string {
-	t.Helper()
-	for _, provider := range []string{"claude", "codex"} {
-		_, code := harness.ExecInContainer(t, cfg, "command -v "+provider)
-		if code == 0 {
-			t.Logf("provider: %s", provider)
-			return provider
-		}
-	}
-	t.Log("WARNING: no supported agent binary (claude/codex) found in container — provider-dependent tests will be skipped")
-	return ""
-}
 

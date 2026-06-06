@@ -56,7 +56,6 @@ COPY pkg/             pkg/
 COPY tunnel_mcp/      tunnel_mcp/
 COPY development/     development/
 COPY deployment/      deployment/
-COPY tests/e2e/go.mod tests/e2e/go.sum tests/e2e/
 
 ARG VERSION=dev
 ENV VERSION=${VERSION}

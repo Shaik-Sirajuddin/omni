@@ -88,11 +88,26 @@ func TestAddMCPIdempotency(t *testing.T) {
 	}
 	require.Equal(t, 0, code, "~/.claude.json must exist")
 
-	// Count literal occurrences of "axolink" as a key
-	count := strings.Count(raw, `"axolink"`)
-	assert.Equal(t, 1, count,
-		"axolink must appear exactly once in ~/.claude.json (idempotency)")
-	t.Logf("axolink key count in ~/.claude.json: %d", count)
+	// Idempotency means axolink appears exactly once as a key in the global
+	// mcpServers map. Counting raw "axolink" occurrences over the whole file is
+	// wrong: the server entry's own args contain the literal "axolink" (the
+	// `omni axolink` subcommand), so a single correct entry yields two matches.
+	var claudeCfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(raw), &claudeCfg),
+		"~/.claude.json must be valid JSON")
+
+	_, ok := claudeCfg.MCPServers["axolink"]
+	assert.True(t, ok, "axolink must be present in global mcpServers")
+
+	// Belt-and-suspenders against a regression that appends a duplicate key:
+	// the key form `"axolink":` must occur exactly once. (The server's args
+	// array holds the bare string "axolink" with no colon, so it is not matched.)
+	keyCount := strings.Count(raw, `"axolink":`)
+	assert.Equal(t, 1, keyCount,
+		"axolink must appear exactly once as an mcpServers key (idempotency)")
+	t.Logf("global mcpServers keys: %v", mapKeys(claudeCfg.MCPServers))
 }
 
 // TestMCPToolListViaExec starts a claude agent and asserts that axolink tool
@@ -105,13 +120,15 @@ func TestMCPToolListViaExec(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
+	provider := harness.RequireProvider(t, cfg)
+
 	agentName := "e2e-mcp-tool-check"
 	harness.TeardownAgent(t, cfg, agentName)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmni(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "resume", agentName,
 		"--detach", "--workspace", cfg.Workspace)
 	time.Sleep(8 * time.Second)

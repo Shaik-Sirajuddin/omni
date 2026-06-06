@@ -38,10 +38,7 @@ func TestCodexAgentInit(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
-		t.Log("WARNING: codex binary not found in container — skipping agent init test")
-		t.Skip("codex binary not available")
-	}
+	harness.RequireSpecificProvider(t, cfg, "codex")
 
 	agentName := "e2e-codex-init-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -66,10 +63,7 @@ func TestCodexMCPConfig(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
-		t.Log("WARNING: codex binary not found in container — skipping MCP config test")
-		t.Skip("codex binary not available")
-	}
+	harness.RequireSpecificProvider(t, cfg, "codex")
 
 	agentName := "e2e-codex-mcp-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -117,10 +111,7 @@ func TestCodexExecDelivery(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
-		t.Log("WARNING: codex binary not found in container — skipping exec delivery test")
-		t.Skip("codex binary not available")
-	}
+	harness.RequireSpecificProvider(t, cfg, "codex")
 
 	agentName := "e2e-codex-exec-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -156,10 +147,7 @@ func TestCodexConfigStrictMode(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
-	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
-		t.Log("WARNING: codex binary not found in container — skipping strict config test")
-		t.Skip("codex binary not available")
-	}
+	harness.RequireSpecificProvider(t, cfg, "codex")
 
 	// Look for a codex config file
 	out, code := harness.ExecInContainer(t, cfg,

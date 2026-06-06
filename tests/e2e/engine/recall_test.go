@@ -41,12 +41,7 @@ func TestSendMessageRecorded(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	// send_message validates the sender agent is active in the server; skip if
-	// no provider binary is available to resume it.
-	if _, code := harness.ExecInContainer(t, cfg, "command -v codex || command -v claude"); code != 0 {
-		t.Log("WARNING: no agent binary available — send_message requires a running sender agent")
-		t.Skip("no supported agent binary available")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	ts := harness.AgentNameSuffix(t)
 	sender := "e2e-recall-sender-" + ts
@@ -58,9 +53,9 @@ func TestSendMessageRecorded(t *testing.T) {
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", sender,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 
 	mcpCli := harness.NewMCPClient(t, cfg, sender)
 	inner := mcpCli.CallToolText("send_message", map[string]any{
@@ -70,6 +65,16 @@ func TestSendMessageRecorded(t *testing.T) {
 		"prompt":    "e2e-recall-probe-" + ts,
 	})
 	t.Logf("send_message inner: %s", inner)
+
+	// BUG (tunnel_mcp send_message sender resolution): the axolink server fails
+	// to resolve a sender agent that exists in the shared agents table by
+	// name+workspace, returning "sender agent not found". Real agents use the
+	// agent name as AXO_LINK_MCP_SENDER_ID (operator/impl/default.go:1276), so
+	// this breaks agent-to-agent messaging for CLI-created agents. This is a real
+	// failure surfaced by the suite — not masked with a skip.
+	require.NotContains(t, inner, "sender agent not found",
+		"BUG: send_message could not resolve the sender agent by name+workspace; "+
+			"agent-to-agent messaging is broken for CLI-created senders")
 	require.NotEmpty(t, inner, "send_message must return a result")
 
 	// Parse message_id from the response JSON directly.
@@ -91,24 +96,21 @@ func TestDeliveryChainMessageID(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	if out, code := harness.ExecInContainer(t, cfg, "command -v claude"); code != 0 || strings.TrimSpace(out) == "" {
-		t.Log("WARNING: claude binary not found — delivery chain test requires a running claude agent")
-		t.Skip("claude not available")
-	}
+	harness.RequireProvider(t, cfg)
 
 	agentName := "e2e-chain-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "resume", agentName,
 		"--detach", "--workspace", cfg.Workspace)
 	time.Sleep(5 * time.Second)
 
 	senderChain := "e2e-chain-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderChain,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderChain) })
 
 	mcpCli := harness.NewMCPClient(t, cfg, senderChain)
@@ -128,7 +130,8 @@ func TestDeliveryChainMessageID(t *testing.T) {
 		msgID = harness.ExtractMessageID(omniLog, 5*time.Second)
 	}
 	if msgID == "" {
-		t.Skip("message_id not captured — skipping chain verification")
+		t.Fatalf("BUG: send_message produced no message_id — tunnel_mcp sender " +
+			"resolution failure breaks the delivery chain; see TestSendMessageRecorded")
 	}
 
 	// Verify storage via get_message — confirms delivery chain end-to-end.
@@ -147,16 +150,18 @@ func TestQueryResultAPI(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
+	harness.RequireProvider(t, cfg)
+
 	agentName := "e2e-qr-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 
 	senderQR := "e2e-qr-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderQR,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderQR) })
 
 	mcpCli := harness.NewMCPClient(t, cfg, senderQR)
@@ -172,7 +177,8 @@ func TestQueryResultAPI(t *testing.T) {
 	_ = json.Unmarshal([]byte(inner), &smResp)
 	msgID := smResp.MessageID
 	if msgID == "" {
-		t.Skip("message_id not available — skipping query_result test")
+		t.Fatalf("BUG: send_message produced no message_id — tunnel_mcp sender " +
+			"resolution failure; cannot exercise query_result; see TestSendMessageRecorded")
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -204,16 +210,18 @@ func TestGetMessageAPI(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
+	harness.RequireProvider(t, cfg)
+
 	agentName := "e2e-gm-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 
 	senderGM := "e2e-gm-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderGM,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderGM) })
 
 	mcpCli := harness.NewMCPClient(t, cfg, senderGM)
@@ -230,7 +238,8 @@ func TestGetMessageAPI(t *testing.T) {
 	_ = json.Unmarshal([]byte(inner), &smResp)
 	msgID := smResp.MessageID
 	if msgID == "" {
-		t.Skip("message_id not available — skipping get_message test")
+		t.Fatalf("BUG: send_message produced no message_id — tunnel_mcp sender " +
+			"resolution failure; cannot exercise get_message; see TestSendMessageRecorded")
 	}
 
 	gmOut := mcpCli.CallTool("get_message", map[string]any{"id": msgID})
@@ -248,13 +257,15 @@ func TestListAgentsReturnsAgents(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
+	harness.RequireProvider(t, cfg)
+
 	agentName := "e2e-list-agent-" + harness.AgentNameSuffix(t)
 	harness.TeardownAgent(t, cfg, agentName) // pre-clean stale state
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 
 	listOut, _ := harness.RunOmniAllowFail(t, cfg,
 		"agent", "list", "--workspace", cfg.Workspace)
@@ -302,17 +313,14 @@ func TestAgentInterruptResume(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	if out, code := harness.ExecInContainer(t, cfg, "command -v claude"); code != 0 || strings.TrimSpace(out) == "" {
-		t.Log("WARNING: claude binary not found in container — skipping interrupt test")
-		t.Skip("claude not available")
-	}
+	harness.RequireProvider(t, cfg)
 
 	agentName := "e2e-interrupt-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "resume", agentName,
 		"--detach", "--workspace", cfg.Workspace)
 	time.Sleep(4 * time.Second)
@@ -342,16 +350,18 @@ func TestSendResponseAPI(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
+	harness.RequireProvider(t, cfg)
+
 	agentName := "e2e-sr-agent-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 
 	senderSR := "e2e-sr-sender-" + harness.AgentNameSuffix(t)
 	harness.RunOmni(t, cfg, "agent", "init", senderSR,
-		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
+		"--workspace", cfg.Workspace, "--provider", cfg.Provider, "--interactive=false")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, senderSR) })
 
 	mcpCli := harness.NewMCPClient(t, cfg, senderSR)
@@ -367,7 +377,8 @@ func TestSendResponseAPI(t *testing.T) {
 	_ = json.Unmarshal([]byte(inner), &smResp)
 	msgID := smResp.MessageID
 	if msgID == "" {
-		t.Skip("message_id not available — skipping send_response test")
+		t.Fatalf("BUG: send_message produced no message_id — tunnel_mcp sender " +
+			"resolution failure; cannot exercise send_response; see TestSendMessageRecorded")
 	}
 
 	srOut := mcpCli.CallTool("send_response", map[string]any{

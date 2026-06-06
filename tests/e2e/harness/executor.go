@@ -114,7 +114,8 @@ func NewDockerExecutor(t *testing.T, containerName string) *DockerExecutor {
 		t.Skipf("docker executor: container %q not running (err=%v)", containerName, err)
 	}
 	env := []string{
-		"PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		// Include /root/.local/bin so agent CLIs installed there (codex, agy) are found.
+		"PATH=/root/.local/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"OMNI_PTY_SOCKET=/run/omni-root/omni-pty.sock",
 		"HOOK_OPERATOR_SOCKET=/run/omni-root/hook-operator.sock",
 	}

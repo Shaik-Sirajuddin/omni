@@ -20,10 +20,7 @@ func TestExecResumeLaunchesPTY(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available (claude/codex)")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "exec-resume")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -63,10 +60,7 @@ func TestHookReceiptConfirmsDelivery(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available (claude/codex)")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "hook-receipt")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -87,16 +81,17 @@ func TestHookReceiptConfirmsDelivery(t *testing.T) {
 }
 
 // TestMultiplePromptsSequential verifies a second exec --bg also fires a hook.
+// The delivery signal is the UserPromptSubmit hook event (the phrase the omni
+// build actually emits); the first exec must produce one, then a second exec
+// must push the count higher.
 func TestMultiplePromptsSequential(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
+	_, omniLog := harness.CaptureOmniLog(t, cfg)
+	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available (claude/codex)")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "multi-prompt")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -108,8 +103,12 @@ func TestMultiplePromptsSequential(t *testing.T) {
 		"agent", "exec", agent, "--prompt", "first: say hello", "--bg")
 	require.Equal(t, 0, code1, "first exec --bg must succeed: %s", out1)
 
-	before := countOccurrences(jrnl.String(), "exec in session")
-	time.Sleep(500 * time.Millisecond)
+	// Gate on real delivery of the first prompt before measuring the second.
+	first := jrnl.WaitFor("UserPromptSubmit", 30*time.Second) ||
+		omniLog.WaitFor("UserPromptSubmit", 30*time.Second)
+	require.True(t, first, "first prompt must produce a UserPromptSubmit hook within 30s")
+
+	before := countOccurrences(jrnl.String(), "UserPromptSubmit")
 
 	out2, code2 := harness.RunOmniAllowFail(t, cfg,
 		"agent", "exec", agent, "--prompt", "second: count two", "--bg")
@@ -119,15 +118,12 @@ func TestMultiplePromptsSequential(t *testing.T) {
 	for {
 		select {
 		case <-deadline:
-			after := countOccurrences(jrnl.String(), "exec in session")
-			if after <= before {
-				t.Errorf("second hook event not observed within 30s (before=%d, after=%d)",
-					before, after)
-			}
+			t.Errorf("second UserPromptSubmit hook not observed within 30s (before=%d, after=%d)",
+				before, countOccurrences(jrnl.String(), "UserPromptSubmit"))
 			return
 		case <-time.After(500 * time.Millisecond):
-			if countOccurrences(jrnl.String(), "exec in session") > before {
-				t.Logf("second exec in session confirmed")
+			if countOccurrences(jrnl.String(), "UserPromptSubmit") > before {
+				t.Logf("second UserPromptSubmit confirmed")
 				return
 			}
 		}
@@ -141,10 +137,7 @@ func TestSessionPersistsAfterExec(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
-	provider := detectProvider(t, cfg)
-	if provider == "" {
-		t.Skip("no supported agent binary available (claude/codex)")
-	}
+	provider := harness.RequireProvider(t, cfg)
 
 	agent := uniqueAgent(t, "persist")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -164,18 +157,6 @@ func TestSessionPersistsAfterExec(t *testing.T) {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-func detectProvider(t *testing.T, cfg harness.TestConfig) string {
-	t.Helper()
-	for _, p := range []string{"claude", "codex"} {
-		_, code := harness.ExecInContainer(t, cfg, "command -v "+p)
-		if code == 0 {
-			t.Logf("provider: %s", p)
-			return p
-		}
-	}
-	return ""
-}
 
 func countOccurrences(s, substr string) int {
 	return strings.Count(s, substr)

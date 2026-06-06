@@ -19,6 +19,9 @@ type TestConfig struct {
 	OmniPath  string
 	Workspace string
 	Container string
+	// Provider is the agent provider to use (e.g. "claude", "codex").
+	// Set via E2E_PROVIDER env var or auto-detected from available binaries.
+	Provider string
 }
 
 // NewConfig sets up an isolated test environment backed by a per-test workspace.
@@ -33,6 +36,7 @@ type TestConfig struct {
 //
 //	E2E_TARGET     = "docker" (default) | "local"
 //	E2E_CONTAINER  = container name (default: omni-main-ubuntu-1)
+//	E2E_PROVIDER   = agent provider to use (default: auto-detected from available binaries)
 //	OMNI_BIN       = path to omni binary (default: omni)
 //	OMNI_WORKSPACE = pin all tests to an existing workspace (skips provisioning)
 func NewConfig(t *testing.T) TestConfig {
@@ -68,12 +72,60 @@ func NewConfig(t *testing.T) TestConfig {
 		ex = e.WithWorkDir(workspace).WithEnv(wsEnv)
 	}
 
+	provider := detectProvider(t, baseEx)
+
 	return TestConfig{
 		Exec:      ex,
 		OmniPath:  EnvOr("OMNI_BIN", "omni"),
 		Workspace: workspace,
 		Container: ctr,
+		Provider:  provider,
 	}
+}
+
+// RequireProvider returns the globally-configured provider for a
+// provider-flexible test (one whose logic is identical for any provider).
+// It skips the test — with a visible WARNING — when no provider is available.
+// In the docker container the entrypoint always installs a provider, so this
+// only skips in a bare local environment without claude/codex.
+func RequireProvider(t *testing.T, cfg TestConfig) string {
+	t.Helper()
+	if cfg.Provider == "" {
+		t.Log("WARNING: skipping — no agent provider (claude/codex) available; " +
+			"set E2E_PROVIDER or run inside the docker container")
+		t.Skip("no agent provider available")
+	}
+	return cfg.Provider
+}
+
+// RequireSpecificProvider skips a provider-specific test — with a visible
+// WARNING — when the named provider's binary is not present. Use this for
+// tests that exercise one provider's particular behaviour by design.
+func RequireSpecificProvider(t *testing.T, cfg TestConfig, provider string) {
+	t.Helper()
+	if _, code := ExecInContainer(t, cfg, "command -v "+provider); code != 0 {
+		t.Logf("WARNING: skipping — %q binary not available (provider-specific test)", provider)
+		t.Skipf("%s binary not available", provider)
+	}
+}
+
+// detectProvider returns the agent provider to use for this test run.
+// Checks E2E_PROVIDER env first; falls back to probing for claude then codex.
+// Logs a warning if neither binary is found so failures are easy to diagnose.
+func detectProvider(t *testing.T, ex CommandExecutor) string {
+	t.Helper()
+	if p := os.Getenv("E2E_PROVIDER"); p != "" {
+		return p
+	}
+	ctx := context.Background()
+	for _, p := range []string{"claude", "codex"} {
+		code, _, _ := ex.RunCommand(ctx, []string{"sh", "-c", "command -v " + p})
+		if code == 0 {
+			return p
+		}
+	}
+	t.Log("WARNING: no agent binary (claude/codex) found in PATH — provider-dependent tests will fail")
+	return ""
 }
 
 // EnvOr returns the value of key or def when the var is unset/empty.

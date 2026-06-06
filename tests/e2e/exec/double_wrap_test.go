@@ -21,11 +21,7 @@ func TestDoubleWrapFixClaude(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	out, code := harness.ExecInContainer(t, cfg, "command -v claude 2>/dev/null")
-	if code != 0 || strings.TrimSpace(out) == "" {
-		t.Log("WARNING: claude binary not found in container — double-wrap test requires a real claude session")
-		t.Skip("claude binary not available")
-	}
+	harness.RequireSpecificProvider(t, cfg, "claude")
 
 	agentName := "e2e-double-wrap-claude-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -69,11 +65,7 @@ func TestDoubleWrapFixCodex(t *testing.T) {
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
-	out, code := harness.ExecInContainer(t, cfg, "command -v codex 2>/dev/null")
-	if code != 0 || strings.TrimSpace(out) == "" {
-		t.Log("WARNING: codex binary not found in container — double-wrap test requires a real codex session")
-		t.Skip("codex binary not available")
-	}
+	harness.RequireSpecificProvider(t, cfg, "codex")
 
 	agentName := "e2e-double-wrap-codex-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
