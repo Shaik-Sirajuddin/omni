@@ -76,7 +76,13 @@ func (s *sqlOmniAgentStore) Create(agent *omniagent.Data) error {
 
 // GetAgent returns an agent's data. Sessions array is omitted.
 func (s *sqlOmniAgentStore) GetAgent(ID string) (*omniagent.Data, error) {
-	row := s.db.QueryRow(
+	rdb, err := database.GetReadOnlyDB()
+	if err != nil {
+		return nil, err
+	}
+	defer rdb.Close()
+
+	row := rdb.QueryRow(
 		`SELECT id, name, workspace_dir, memory_dir FROM agents WHERE id = ?`, ID,
 	)
 	info, err := scanAgentInfo(row)
@@ -149,14 +155,21 @@ func (s *sqlOmniAgentStore) UpdateSettings(ID string, settings *omniagent.Settin
 
 // ListAgents queries agents filtered by workspace.
 func (s *sqlOmniAgentStore) ListAgents(params ListAgentParams) ListAgentResponse {
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	// modernc.org/sqlite holds a WAL read-snapshot at the *sql.DB level, so
+	// the server's singleton connection cannot see rows committed by CLI
+	// processes after startup. Open a fresh handle per call to guarantee
+	// current WAL state. This does NOT affect write operations.
+	rdb, err := database.GetReadOnlyDB()
+	if err != nil {
+		return ListAgentResponse{}
+	}
+	defer rdb.Close()
+
+	var rows *sql.Rows
 	if params.AllWorkspaces {
-		rows, err = s.db.Query(`SELECT id, name, workspace_dir, memory_dir FROM agents`)
+		rows, err = rdb.Query(`SELECT id, name, workspace_dir, memory_dir FROM agents`)
 	} else {
-		rows, err = s.db.Query(
+		rows, err = rdb.Query(
 			`SELECT id, name, workspace_dir, memory_dir FROM agents WHERE workspace_dir = ?`,
 			string(params.Workspace),
 		)
