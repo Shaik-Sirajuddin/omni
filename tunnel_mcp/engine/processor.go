@@ -1187,6 +1187,24 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 
 	ctx := e.ctx
 
+	// Parse the payload FIRST so the stale sweeps below can exclude the messages that belong to
+	// THIS submit cycle. The ptydaemon submit-key retry can fire UserPromptSubmit twice ~9ms apart
+	// carrying the SAME YAML payload: the first hook moves the message to StatusProcessing, and
+	// without this exclusion the second hook's stale-processing sweep would see that very message
+	// as "orphaned" and fail it — leaving send_response unable to deliver and the session hanging.
+	// A message referenced in the payload being submitted is by definition current, not orphaned
+	// from a prior session, so it must be protected from both sweeps regardless of hook timing.
+	var payload promptPayload
+	isEnginePayload := yaml.Unmarshal([]byte(prompt), &payload) == nil
+	currentBatch := make(map[string]bool)
+	if isEnginePayload {
+		for _, item := range payload.Messages {
+			if item.MessageID != "" {
+				currentBatch[item.MessageID] = true
+			}
+		}
+	}
+
 	// A new prompt means a new session — any messages still in processing are orphaned from a prior session.
 	// Safety: this hook fires only on the UserPromptSubmit (PrePrompt) event, which Claude Code emits for
 	// user-originated prompts only. systemMessage injections (returned via PostPrompt/Stop hook response) do
@@ -1202,14 +1220,19 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	if err != nil {
 		logger.Error("hook: user prompt submit — query stale processing failed", "agent_id", agentID, "err", err)
 	}
+	cleared := 0
 	for _, msg := range stale {
+		if currentBatch[msg.ID] {
+			continue // belongs to this submit cycle (double-UPS race) — not orphaned
+		}
 		msg.Status = message.StatusFailed
 		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
 			logger.Error("hook: mark stale processing failed", "message_id", msg.ID, "err", err)
 		}
+		cleared++
 	}
-	if len(stale) > 0 {
-		logger.Warn("hook: user prompt submit — cleared stale processing messages", "agent_id", agentID, "count", len(stale))
+	if cleared > 0 {
+		logger.Warn("hook: user prompt submit — cleared stale processing messages", "agent_id", agentID, "count", cleared)
 	}
 
 	// Also sweep stale queued messages whose queue_time exceeded the delivery window.
@@ -1223,18 +1246,22 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	if err != nil {
 		logger.Error("hook: user prompt submit — query stale queued failed", "agent_id", agentID, "err", err)
 	}
+	clearedQueued := 0
 	for _, msg := range staleQueued {
+		if currentBatch[msg.ID] {
+			continue // belongs to this submit cycle — not orphaned
+		}
 		msg.Status = message.StatusFailed
 		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
 			logger.Error("hook: mark stale queued failed", "message_id", msg.ID, "err", err)
 		}
+		clearedQueued++
 	}
-	if len(staleQueued) > 0 {
-		logger.Warn("hook: user prompt submit — cleared stale queued messages", "agent_id", agentID, "count", len(staleQueued))
+	if clearedQueued > 0 {
+		logger.Warn("hook: user prompt submit — cleared stale queued messages", "agent_id", agentID, "count", clearedQueued)
 	}
 
-	var payload promptPayload
-	if err := yaml.Unmarshal([]byte(prompt), &payload); err != nil {
+	if !isEnginePayload {
 		logger.Debug("hook: user prompt submit — not a engine payload, skipping", "agent_id", agentID)
 		return
 	}
