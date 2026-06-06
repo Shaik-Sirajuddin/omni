@@ -75,6 +75,13 @@ func TestStoreSchemaIncludesRequiredTables(t *testing.T) {
 	assert.True(t, tableExists(t, db, "workspaces"), "Workspaces table should exist in the temp sqlite store")
 }
 
+// TestCreateAgent and TestTeamInit sub-tests that rely on cwd-defaulting
+// (AutoInitialisesMemoryInCurrentWorkspaceWhenNoMemoryExists,
+// DefaultsWorkspaceToCwd) require TMPDIR to point OUTSIDE any omni workspace.
+// If TMPDIR is under a directory that contains a memory/ root (e.g. /build),
+// the ancestor-memory-root search resolves to that parent instead of the test
+// cwd, breaking the "no memory exists → default to cwd" precondition.
+// Use TMPDIR=/root/gotmp (or any path outside the repo) when running in Docker.
 func TestCreateAgent(t *testing.T) {
 	t.Run("MemoryEnabledCreatesTemplateFiles", func(t *testing.T) {
 		op := newTestOperator(t, true)
