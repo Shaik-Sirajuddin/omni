@@ -112,10 +112,10 @@ func (p *ProxyServer) QueryResultBatch(ctx context.Context, sender service.Sende
 	return service.QueryResultBatchResponse(resp), err
 }
 
-func (p *ProxyServer) GetMessage(ctx context.Context, id string) (*service.MessageResponse, error) {
-	logger.Debug("proxy get_message", "id", id)
+func (p *ProxyServer) GetMessage(ctx context.Context, sender service.SenderSpec, id string) (*service.MessageResponse, error) {
+	logger.Debug("proxy get_message", "sender_id", sender.ID, "id", id)
 	var resp service.MessageResponse
-	err := p.get(ctx, service.SenderSpec{}, "/get-message", url.Values{"id": {id}}, &resp)
+	err := p.get(ctx, sender, "/get-message", url.Values{"id": {id}}, &resp)
 	return &resp, err
 }
 
