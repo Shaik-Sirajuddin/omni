@@ -6,7 +6,8 @@ import (
 )
 
 type ListAgentParams struct {
-	Workspace sandbox.WorkspaceDir
+	Workspace    sandbox.WorkspaceDir
+	AllWorkspaces bool // when true, Workspace is ignored and all agents are returned
 }
 type ListAgentResponse struct {
 	Agents []*omniagent.Data

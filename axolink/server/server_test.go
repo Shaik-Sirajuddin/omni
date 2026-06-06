@@ -483,7 +483,10 @@ func (s *fakeAgentStore) Create(*agents.AgentData) error {
 func (s *fakeAgentStore) ListAgents(params agents.ListAgentParams) agents.ListAgentResponse {
 	list := make([]*agents.AgentData, 0, len(s.agents))
 	for _, agent := range s.agents {
-		if agent == nil || agent.Info == nil || agent.Info.WorkspaceDir != params.Workspace {
+		if agent == nil || agent.Info == nil {
+			continue
+		}
+		if !params.AllWorkspaces && agent.Info.WorkspaceDir != params.Workspace {
 			continue
 		}
 		list = append(list, agent)
