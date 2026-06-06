@@ -1,0 +1,48 @@
+version: 2
+project_name: omni
+
+before:
+  hooks:
+    - go mod tidy -C omni
+    - go mod tidy -C svc/cmd
+
+builds:
+  - id: omni
+    dir: omni
+    main: ./cli/cmd/omni/
+    binary: omni
+    ldflags:
+      - -X main.Version={{.Version}}
+    goos: [linux]
+    goarch: [amd64, arm64]
+    # darwin + windows — uncomment when ready:
+    # goos: [linux, darwin, windows]
+
+  - id: omni-server
+    dir: svc/cmd
+    main: .
+    binary: omni-server
+    ldflags:
+      - -X main.Version={{.Version}}
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: omni-archive
+    builds_info:
+      group: root
+      owner: root
+    name_template: "omni-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - deployment/setup.sh
+
+release:
+  github:
+    owner: Shaik-Sirajuddin
+    name: omni
+
+checksum:
+  name_template: "omni-{{ .Version }}-checksums.txt"
+
+snapshot:
+  version_template: "{{ .Tag }}-snapshot"

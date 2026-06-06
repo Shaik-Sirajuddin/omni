@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	pkgpty "github.com/Shaik-Sirajuddin/memory/pkg/pty"
@@ -304,7 +305,15 @@ func (d *Daemon) handleAttach(conn *net.UnixConn, req Request) {
 	}
 
 	if _, _, err := conn.WriteMsgUnix(payload, rights, nil); err != nil {
-		ptylog.Error("SCM_RIGHTS send failed", "err", err, "session_id", req.SessionID)
+		// A client that disconnects mid-handoff (broken pipe / connection reset)
+		// is benign, not a daemon error — log it at Warn and clean up quietly so
+		// it does not surface as a fatal SCM_RIGHTS failure. Any other error stays
+		// at Error.
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+			ptylog.Warn("attach: client disconnected before fd handoff (benign)", "err", err, "session_id", req.SessionID)
+		} else {
+			ptylog.Error("SCM_RIGHTS send failed", "err", err, "session_id", req.SessionID)
+		}
 		// Roll back the drain pause so the child does not stall on a full buffer
 		// now that no client will read the master.
 		if aw, ok := d.inner.(attachAware); ok {

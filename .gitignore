@@ -8,8 +8,9 @@
 agent[-_]*.md
 .agents
 development/local/.env.docker
-.goreleaser.yaml
 play/
 website/
 dist/generated/
 .envrc
+.dev
+go.work.sum

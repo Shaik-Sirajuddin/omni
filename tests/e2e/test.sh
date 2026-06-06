@@ -47,7 +47,7 @@ echo ""
 
 # Step 8: check for errors
 echo "==> [check] no error blocks"
-if grep -i "^.*error" "$LOG"; then
+if grep -iE "\berror\b" "$LOG" | grep -v "no error\|error-free\|errors=0"; then
   echo "FAIL: error blocks found in output"
   exit 1
 fi

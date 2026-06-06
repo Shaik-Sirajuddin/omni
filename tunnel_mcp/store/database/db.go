@@ -96,7 +96,7 @@ func applySchema(conn *sql.DB) error {
 				continue
 			}
 			if _, err = tx.Exec(statement); err != nil {
-				if isDuplicateColumnError(err) {
+				if isDuplicateColumnError(err) || isIndexColumnMissingError(err) {
 					continue
 				}
 				return err

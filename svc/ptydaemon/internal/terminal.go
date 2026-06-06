@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // dbgBytes renders a byte slice for debug logs: a Go-quoted form (control and
@@ -215,18 +217,41 @@ func (t *PTYTerminal) drainLoop() {
 		m := t.master
 		t.mu.Unlock()
 		if m == nil {
+			t.drainMu.Lock()
+			t.drainClosed = true
+			t.drainCond.Broadcast()
+			t.drainMu.Unlock()
 			return
 		}
 
-		// Bounded deadline so a paused/closed transition is noticed even when
-		// the child is silent.
-		_ = m.SetReadDeadline(time.Now().Add(drainReadTimeout))
-		_, err := m.Read(buf)
+		// unix.Poll wakes after drainReadTimeout regardless of whether the Go
+		// runtime tracks this fd (PTY master fds are character devices and are
+		// not registered with Go's epoll, so SetReadDeadline is a no-op on them).
+		pollFds := []unix.PollFd{{Fd: int32(m.Fd()), Events: unix.POLLIN}}
+		n, pollErr := unix.Poll(pollFds, int(drainReadTimeout/time.Millisecond))
+		if pollErr != nil && pollErr != unix.EINTR {
+			// Poll returned a real error — treat master as gone.
+			t.drainMu.Lock()
+			t.drainClosed = true
+			t.drainCond.Broadcast()
+			t.drainMu.Unlock()
+			return
+		}
+		if n <= 0 {
+			// Timeout or EINTR — no data yet; loop back to recheck drainActive.
+			continue
+		}
+		_, err := unix.Read(int(m.Fd()), buf)
 		if err != nil {
-			if os.IsTimeout(err) {
+			if err == unix.EINTR {
 				continue
 			}
-			return // EOF / EIO / closed — master is gone
+			// Master is gone (EIO/EOF/closed). Unblock any pauseDrain waiter.
+			t.drainMu.Lock()
+			t.drainClosed = true
+			t.drainCond.Broadcast()
+			t.drainMu.Unlock()
+			return
 		}
 		// bytes discarded; keep draining
 	}
@@ -246,14 +271,8 @@ func (t *PTYTerminal) pauseDrain() {
 		"session_id", t.SessionID)
 	waitStart := time.Now()
 
-	// Interrupt any in-progress read so the drainer returns promptly and parks
-	// instead of overwriting this deadline with a fresh future one and reading
-	// concurrently with the attaching client.
-	t.mu.Lock()
-	if t.master != nil {
-		_ = t.master.SetReadDeadline(time.Now())
-	}
-	t.mu.Unlock()
+	// The drain loop uses unix.Poll with a 200ms timeout, so it wakes and
+	// rechecks drainActive within one poll interval. No interrupt needed.
 
 	// Block until the drainer has actually parked (not reading), so the client
 	// is guaranteed to be the sole reader of the master on return. Closing the
