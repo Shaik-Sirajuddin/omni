@@ -227,6 +227,7 @@ func detectSessionProvider(t *testing.T, cfg harness.TestConfig) string {
 			return provider
 		}
 	}
+	t.Log("WARNING: no supported agent binary (claude/codex) found in container — provider-dependent tests will be skipped")
 	return ""
 }
 

@@ -22,6 +22,7 @@ func TestCodexBinaryAvailable(t *testing.T) {
 
 	out, code := harness.ExecInContainer(t, cfg, "command -v codex")
 	if code != 0 {
+		t.Log("WARNING: codex binary not found in container — install codex or provide credentials to enable these tests")
 		t.Skip("codex binary not available in this environment")
 	}
 	assert.Equal(t, 0, code, "codex binary must be locatable via command -v")
@@ -35,14 +36,14 @@ func TestCodexBinaryAvailable(t *testing.T) {
 func TestCodexAgentInit(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
+		t.Log("WARNING: codex binary not found in container — skipping agent init test")
 		t.Skip("codex binary not available")
 	}
 
-	agentName := "e2e-codex-init-" + time.Now().Format("150405")
+	agentName := "e2e-codex-init-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -63,14 +64,14 @@ func TestCodexAgentInit(t *testing.T) {
 func TestCodexMCPConfig(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
 	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
+		t.Log("WARNING: codex binary not found in container — skipping MCP config test")
 		t.Skip("codex binary not available")
 	}
 
-	agentName := "e2e-codex-mcp-" + time.Now().Format("150405")
+	agentName := "e2e-codex-mcp-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -114,14 +115,14 @@ func TestCodexExecDelivery(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
-	time.Sleep(300 * time.Millisecond)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
+		t.Log("WARNING: codex binary not found in container — skipping exec delivery test")
 		t.Skip("codex binary not available")
 	}
 
-	agentName := "e2e-codex-exec-" + time.Now().Format("150405")
+	agentName := "e2e-codex-exec-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
@@ -156,6 +157,7 @@ func TestCodexConfigStrictMode(t *testing.T) {
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
 	if _, code := harness.ExecInContainer(t, cfg, "command -v codex"); code != 0 {
+		t.Log("WARNING: codex binary not found in container — skipping strict config test")
 		t.Skip("codex binary not available")
 	}
 
@@ -163,6 +165,7 @@ func TestCodexConfigStrictMode(t *testing.T) {
 	out, code := harness.ExecInContainer(t, cfg,
 		`find /root -name "config.json" -path "*codex*" 2>/dev/null | head -1`)
 	if code != 0 || strings.TrimSpace(out) == "" {
+		t.Log("WARNING: no codex config.json found — strict validation requires an initialised codex agent")
 		t.Skip("no codex config.json found for strict validation")
 	}
 

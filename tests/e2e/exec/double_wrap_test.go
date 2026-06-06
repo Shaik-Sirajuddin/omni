@@ -23,6 +23,7 @@ func TestDoubleWrapFixClaude(t *testing.T) {
 
 	out, code := harness.ExecInContainer(t, cfg, "command -v claude 2>/dev/null")
 	if code != 0 || strings.TrimSpace(out) == "" {
+		t.Log("WARNING: claude binary not found in container — double-wrap test requires a real claude session")
 		t.Skip("claude binary not available")
 	}
 
@@ -70,6 +71,7 @@ func TestDoubleWrapFixCodex(t *testing.T) {
 
 	out, code := harness.ExecInContainer(t, cfg, "command -v codex 2>/dev/null")
 	if code != 0 || strings.TrimSpace(out) == "" {
+		t.Log("WARNING: codex binary not found in container — double-wrap test requires a real codex session")
 		t.Skip("codex binary not available")
 	}
 

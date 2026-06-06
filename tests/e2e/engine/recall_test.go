@@ -287,6 +287,7 @@ func TestAgentInterruptResume(t *testing.T) {
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
 
 	if out, code := harness.ExecInContainer(t, cfg, "command -v claude"); code != 0 || strings.TrimSpace(out) == "" {
+		t.Log("WARNING: claude binary not found in container — skipping interrupt test")
 		t.Skip("claude not available")
 	}
 
