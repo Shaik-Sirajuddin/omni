@@ -19,6 +19,7 @@ import (
 const (
 	sessionUsageThrottlePercent  = 95.0
 	defaultHookFireTimeout       = 10 * time.Second // watchdog: OnPreSessionStart must fire within this window
+	defaultMaxSessionRuntime     = 5 * time.Minute  // watchdog: force session end if OnStop never fires within this window
 	staleRetryDelay              = 15 * time.Second // delay before re-queueing a stale message
 	maxQueueRetries              = 3                // max re-queue attempts before permanent failure
 	maxExecRetries               = 3                // max ExecInSession failures before agent is Stopped
@@ -92,6 +93,7 @@ type ProcessingEngine struct {
 	taskDelivery        session.TaskDeliveryStore // T5: resumable delivery checkpoints
 	deliveryWindow      time.Duration
 	hookFireTimeout     time.Duration
+	maxSessionRuntime   time.Duration
 	ctx                 context.Context // engine lifetime context, set in Run
 }
 
@@ -130,6 +132,13 @@ func WithHookFireTimeout(d time.Duration) Option {
 	return func(e *ProcessingEngine) { e.hookFireTimeout = d }
 }
 
+// WithMaxSessionRuntime overrides how long executeLoop waits for OnStop before force-ending a
+// session that never signals completion (e.g. a Claude process stuck retrying an invalid model).
+// Default is 5m. Use a shorter value in tests.
+func WithMaxSessionRuntime(d time.Duration) Option {
+	return func(e *ProcessingEngine) { e.maxSessionRuntime = d }
+}
+
 // WithStatusCallback wires a StatusCallbackService for delivery lifecycle events.
 func WithStatusCallback(s StatusCallbackService) Option {
 	return func(e *ProcessingEngine) { e.statusCallback = s }
@@ -158,8 +167,9 @@ func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 		omni:            omnicli.New("omni"),
 		mcp:             newMCPClientRegistry(),
 		socketPath:      DefaultSyncSocketPath,
-		deliveryWindow:  10 * time.Second,
-		hookFireTimeout: defaultHookFireTimeout,
+		deliveryWindow:    10 * time.Second,
+		hookFireTimeout:   defaultHookFireTimeout,
+		maxSessionRuntime: defaultMaxSessionRuntime,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -743,6 +753,16 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		select {
 		case <-sessionDoneCh:
 			logger.Debug("execute loop: session done signal received", "agent_id", agentID)
+		case <-time.After(e.maxSessionRuntime):
+			// Max-runtime watchdog: OnStop never fired within the cap. The Claude process is
+			// hung (e.g. retrying an invalid model alias) and would otherwise hold the agent slot
+			// Running forever, blocking ALL subsequent messages with no recovery path. Fall through
+			// to onSessionEnd: it fail-delivers the in-flight (still queued/processing) message and
+			// resets the agent to Ready so the post-loop retry can dispatch the next one.
+			// NOTE: this frees the engine slot but does not kill the orphaned OS process — that
+			// requires ptydaemon/operator-side termination (tracked separately).
+			logger.Warn("execute loop: max session runtime exceeded, forcing session end",
+				"agent_id", agentID, "max_runtime", e.maxSessionRuntime)
 		case <-e.ctx.Done():
 		}
 	}
