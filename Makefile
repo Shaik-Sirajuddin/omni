@@ -42,7 +42,7 @@ dev-preflight:
 	    echo "==> development/local is root-owned (docker ran before preflight); fixing ownership..."; \
 	    sudo chown -R "$$(id -un)" development/local; \
 	fi
-	@mkdir -p development/local/agents
+	@mkdir -p development/local/agents development/local/omni
 	@if [ ! -e development/local/shared ]; then \
 	    main=$$(git worktree list --porcelain | head -1 | awk '{print $$2}'); \
 	    if [ -d "$$main/development/local/shared" ]; then \

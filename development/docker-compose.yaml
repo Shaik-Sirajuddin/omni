@@ -27,6 +27,7 @@ services:
       - agent-gemini:/root/.gemini
       - ./local/shared/.gemini/antigravity-cli/antigravity-oauth-token:/root/.gemini/antigravity-cli/antigravity-oauth-token
       - agent-agy:/root/.agy
+      - ./local/omni:/root/.omni     # worktree-scoped bind-mount: observe omni logs/state locally
     environment:
       # self-MCP wiring: codex reads these at request time for tunnel-mcp HTTP headers
       AXO_LINK_MCP_SENDER_TYPE: ${AXO_LINK_MCP_SENDER_TYPE:-omni_agent}
