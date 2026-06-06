@@ -23,14 +23,16 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	codexsettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/gemini"
+	mcpdatabase "github.com/Shaik-Sirajuddin/memory/mcp/store/database"
+	mcpmessage "github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
 	// "github.com/Shaik-Sirajuddin/memory/operator/impl/defaults" // re-enable with sandbox wiring
+	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
-	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
 	"github.com/google/uuid"
@@ -56,11 +58,13 @@ type DefaultOperator struct {
 	store                operatorstore.OperatorStore
 	agentStore           agentstore.AgentStore
 	sessionStore         codesession.CodeSessionStore
+	messageStore         mcpmessage.MessageStore
 	agentMemory          operator.AgentMemory
 	provisioner          sandbox.SandboxProvisioner // nil = sandboxing disabled
 	ptyDaemon            ptyclients.Client
 	newCodeAgent         func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	newCodeAgentForAgent func(agentID string, provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
+	nextAgentID          func() string
 }
 
 type codexPTYAdapter struct {
@@ -171,7 +175,6 @@ func (a *codexPTYAdapter) SessionPID(_, sessionID string) (int, error) {
 	}
 	return info.PID, nil
 }
-
 
 // SwitchProvider implements [Operator].
 // SwitchProvider when switching between models , if a non fill session exists matching provider , agent , session is reused , override by CleanStart
@@ -807,6 +810,11 @@ func New() (operator.Operator, error) {
 		logger.Error("New: session store initialisation failed", "err", err)
 		return nil, fmt.Errorf("operator: init session store: %w", err)
 	}
+	mcpDB, err := mcpdatabase.GetDefaultDB()
+	if err != nil {
+		logger.Error("New: message store database initialisation failed", "err", err)
+		return nil, fmt.Errorf("operator: init message store db: %w", err)
+	}
 	// Sandbox provisioner disabled — uncomment to re-enable.
 	var provisioner sandbox.SandboxProvisioner
 	// if kinds := sandbox.HostSupportedProvisioners(); len(kinds) > 0 {
@@ -829,9 +837,11 @@ func New() (operator.Operator, error) {
 		store:        s,
 		agentStore:   as,
 		sessionStore: ss,
+		messageStore: mcpmessage.New(mcpDB),
 		agentMemory:  operator.NewDefaultAgentMemory(),
 		provisioner:  provisioner,
 		ptyDaemon:    ptyDaemon,
+		nextAgentID:  uuid.NewString,
 		newCodeAgent: func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error) {
 			switch provider {
 			case providerClaude:
@@ -1011,7 +1021,11 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Info("CreateAgent: workspace created", "workspaceID", ws.ID, "name", ws.Name, "workspace", ws.WorkspaceDir)
 	}
 
-	agentID := uuid.NewString()
+	nextAgentID := o.nextAgentID
+	if nextAgentID == nil {
+		nextAgentID = uuid.NewString
+	}
+	agentID := nextAgentID()
 	agentName := sanitizeAgentName(params.Name)
 	if agentName == "" {
 		agentName = fmt.Sprintf("agent-%s", agentID[:8])
@@ -1049,6 +1063,10 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	}
 	logger.Info("CreateAgent: agent stored", "workspaceID", ws.ID, "agentID", agentID, "memoryDir", memDir)
 
+	if err := o.flushActiveMessagesForAgent(context.Background(), agentID); err != nil {
+		return err
+	}
+
 	if o.memoryEnabled() {
 		if err := o.agentMemory.Create(memDir); err != nil {
 			logger.Error("CreateAgent: memory seed failed", "agentID", agentID, "memoryDir", memDir, "err", err)
@@ -1061,6 +1079,30 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Warn("CreateAgent: session bootstrap failed — agent persisted; use 'omni agent resume' to start session", "agentID", agentID, "provider", params.Provider, "model", params.Model, "err", err)
 	}
 	logger.Info("CreateAgent: completed", "workspaceID", ws.ID, "agentID", agentID)
+	return nil
+}
+
+func (o *DefaultOperator) flushActiveMessagesForAgent(ctx context.Context, agentID string) error {
+	if o.messageStore == nil {
+		logger.Debug("CreateAgent: active message flush skipped; message store is not configured", "agentID", agentID)
+		return nil
+	}
+	res, err := o.messageStore.RawExec(ctx,
+		`DELETE FROM messages WHERE "to" = ? AND status IN (?, ?)`,
+		agentID, string(mcpmessage.StatusQueued), string(mcpmessage.StatusProcessing),
+	)
+	if err != nil {
+		logger.Error("CreateAgent: active message flush failed", "agentID", agentID, "err", err)
+		return fmt.Errorf("operator: create agent: flush active messages for agent %q: %w", agentID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		logger.Error("CreateAgent: active message flush rows affected failed", "agentID", agentID, "err", err)
+		return fmt.Errorf("operator: create agent: count flushed active messages for agent %q: %w", agentID, err)
+	}
+	if n > 0 {
+		logger.Info("CreateAgent: flushed active messages before session start", "agentID", agentID, "count", n)
+	}
 	return nil
 }
 

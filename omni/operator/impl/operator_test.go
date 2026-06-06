@@ -8,15 +8,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/config"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/hooks"
+	mcpdatabase "github.com/Shaik-Sirajuddin/memory/mcp/store/database"
+	mcpmessage "github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -250,6 +254,37 @@ func TestCreateAgent(t *testing.T) {
 
 		require.Len(t, runtime.createCalls, 1, "CreateAgent should still bootstrap a connector session")
 		assert.Empty(t, runtime.resumeCalls, "Non-interactive CreateAgent should not resume the session")
+	})
+
+	t.Run("CreateFlushesQueuedAndProcessingMessagesBeforeSessionStart", func(t *testing.T) {
+		op := newTestOperator(t, true)
+		runtime := &stubCodeAgent{}
+		op.newCodeAgent = func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error) {
+			agents, err := op.store.ListAgentsByDir(sandbox.WorkspaceDir(workDir))
+			require.NoError(t, err, "Agent must be stored before connector session starts")
+			require.Len(t, agents, 1, "Exactly one agent should exist before session start")
+			assert.Empty(t, messagesForAgent(t, op.messageStore, agents[0].ID, mcpmessage.StatusQueued), "Queued messages must be flushed before session start")
+			assert.Empty(t, messagesForAgent(t, op.messageStore, agents[0].ID, mcpmessage.StatusProcessing), "Processing messages must be flushed before session start")
+			assert.NotEmpty(t, messagesForAgent(t, op.messageStore, agents[0].ID, mcpmessage.StatusInQueue), "in_queue messages should remain")
+			return runtime, nil
+		}
+
+		workspace := sandbox.WorkspaceDir(t.TempDir())
+		agentID := "stale-agent"
+		seedMessage(t, op.messageStore, "stale-queued", agentID, mcpmessage.StatusQueued, workspace)
+		seedMessage(t, op.messageStore, "stale-processing", agentID, mcpmessage.StatusProcessing, workspace)
+		seedMessage(t, op.messageStore, "stale-in-queue", agentID, mcpmessage.StatusInQueue, workspace)
+
+		op.nextAgentID = func() string { return agentID }
+		require.NoError(t, op.CreateAgent(operator.CreateAgentParams{
+			Workspace:   workspace,
+			Name:        "operator-batch",
+			Interactive: false,
+		}))
+
+		assert.Empty(t, messagesForAgent(t, op.messageStore, agentID, mcpmessage.StatusQueued), "Queued stale messages should be deleted")
+		assert.Empty(t, messagesForAgent(t, op.messageStore, agentID, mcpmessage.StatusProcessing), "Processing stale messages should be deleted")
+		assert.Len(t, messagesForAgent(t, op.messageStore, agentID, mcpmessage.StatusInQueue), 1, "in_queue messages should be retained")
 	})
 
 	t.Run("CreateAgentPersistsEvenWhenSessionBootstrapFails", func(t *testing.T) {
@@ -689,6 +724,8 @@ func newTestOperator(t *testing.T, memoryEnabled bool) *DefaultOperator {
 		},
 		store:        store,
 		sessionStore: codesession.NewWithDB(db),
+		messageStore: mcpmessage.New(db),
+		nextAgentID:  uuid.NewString,
 		newCodeAgent: func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error) {
 			return &stubCodeAgent{}, nil
 		},
@@ -718,7 +755,43 @@ func newTestDB(t *testing.T) *sql.DB {
 	_, err = db.Exec(testCodeSessionSchema)
 	require.NoError(t, err, "Creating code sessions table should succeed")
 
+	require.NoError(t, mcpdatabase.ApplySchema(db), "Creating message tables should succeed")
+
 	return db
+}
+
+func seedMessage(t *testing.T, store mcpmessage.MessageStore, id, to string, status mcpmessage.Status, workspace sandbox.WorkspaceDir) {
+	t.Helper()
+	require.NoError(t, store.InsertMessage(context.Background(), &mcpmessage.Message{
+		ID:          id,
+		To:          to,
+		From:        "sender",
+		FromSpec:    mcpmessage.SpecOmni,
+		ToSpec:      mcpmessage.SpecOmni,
+		RequestType: mcpmessage.RequestTypeExecute,
+		Status:      mcpmessage.StatusInQueue,
+		Workspace:   string(workspace),
+		SentTime:    time.Now().UnixMilli(),
+		Refs:        "{}",
+	}))
+	if status != mcpmessage.StatusInQueue {
+		msg, err := store.GetMessage(context.Background(), id)
+		require.NoError(t, err)
+		msg.Status = status
+		require.NoError(t, store.UpdateMessage(context.Background(), msg))
+	}
+}
+
+func messagesForAgent(t *testing.T, store mcpmessage.MessageStore, agentID string, status mcpmessage.Status) []*mcpmessage.Message {
+	t.Helper()
+	msgs, err := store.RawQuery(context.Background(),
+		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
+		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
+		 FROM messages WHERE "to" = ? AND status = ?`,
+		agentID, string(status),
+	)
+	require.NoError(t, err)
+	return msgs
 }
 
 func tableExists(t *testing.T, db *sql.DB, name string) bool {
