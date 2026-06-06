@@ -1,0 +1,17 @@
+instructions:
+  - i:<my_interface> refers an interface my_interface
+  - s:<my_schema> refers a schema
+  - core yaml tags are schemas,schema,interfaces,interface,task,instruction,roadmap
+  - tags are self explanatory as in any code language
+  - specification statement symbols '-' , '--'
+  - roadmap do not auto implement unless specified
+  - task: is a special tag which may contain a file name or a task name
+
+semantics:
+  - applicable_for: instructions
+    applicable_tags:
+      - schema
+      - interface
+    instructions:
+      - treat any list of comma separated words before first '-' in a statement as params
+      - treat any list of comma separated words after first '--' as return types

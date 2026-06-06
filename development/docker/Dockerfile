@@ -50,6 +50,7 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
 WORKDIR /build
 
 COPY go.work          go.work
+COPY memory/          memory/
 COPY omni/            omni/
 COPY svc/             svc/
 COPY pkg/             pkg/

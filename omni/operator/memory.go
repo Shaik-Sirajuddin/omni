@@ -14,23 +14,29 @@ import (
 var templateFS embed.FS
 
 const (
-	LatestVersion = "v1"
+	LatestVersion = "v2"
 	MemoryDirName = "memory"
 	metadataFile  = "metadata.yaml"
 )
-
-var requiredAgentDirs = []string{
-	filepath.Join("entry", "instructions"),
-	filepath.Join("entry", "tasks"),
-	"generated",
-	"state",
-}
 
 const (
 	specialTemplatePrefix = "_"
 	locationWorkspace     = "workspace"
 	locationRoot          = "root"
+	locationAgent         = "agent"
 )
+
+func requiredAgentDirsForVersion(version string) []string {
+	if version == "v2" {
+		return []string{"instructions", "tasks", "gen", "state"}
+	}
+	return []string{
+		filepath.Join("entry", "instructions"),
+		filepath.Join("entry", "tasks"),
+		"generated",
+		"state",
+	}
+}
 
 // AgentMemory is the pluggable module for managing agent memory on disk.
 // Swap the implementation (e.g. for testing) by passing a different value to
@@ -135,7 +141,7 @@ func (m *defaultAgentMemory) Delete(memDir string) error {
 // Existing files not part of the template are left untouched (non-destructive).
 func applyTemplate(workspaceRoot, destDir, agentName, version string) error {
 	logger.Debug("applyTemplate: start", "workspaceRoot", workspaceRoot, "destDir", destDir, "agentName", agentName, "version", version)
-	for _, dir := range requiredAgentDirs {
+	for _, dir := range requiredAgentDirsForVersion(version) {
 		dest := filepath.Join(destDir, dir)
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			logger.Error("applyTemplate: ensure required dir failed", "dest", dest, "err", err)
@@ -152,10 +158,10 @@ func applyTemplate(workspaceRoot, destDir, agentName, version string) error {
 	if err := copyTemplateTree(agentTemplateRoot(version), destDir, ctx); err != nil {
 		return err
 	}
-	if err := writeAgentWorkspaceDoc(ctx); err != nil {
+	if err := writeAgentWorkspaceDoc(ctx, version); err != nil {
 		return err
 	}
-	if err := writeAgentCollabTasksDir(ctx); err != nil {
+	if err := writeAgentCollabTasksDir(ctx, version); err != nil {
 		return err
 	}
 	return nil
@@ -236,6 +242,8 @@ func resolveSpecialTemplatePath(rel string, ctx templateContext) (string, error)
 	switch location {
 	case locationWorkspace, locationRoot:
 		return filepath.Join(ctx.WorkspaceRoot, fileName), nil
+	case locationAgent:
+		return filepath.Join(ctx.AgentRoot, fileName), nil
 	default:
 		return "", fmt.Errorf("unknown special template location %q", location)
 	}
@@ -245,9 +253,17 @@ func renderTemplateName(value string, ctx templateContext) string {
 	return strings.ReplaceAll(value, "<agent_name>", ctx.AgentName)
 }
 
-func writeAgentWorkspaceDoc(ctx templateContext) error {
-	dest := filepath.Join(ctx.WorkspaceRoot, "agent_"+ctx.AgentName+".md")
-	content := renderTemplateName("```yaml\nAGENT_NAME = <agent_name>\nmemory/<agent_name>/\n\nread memory/memory.yaml\n\nto navigate project read agents_specification.md\n```\n", ctx)
+func writeAgentWorkspaceDoc(ctx templateContext, version string) error {
+	var dest, content string
+	if version == "v2" {
+		// v2: agent profile lives inside the agent dir as agent.md
+		dest = filepath.Join(ctx.AgentRoot, "agent.md")
+		content = renderTemplateName("```yaml\nAGENT_NAME = <agent_name>\nmemory/agents/<agent_name>/\n\nread memory/memory.yaml\n\nto navigate project read agents_specification.md\n```\n", ctx)
+	} else {
+		// v1: flat workspace-root doc
+		dest = filepath.Join(ctx.WorkspaceRoot, "agent_"+ctx.AgentName+".md")
+		content = renderTemplateName("```yaml\nAGENT_NAME = <agent_name>\nmemory/<agent_name>/\n\nread memory/memory.yaml\n\nto navigate project read agents_specification.md\n```\n", ctx)
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		logger.Error("writeAgentWorkspaceDoc: mkdir parent failed", "dest", dest, "err", err)
 		return err
@@ -256,11 +272,16 @@ func writeAgentWorkspaceDoc(ctx templateContext) error {
 	return os.WriteFile(dest, []byte(content), 0o644)
 }
 
-// writeAgentCollabTasksDir creates the agent's collab tasks folder at
-// memory/team/entry/tasks/<agentName>/default.yaml inside the workspace.
-// Other agents use this path to post task instructions for this agent.
-func writeAgentCollabTasksDir(ctx templateContext) error {
-	dir := filepath.Join(ctx.WorkspaceRoot, "team", "entry", "tasks", ctx.AgentName)
+// writeAgentCollabTasksDir creates the agent's collab tasks folder inside the workspace.
+// v2: memory/team/tasks/<agentName>/default.yaml
+// v1: memory/team/entry/tasks/<agentName>/default.yaml
+func writeAgentCollabTasksDir(ctx templateContext, version string) error {
+	var dir string
+	if version == "v2" {
+		dir = filepath.Join(ctx.WorkspaceRoot, "team", "tasks", ctx.AgentName)
+	} else {
+		dir = filepath.Join(ctx.WorkspaceRoot, "team", "entry", "tasks", ctx.AgentName)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		logger.Error("writeAgentCollabTasksDir: mkdir failed", "dir", dir, "err", err)
 		return err

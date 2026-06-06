@@ -90,16 +90,16 @@ func TestCreateAgent(t *testing.T) {
 		assert.DirExists(t, result.Agents[0].MemoryDir, "Agent memory directory should exist")
 		assert.Equal(t, "operator-a", result.Agents[0].Name, "Requested agent name should be preserved")
 		assert.Equal(t, filepath.Join(string(workspace), "memory", "agents", result.Agents[0].Name), result.Agents[0].MemoryDir, "Agent memory directory should follow the new layout")
-		_, memoryStatErr := os.Stat(filepath.Join(result.Agents[0].MemoryDir, "entry", "data", "memory.yaml"))
+		_, memoryStatErr := os.Stat(filepath.Join(result.Agents[0].MemoryDir, "data", "memory.yaml"))
 		assert.ErrorIs(t, memoryStatErr, os.ErrNotExist, "Per-agent memory.yaml should not be created")
-		_, semanticsStatErr := os.Stat(filepath.Join(result.Agents[0].MemoryDir, "entry", "data", "semantics.yaml"))
+		_, semanticsStatErr := os.Stat(filepath.Join(result.Agents[0].MemoryDir, "data", "semantics.yaml"))
 		assert.ErrorIs(t, semanticsStatErr, os.ErrNotExist, "Per-agent semantics.yaml should not be created")
-		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "generated"), "Generated directory should be created")
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "gen"), "gen directory should be created")
 		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "state"), "State directory should be created")
-		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "entry", "tasks"), "entry/tasks directory should be created")
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "tasks"), "tasks directory should be created")
 		assert.FileExists(t, filepath.Join(string(workspace), "memory", "memory.yaml"), "Workspace memory.yaml should be created instead")
-		assert.FileExists(t, filepath.Join(string(workspace), "memory", "agent_"+result.Agents[0].Name+".md"), "Workspace should include the agent entry markdown")
-		assert.FileExists(t, filepath.Join(string(workspace), "memory", "team", "entry", "tasks", result.Agents[0].Name, "default.yaml"), "Collab tasks dir should be seeded for the agent")
+		assert.FileExists(t, filepath.Join(result.Agents[0].MemoryDir, "agent.md"), "Agent dir should include the agent profile markdown")
+		assert.FileExists(t, filepath.Join(string(workspace), "memory", "team", "tasks", result.Agents[0].Name, "default.yaml"), "Collab tasks dir should be seeded for the agent")
 
 		workspaces, err := op.ListWorkspaces(operator.ListWorkspacesParams{})
 		require.NoError(t, err, "ListWorkspaces should succeed after agent creation")
@@ -146,7 +146,7 @@ func TestCreateAgent(t *testing.T) {
 		require.NotEmpty(t, result.Agents, "Stored agent should be returned")
 		assert.Equal(t, sandbox.WorkspaceDir(cwd), result.Agents[0].WorkspaceDir, "Workspace should default to the current directory when no memory root exists")
 		assert.FileExists(t, filepath.Join(cwd, "memory", "memory.yaml"), "Workspace memory root should be created automatically")
-		assert.FileExists(t, filepath.Join(cwd, "memory", "agent_operator-c.md"), "Workspace agent markdown should be created")
+		assert.FileExists(t, filepath.Join(cwd, "memory", "agents", "operator-c", "agent.md"), "Agent profile markdown should be inside agent dir")
 	})
 
 	t.Run("ResolvesWorkspaceFromNearestAncestorMemory", func(t *testing.T) {
@@ -171,7 +171,7 @@ func TestCreateAgent(t *testing.T) {
 		require.NoError(t, err, "ListCodeAgents should default to the resolved ancestor workspace")
 		require.NotEmpty(t, result.Agents, "Stored agent should be returned")
 		assert.Equal(t, sandbox.WorkspaceDir(workspace), result.Agents[0].WorkspaceDir, "Workspace should resolve to the ancestor containing memory")
-		assert.FileExists(t, filepath.Join(workspace, "memory", "agent_operator-d.md"), "Workspace agent markdown should be created in the ancestor workspace")
+		assert.FileExists(t, filepath.Join(workspace, "memory", "agents", "operator-d", "agent.md"), "Agent profile markdown should be inside agent dir in ancestor workspace")
 	})
 
 	t.Run("RejectsDuplicateNameInSameWorkspace", func(t *testing.T) {
@@ -318,9 +318,9 @@ func TestTeamInit(t *testing.T) {
 		assert.DirExists(t, filepath.Join(workspace, "memory", ".git"), "memory directory should be initialised as a git repo")
 		assert.FileExists(t, filepath.Join(workspace, "agent_memory.md"), "Workspace should include the memory entry markdown")
 		assert.DirExists(t, filepath.Join(workspace, "memory", "agents", "guide"), "TeamInit should create the default guide agent")
-		_, guideMemoryErr := os.Stat(filepath.Join(workspace, "memory", "guide", "entry", "data", "memory.yaml"))
+		_, guideMemoryErr := os.Stat(filepath.Join(workspace, "memory", "agents", "guide", "data", "memory.yaml"))
 		assert.ErrorIs(t, guideMemoryErr, os.ErrNotExist, "Guide agent should not receive per-agent memory data files")
-		assert.FileExists(t, filepath.Join(workspace, "memory", "agent_guide.md"), "Guide agent workspace markdown should be created")
+		assert.FileExists(t, filepath.Join(workspace, "memory", "agents", "guide", "agent.md"), "Guide agent profile markdown should be inside agent dir")
 
 		result, err := op.ListCodeAgents(operator.GetCodeAgentsParams{Workspace: sandbox.WorkspaceDir(workspace)})
 		require.NoError(t, err, "ListCodeAgents should resolve agents for the initialised workspace")
