@@ -149,18 +149,10 @@ func (s *sqlOmniAgentStore) UpdateSettings(ID string, settings *omniagent.Settin
 
 // ListAgents queries agents filtered by workspace.
 func (s *sqlOmniAgentStore) ListAgents(params ListAgentParams) ListAgentResponse {
-	var (
-		rows *sql.Rows
-		err  error
+	rows, err := s.db.Query(
+		`SELECT id, name, workspace_dir, memory_dir FROM agents WHERE workspace_dir = ?`,
+		string(params.Workspace),
 	)
-	if params.AllWorkspaces {
-		rows, err = s.db.Query(`SELECT id, name, workspace_dir, memory_dir FROM agents`)
-	} else {
-		rows, err = s.db.Query(
-			`SELECT id, name, workspace_dir, memory_dir FROM agents WHERE workspace_dir = ?`,
-			string(params.Workspace),
-		)
-	}
 	if err != nil {
 		return ListAgentResponse{}
 	}
