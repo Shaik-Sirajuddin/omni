@@ -778,9 +778,6 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
-	// Always reset the mandatory tool flag — it belongs to a single session.
-	agentState.CodeSession.MandatoryToolInvoked = false
-
 	if execFailed {
 		agentState.StopReason = StopReasonOther
 		agentState.Status = AgentStatusStopped // default; overridden below when retry is allowed
