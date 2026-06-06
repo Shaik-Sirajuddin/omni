@@ -2,7 +2,7 @@ services:
   ubuntu:
     build:
       context: ..
-      dockerfile: development/docker/Dockerfile
+      dockerfile: dev/docker/Dockerfile
     image: ${OMNI_DEV_IMAGE:-omni-dev:latest}
     privileged: true                  # required for systemd PID 1
     tmpfs:

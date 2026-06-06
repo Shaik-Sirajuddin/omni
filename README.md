@@ -45,7 +45,7 @@ make docker-rebuild  # rebuild image after code changes
 make docker-connect  # open a shell in the running container
 ```
 
-→ See [development/](development/) for docker setup and `.env.docker.example`.
+→ See [dev/](dev/) for docker setup and `.env.docker.example`.
 
 ## License
 
