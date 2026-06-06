@@ -1,13 +1,14 @@
 .env
 .claude
 .codex
-!development/local.example/.codex/
+!dev/local.example/.codex/
 .gemini
-!development/local.example/.gemini/
+!dev/local.example/.gemini/
 .antigravitycli
 agent[-_]*.md
 .agents
-development/local/.env.docker
+dev/local/.env.docker
+dev/reports/
 play/
 website/
 dist/generated/

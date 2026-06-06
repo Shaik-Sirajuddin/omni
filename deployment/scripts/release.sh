@@ -45,8 +45,8 @@ fi
 
 echo "==> releasing $VERSION"
 
-# shellcheck source=development/build.sh
-source "$REPO_ROOT/development/build.sh"
+# shellcheck source=dev/build.sh
+source "$REPO_ROOT/dev/build.sh"
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 LINUX_TARGETS=("linux/amd64" "linux/arm64")

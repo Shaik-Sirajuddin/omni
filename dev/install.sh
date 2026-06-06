@@ -5,12 +5,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SETUP_SH="$REPO_ROOT/deployment/setup.sh"
-BUILD_SH="$REPO_ROOT/development/build.sh"
+BUILD_SH="$REPO_ROOT/dev/build.sh"
 
 # ── build_phase ───────────────────────────────────────────────────────────────
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   echo "==> build_phase"
-  # shellcheck source=development/build.sh
+  # shellcheck source=dev/build.sh
   source "$BUILD_SH"
   build
 fi

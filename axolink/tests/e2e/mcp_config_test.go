@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// mcpServerURL is where the tunnel_mcp streamable HTTP server listens inside the container.
+// mcpServerURL is where the axolink streamable HTTP server listens inside the container.
 const mcpServerURL = "http://127.0.0.1:18062/mcp"
 
 // defaultMCPToken matches runner.DefaultConfig().AuthToken (used when AXO_LINK_MCP_AUTH_TOKEN is unset).
@@ -102,7 +102,7 @@ func TestMCPManagerRoundTrip(t *testing.T) {
 
 // ─── TestMCPToolsListAvailability ───────────────────────────────────────────
 
-// TestMCPToolsListAvailability verifies that the tunnel_mcp HTTP server registers
+// TestMCPToolsListAvailability verifies that the axolink HTTP server registers
 // exactly 12 tools at startup.
 //
 // Two checks:
@@ -126,7 +126,7 @@ func TestMCPToolsListAvailability(t *testing.T) {
 	t.Logf("tool registration log exit=%d: %s", exitCode, toolRegStr)
 
 	if toolRegStr == "" {
-		t.Errorf("startup log: 'mcp tools registered' not found — tunnel_mcp server may not have initialised")
+		t.Errorf("startup log: 'mcp tools registered' not found — axolink server may not have initialised")
 	} else if !strings.Contains(toolRegStr, "count=12") {
 		t.Errorf("expected count=12 in tool registration line, got: %s", toolRegStr)
 	} else {
@@ -151,9 +151,9 @@ func TestMCPToolsListAvailability(t *testing.T) {
 	statusStr := strings.TrimSpace(string(httpStatus))
 	t.Logf("HTTP reachability: status=%s", statusStr)
 	if statusStr == "000" || statusStr == "" {
-		t.Errorf("tunnel_mcp server not reachable at %s (curl got no response)", mcpServerURL)
+		t.Errorf("axolink server not reachable at %s (curl got no response)", mcpServerURL)
 	} else {
-		t.Logf("PASS: tunnel_mcp server listening (HTTP %s)", statusStr)
+		t.Logf("PASS: axolink server listening (HTTP %s)", statusStr)
 	}
 
 	// ── Check 3: tools/list with valid session (TODO — server-bugs.md #2) ─────

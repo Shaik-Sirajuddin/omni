@@ -91,7 +91,7 @@ func TestAgentsSayHi(t *testing.T) {
 //   - author_agent_name = agent name string (not a UUID)
 //   - prompt body = actual message content (not boilerplate)
 //
-// This guards against the bugs in tunnel_mcp/server/reply.go:
+// This guards against the bugs in axolink/server/reply.go:
 //   - replyRefs() setting author_agent_name to agent ID instead of name
 //   - replyPrompt() dropping actual content and emitting boilerplate
 func TestMessageRefsIntegrity(t *testing.T) {

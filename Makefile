@@ -1,4 +1,4 @@
-COMPOSE_FILE  := development/docker-compose.yaml
+COMPOSE_FILE  := dev/docker-compose.yaml
 VERSION       ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
 WORKTREE_NAME := $(notdir $(CURDIR))
 IMAGE_TAG     := omni-dev:$(WORKTREE_NAME)
@@ -22,10 +22,10 @@ snapshot:
 # ── local (build-from-source) ─────────────────────────────────────────────────
 
 build:
-	@bash development/build.sh
+	@bash dev/build.sh
 
 install:
-	@sudo bash development/install.sh
+	@sudo bash dev/install.sh
 
 uninstall:
 	@sudo systemctl disable --now omni@$(shell id -un) 2>/dev/null || true
@@ -38,30 +38,30 @@ uninstall:
 # ── dev preflight ─────────────────────────────────────────────────────────────
 
 dev-preflight:
-	@if [ -e development/local ] && [ "$$(stat -c '%U' development/local 2>/dev/null || echo root)" != "$$(id -un)" ]; then \
-	    echo "==> development/local is root-owned (docker ran before preflight); fixing ownership..."; \
-	    sudo chown -R "$$(id -un)" development/local; \
+	@if [ -e dev/local ] && [ "$$(stat -c '%U' dev/local 2>/dev/null || echo root)" != "$$(id -un)" ]; then \
+	    echo "==> dev/local is root-owned (docker ran before preflight); fixing ownership..."; \
+	    sudo chown -R "$$(id -un)" dev/local; \
 	fi
-	@mkdir -p development/local/agents development/local/omni
-	@if [ ! -e development/local/shared ]; then \
+	@mkdir -p dev/local/agents dev/local/omni
+	@if [ ! -e dev/local/shared ]; then \
 	    main=$$(git worktree list --porcelain | head -1 | awk '{print $$2}'); \
-	    if [ -d "$$main/development/local/shared" ]; then \
-	        ln -s "$$main/development/local/shared" development/local/shared \
-	            || { echo "ERROR: cannot create symlink development/local/shared -> $$main/development/local/shared"; \
-	                 echo "       development/local/ may be root-owned; run: sudo chown -R $$(id -un) development/local/"; \
+	    if [ -d "$$main/dev/local/shared" ]; then \
+	        ln -s "$$main/dev/local/shared" dev/local/shared \
+	            || { echo "ERROR: cannot create symlink dev/local/shared -> $$main/dev/local/shared"; \
+	                 echo "       dev/local/ may be root-owned; run: sudo chown -R $$(id -un) dev/local/"; \
 	                 exit 1; }; \
-	        echo "linked development/local/shared -> $$main/development/local/shared"; \
+	        echo "linked dev/local/shared -> $$main/dev/local/shared"; \
 	    else \
-	        mkdir -p development/local/shared \
-	            || { echo "ERROR: cannot mkdir development/local/shared"; exit 1; }; \
-	        echo "created development/local/shared/ (no main worktree shared found)"; \
+	        mkdir -p dev/local/shared \
+	            || { echo "ERROR: cannot mkdir dev/local/shared"; exit 1; }; \
+	        echo "created dev/local/shared/ (no main worktree shared found)"; \
 	    fi \
 	fi
-	@mkdir -p development/local/shared/.codex development/local/shared/.gemini/antigravity-cli 2>/dev/null || true
-	@[ -f development/local/shared/.codex/auth.json ]                                || echo '{}' > development/local/shared/.codex/auth.json
-	@[ -f development/local/shared/.gemini/antigravity-cli/antigravity-oauth-token ] || touch development/local/shared/.gemini/antigravity-cli/antigravity-oauth-token
-	@[ -f development/local/shared/.env.docker ] || { cp development/local.example/.env.docker.example development/local/shared/.env.docker && echo "created development/local/shared/.env.docker"; }
-	@echo "==> preflight done — edit development/local/shared/.env.docker before docker-up"
+	@mkdir -p dev/local/shared/.codex dev/local/shared/.gemini/antigravity-cli 2>/dev/null || true
+	@[ -f dev/local/shared/.codex/auth.json ]                                || echo '{}' > dev/local/shared/.codex/auth.json
+	@[ -f dev/local/shared/.gemini/antigravity-cli/antigravity-oauth-token ] || touch dev/local/shared/.gemini/antigravity-cli/antigravity-oauth-token
+	@[ -f dev/local/shared/.env.docker ] || { cp dev/local.example/.env.docker.example dev/local/shared/.env.docker && echo "created dev/local/shared/.env.docker"; }
+	@echo "==> preflight done — edit dev/local/shared/.env.docker before docker-up"
 
 # ── docker ────────────────────────────────────────────────────────────────────
 

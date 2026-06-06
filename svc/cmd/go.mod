@@ -66,7 +66,7 @@ require (
 
 replace (
 	github.com/Shaik-Sirajuddin/memory => ../../omni
-	github.com/Shaik-Sirajuddin/memory/mcp => ../../tunnel_mcp
+	github.com/Shaik-Sirajuddin/memory/mcp => ../../axolink
 	github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../../pkg/filelock
 	github.com/Shaik-Sirajuddin/memory/pkg/log => ../../pkg/log
 	github.com/Shaik-Sirajuddin/memory/pkg/pty => ../../pkg/pty

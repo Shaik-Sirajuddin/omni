@@ -89,7 +89,7 @@ func newDockerExecutor(t *testing.T, containerName string) *DockerExecutor {
 	// Build exec env: forward only the vars needed by the omni CLI.
 	// Do NOT seed from info.Config.Env — that includes API keys from the .env.docker
 	// file and would forward them to every subprocess spawned by docker exec.
-	// Paths must match development/docker/entrypoint.sh.
+	// Paths must match dev/docker/entrypoint.sh.
 	env := []string{
 		// docker exec doesn't inherit the container's login PATH — set it explicitly
 		// so agent binaries (claude, codex, gemini) are found under /usr/local/bin.

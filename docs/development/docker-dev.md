@@ -14,9 +14,9 @@ make dev-preflight
 ```
 
 This creates:
-- `development/.env.docker` — copy of the example, fill in your API keys
+- `dev/.env.docker` — copy of the example, fill in your API keys
 
-Then edit `development/.env.docker` with your keys:
+Then edit `dev/.env.docker` with your keys:
 
 | Variable | Agent | Purpose |
 |---|---|---|
@@ -60,21 +60,21 @@ Required when Go source or Dockerfile changes:
 make docker-rebuild
 ```
 
-Agent configs and DB persist across rebuilds — they are bind-mounted from `development/local.example/` and named volumes.
+Agent configs and DB persist across rebuilds — they are bind-mounted from `dev/local.example/` and named volumes.
 
 ## Health Checks
 
 ```bash
 # MCP streamable HTTP (agent clients) — exec into container, no host port binding
-docker compose -f development/docker-compose.yaml exec ubuntu \
+docker compose -f dev/docker-compose.yaml exec ubuntu \
   curl -s http://127.0.0.1:18062/mcp
 
 # PTY socket
-docker compose -f development/docker-compose.yaml exec ubuntu \
+docker compose -f dev/docker-compose.yaml exec ubuntu \
   test -S /run/omni-root/omni-pty.sock && echo ok
 
 # systemd service status
-docker compose -f development/docker-compose.yaml exec ubuntu \
+docker compose -f dev/docker-compose.yaml exec ubuntu \
   systemctl status omni@root --no-pager
 ```
 
@@ -85,13 +85,13 @@ docker compose -f development/docker-compose.yaml exec ubuntu \
 journalctl -fu omni@root
 
 # from host — stream live
-docker compose -f development/docker-compose.yaml exec -T ubuntu \
+docker compose -f dev/docker-compose.yaml exec -T ubuntu \
   journalctl -fu omni@root --no-pager
 
 # from host — pipe to local file (stop with: kill %1)
-docker compose -f development/docker-compose.yaml exec -T ubuntu \
+docker compose -f dev/docker-compose.yaml exec -T ubuntu \
   journalctl -fu omni@root --no-pager \
-  > development/local/logs-$(date +%s).txt &
+  > dev/local/logs-$(date +%s).txt &
 ```
 
 ## Volumes and Persistence
@@ -103,16 +103,16 @@ docker compose -f development/docker-compose.yaml exec -T ubuntu \
 | `omni-data` (volume) | `/root/.local/share/memory` | agent DB, sandbox data |
 | `agent-claude` (volume) | `/root/.claude` | claude settings + history |
 | `agent-codex` (volume) | `/root/.codex` | codex config + memories |
-| `development/local/.codex/auth.json` | `/root/.codex/auth.json` | codex OAuth credentials (read-only) |
-| `development/local/.gemini/antigravity-cli/antigravity-oauth-token` | `/root/.gemini/antigravity-cli/antigravity-oauth-token` | gemini/agy OAuth token (read-only) |
+| `dev/local/.codex/auth.json` | `/root/.codex/auth.json` | codex OAuth credentials (read-only) |
+| `dev/local/.gemini/antigravity-cli/antigravity-oauth-token` | `/root/.gemini/antigravity-cli/antigravity-oauth-token` | gemini/agy OAuth token (read-only) |
 | `agent-agy` (volume) | `/root/.agy` | agy settings + history |
 
-`development/local.example/` is committed to git and bind-mounted directly — edit files there to persist changes across rebuilds.
+`dev/local.example/` is committed to git and bind-mounted directly — edit files there to persist changes across rebuilds.
 
 All data survives `make docker-down docker-up`. To fully reset:
 
 ```bash
-docker compose -f development/docker-compose.yaml down -v   # removes named volumes
+docker compose -f dev/docker-compose.yaml down -v   # removes named volumes
 ```
 
 ## Container Naming
