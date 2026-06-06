@@ -29,5 +29,5 @@ All services read configuration from environment variables. No flags are require
 
 | File | Purpose |
 |------|---------|
-| `tunnel_mcp/development/.env` | Dev overrides for axolink-mcp |
-| `tunnel_mcp/.env.example` | Reference template for axolink-mcp vars |
+| `axolink/dev/.env` | Dev overrides for axolink-mcp |
+| `axolink/.env.example` | Reference template for axolink-mcp vars |

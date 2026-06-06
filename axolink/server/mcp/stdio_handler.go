@@ -206,11 +206,15 @@ func (h *StdioHandler) handleSendGroupMessage(ctx context.Context, req mcp.CallT
 }
 
 func (h *StdioHandler) handleGetMessage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sender, err := senderFromContext(ctx)
+	if err != nil {
+		return toolResultError(err), nil
+	}
 	id, err := req.RequireString("id")
 	if err != nil {
 		return toolResultError(err), nil
 	}
-	resp, err := h.proxy.GetMessage(ctx, id)
+	resp, err := h.proxy.GetMessage(ctx, sender, id)
 	if err != nil {
 		return toolResultError(err), nil
 	}

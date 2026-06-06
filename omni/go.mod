@@ -78,7 +78,7 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/Shaik-Sirajuddin/memory/mcp => ../tunnel_mcp
+replace github.com/Shaik-Sirajuddin/memory/mcp => ../axolink
 
 replace github.com/Shaik-Sirajuddin/memory/pkg/filelock => ../pkg/filelock
 

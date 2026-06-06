@@ -1,6 +1,6 @@
 [submodule "memory"]
 	path = memory
 	url = https://github.com/Shaik-Sirajuddin/mem_memory
-[submodule "tunnel_mcp/memory"]
-	path = tunnel_mcp/memory
+[submodule "axolink/memory"]
+	path = axolink/memory
 	url = https://github.com/Shaik-Sirajuddin/tunnel_mcp_mem.git

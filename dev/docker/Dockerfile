@@ -50,11 +50,12 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
 WORKDIR /build
 
 COPY go.work          go.work
+COPY go.work.sum      go.work.sum
 COPY omni/            omni/
 COPY svc/             svc/
 COPY pkg/             pkg/
-COPY tunnel_mcp/      tunnel_mcp/
-COPY development/     development/
+COPY axolink/ axolink/
+COPY dev/     dev/
 COPY deployment/      deployment/
 
 ARG VERSION=dev
@@ -63,13 +64,13 @@ ENV OMNI_PREFIX=/opt/omni
 # Module cache is mounted across builds — no re-download unless go.mod/go.sum change
 RUN --mount=type=cache,target=/root/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    OUT_DIR=/opt/omni/bin bash development/build.sh
+    OUT_DIR=/opt/omni/bin bash dev/build.sh
 
 # ── runtime image setup ───────────────────────────────────────────────────────
 ENV WORKSPACE=/build
 WORKDIR /build
 
-COPY development/docker/entrypoint.sh /entrypoint.sh
+COPY dev/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 VOLUME ["/var/lib/omni-root", "/root/.config"]

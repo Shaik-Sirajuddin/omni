@@ -161,7 +161,7 @@ sys.exit(0 if stale & set(d.get('hooks',{})) else 1)
     "UserPromptSubmit": [{"hooks": [{"type": "command","command": "omni hook --event UserPromptSubmit"}]}]
   },
   "permissions": {
-    "allow": ["mcp__tunnel-mcp__*"]
+    "allow": ["mcp__axolink__*"]
   },
   "theme": "dark"
 }
@@ -303,12 +303,12 @@ PYEOF
     echo "==> seeding /root/.codex/config.toml"
     mkdir -p /root/.codex
     cat > /root/.codex/config.toml <<EOF
-[mcp_servers.tunnel_mcp]
+[mcp_servers.axolink]
 url = "${url}"
 enabled = true
 bearer_token_env_var = "AXO_LINK_MCP_AUTH_TOKEN"
 
-[mcp_servers.tunnel_mcp.env_http_headers]
+[mcp_servers.axolink.env_http_headers]
 "X-Sender-ID"       = "AXO_LINK_MCP_SENDER_ID"
 "X-Sender-Type"     = "AXO_LINK_MCP_SENDER_TYPE"
 "X-Agent-Workspace" = "AXO_LINK_MCP_AGENT_WORKSPACE"
@@ -347,7 +347,7 @@ warn_missing_keys() {
   if [[ -z "${GEMINI_API_KEY:-}" && -z "${GOOGLE_API_KEY:-}" && -z "${GOOGLE_CLOUD_PROJECT:-}" ]]; then
     echo "  WARNING: no GEMINI_API_KEY / GOOGLE_API_KEY set                  — gemini will not authenticate (or use ~/.gemini/ OAuth)"; warned=1
   fi
-  if [[ $warned -eq 1 ]]; then echo "  → set keys/tokens in development/.env.docker (see .env.docker.example)"; fi
+  if [[ $warned -eq 1 ]]; then echo "  → set keys/tokens in dev/.env.docker (see .env.docker.example)"; fi
 }
 warn_missing_keys
 
