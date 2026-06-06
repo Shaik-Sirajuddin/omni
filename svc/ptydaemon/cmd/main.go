@@ -16,6 +16,7 @@ import (
 var logger = pkglog.NewLogger("component", "ptydaemon")
 
 func main() {
+	pkglog.UseStderrForAll()
 	socketPath := ptydaemon.DefaultSocketPath()
 	dbPath := envOr("PTYDAEMON_DB", "/var/lib/omni-"+currentUsername()+"/ptydaemon.db")
 

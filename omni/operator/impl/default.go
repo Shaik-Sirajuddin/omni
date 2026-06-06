@@ -30,6 +30,7 @@ import (
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
+	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
 	"github.com/google/uuid"
@@ -660,6 +661,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if requestedSessionID != "" {
 		sessionID = requestedSessionID
 	}
+	omnilog.InitSessionLog(sessionID)
 	if o.ptyDaemon != nil {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
@@ -1341,6 +1343,7 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	if createResult != nil && createResult.ID != "" {
 		sessionID = createResult.ID
 	}
+	omnilog.InitSessionLog(sessionID)
 	model = resolvedSessionModel(ca, model)
 
 	// Persist the session to the code session store.
