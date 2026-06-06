@@ -2,7 +2,7 @@ package config
 
 type Developer struct {
 	Debug     bool `json:"debug"     jsonschema:"title=Debug,description=Enable debug logging"`
-	Profiling bool `json:"profiling" jsonschema:"title=Profiling,description=Enable pprof profiling endpoint on 127.0.0.1 (requires dev.debug=true)"`
+	Profiling bool `json:"profiling,omitempty" jsonschema:"title=Profiling,description=Enable pprof profiling endpoint on 127.0.0.1 (requires dev.debug=true)"`
 }
 
 type Features struct {

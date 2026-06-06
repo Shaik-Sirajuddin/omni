@@ -19,8 +19,7 @@
       "additionalProperties": false,
       "type": "object",
       "required": [
-        "debug",
-        "profiling"
+        "debug"
       ]
     },
     "HookEntry": {
@@ -83,11 +82,6 @@
           "$ref": "#/$defs/OtelConfig",
           "title": "Telemetry",
           "description": "OpenTelemetry export settings for omni's own logs and traces"
-        },
-        "theme": {
-          "type": "string",
-          "title": "Theme",
-          "description": "Terminal colour theme"
         }
       },
       "additionalProperties": false,
