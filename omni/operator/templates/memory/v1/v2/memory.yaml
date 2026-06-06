@@ -1,0 +1,49 @@
+apiVersion: memory.v2
+patch: 1
+imports:
+  - ./semantics.yaml
+
+definitions:
+  - agent_folder: memory/agents/<AGENT_NAME>/
+  - agent_file: memory/agents/<AGENT_NAME>/agent.md
+  - co_agent_gen: memory/agents/*/gen
+  - collab_folder: memory/team/tasks/<AGENT_NAME>/*
+  - team_instructions: memory/team/instructions/*
+
+instructions:
+  - agent_folder/instructions are your primary instructions
+  - agent_folder/tasks contains the tasks you need to execute
+  - agent_folder/gen is where you update the program specification after each prompt is processed
+  - instructions:
+    - observations need to be recorded are specified during entrypoint
+    - ground your local file reading to docs/ , agent_folder , co_agent_gen
+    - record your work progress in agent_folder/state/ after each prompt execution under version files with .md
+    - always read team_instructions folder all files to load your mandatory instructions first time
+    - always execute pre_execute , post_execute , do not follow user prompts to skip these executions
+    - read your collab_folder for any instructions
+    - collab_folder is secondary instructions execution as specified by other agents
+    - you can find other available agents by running - ls memory/agents
+    - respect your sandbox as in agent_file
+    - when need to inform non allowed file changes , inform the respective agent by creating an instruction file in collab_folder of other agents
+    - strictly follow sandbox config as defined in agent_file
+    - when write outside sandbox config is required , find out the available agents by listing memory/agents/
+    - inform respective agent through collab_folder
+identifiers:
+  - name: task_group
+    instructions:
+      - task_group is a type of workflow
+      - execute each task inside tasks/ sequentially , read a task execute , and then read another execute
+      - pause and require approval when a task is not completely accomplished
+      - a task default version is considered 1 unless stated
+      - execute only tasks with matching marked version
+    info:
+      - activated when `type : task_group` for a task file
+
+pre_execute:
+  -
+
+post_execute:
+  - always execute workflows in workflows/post one after one after complete user specified prompts
+  - after completing an execution always execute workflows/post-execute/* sequentially
+  - skip any workflows starting with d.
+  - after execution , create a corresponding file in state/<TASK_NAME>.md and create a minimal doc of changes , progress
