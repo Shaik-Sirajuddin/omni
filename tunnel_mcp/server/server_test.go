@@ -486,7 +486,7 @@ func (s *fakeAgentStore) ListAgents(params agents.ListAgentParams) agents.ListAg
 		if agent == nil || agent.Info == nil {
 			continue
 		}
-		if agent.Info.WorkspaceDir != params.Workspace {
+		if !params.AllWorkspaces && agent.Info.WorkspaceDir != params.Workspace {
 			continue
 		}
 		list = append(list, agent)
