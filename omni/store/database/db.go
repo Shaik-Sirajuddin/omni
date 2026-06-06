@@ -29,7 +29,11 @@ func GetDB() (*sql.DB, error) {
 			dbErr = err
 			return
 		}
-		conn, err := sql.Open("sqlite", path)
+		// Open with a busy timeout and WAL so concurrent writers (e.g. several
+		// `omni agent init` / `team init` processes hitting the same DB file at
+		// once) wait for the lock instead of failing immediately with
+		// SQLITE_BUSY. WAL lets readers proceed while a writer holds the lock.
+		conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
 		if err != nil {
 			dbErr = err
 			return
