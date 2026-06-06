@@ -161,7 +161,7 @@ sys.exit(0 if stale & set(d.get('hooks',{})) else 1)
     "UserPromptSubmit": [{"hooks": [{"type": "command","command": "omni hook --event UserPromptSubmit"}]}]
   },
   "permissions": {
-    "allow": ["mcp__tunnel-mcp__*"]
+    "allow": ["mcp__axolink__*"]
   },
   "theme": "dark"
 }
