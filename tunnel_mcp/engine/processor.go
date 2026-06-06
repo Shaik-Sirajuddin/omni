@@ -12,6 +12,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/agents"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/session"
+	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	"gopkg.in/yaml.v3"
 )
 
@@ -167,7 +168,25 @@ func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 // RegisterHookRoutes registers the engine's hook handler on the provided mux.
 // The caller owns the unix socket server and transport — engine only handles routes.
 func (e *ProcessingEngine) RegisterHookRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /hook", hook.New(e))
+	mux.Handle("POST /hook", hook.New(e, e.sessionAgentResolver()))
+}
+
+// sessionAgentResolver returns an AgentResolver that looks up the owning agent
+// for a session ID. Used to recover hooks that fire before adopt writes the agent_id
+// (SessionStart races ca.Resume → registerPTYSession).
+func (e *ProcessingEngine) sessionAgentResolver() hook.AgentResolver {
+	store, err := codesession.GetCodeSessionStore()
+	if err != nil {
+		logger.Warn("engine: session agent resolver unavailable", "err", err)
+		return nil
+	}
+	return func(sessionID string) string {
+		agentID, _, err := store.GetSessionByID(sessionID)
+		if err != nil {
+			return ""
+		}
+		return agentID
+	}
 }
 
 // Run starts the sync server and the startup delivery pass, then blocks until ctx is cancelled.

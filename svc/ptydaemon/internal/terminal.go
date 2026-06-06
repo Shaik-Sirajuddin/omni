@@ -107,6 +107,10 @@ type PTYTerminal struct {
 	drainActive bool
 	drainParked bool // true while the drainer is parked (provably not reading)
 	drainClosed bool
+	// drainWakeR/W is a non-blocking pipe used to interrupt unix.Poll instantly
+	// when pauseDrain needs to park the drain goroutine. -1 means not initialised.
+	drainWakeR int
+	drainWakeW int
 }
 
 func (t *PTYTerminal) write(p []byte) error {
@@ -186,6 +190,13 @@ func (t *PTYTerminal) startDrain() {
 	t.drainCond = sync.NewCond(&t.drainMu)
 	t.hasDrain = true
 	t.drainActive = true
+	t.drainWakeR = -1
+	t.drainWakeW = -1
+	p := make([]int, 2)
+	if err := unix.Pipe2(p, unix.O_CLOEXEC|unix.O_NONBLOCK); err == nil {
+		t.drainWakeR = p[0]
+		t.drainWakeW = p[1]
+	}
 	t.drainMu.Unlock()
 	go t.drainLoop()
 }
@@ -227,8 +238,21 @@ func (t *PTYTerminal) drainLoop() {
 		// unix.Poll wakes after drainReadTimeout regardless of whether the Go
 		// runtime tracks this fd (PTY master fds are character devices and are
 		// not registered with Go's epoll, so SetReadDeadline is a no-op on them).
+		// drainWakeR is a non-blocking pipe that pauseDrain writes to for an
+		// instant wakeup instead of waiting up to one full poll cycle.
+		t.drainMu.Lock()
+		wakeR := t.drainWakeR
+		t.drainMu.Unlock()
 		pollFds := []unix.PollFd{{Fd: int32(m.Fd()), Events: unix.POLLIN}}
+		if wakeR >= 0 {
+			pollFds = append(pollFds, unix.PollFd{Fd: int32(wakeR), Events: unix.POLLIN})
+		}
 		n, pollErr := unix.Poll(pollFds, int(drainReadTimeout/time.Millisecond))
+		// Drain the wake pipe byte if signaled (keeps it ready for next pause).
+		if n > 0 && wakeR >= 0 && len(pollFds) > 1 && pollFds[1].Revents&unix.POLLIN != 0 {
+			var b [1]byte
+			unix.Read(wakeR, b[:]) //nolint:errcheck
+		}
 		if pollErr != nil && pollErr != unix.EINTR {
 			// Poll returned a real error — treat master as gone.
 			t.drainMu.Lock()
@@ -266,13 +290,15 @@ func (t *PTYTerminal) pauseDrain() {
 		return
 	}
 	t.drainActive = false
+	// Signal the drain goroutine to wake from its poll immediately.
+	wakeW := t.drainWakeW
 	t.drainMu.Unlock()
+	if wakeW >= 0 {
+		unix.Write(wakeW, []byte{0}) //nolint:errcheck
+	}
 	ptylog.Debug("ptydaemon: pauseDrain begin (attaching: handing master to client)",
 		"session_id", t.SessionID)
 	waitStart := time.Now()
-
-	// The drain loop uses unix.Poll with a 200ms timeout, so it wakes and
-	// rechecks drainActive within one poll interval. No interrupt needed.
 
 	// Block until the drainer has actually parked (not reading), so the client
 	// is guaranteed to be the sole reader of the master on return. Closing the
@@ -322,7 +348,14 @@ func (t *PTYTerminal) stopDrain() {
 	}
 	t.drainClosed = true
 	t.drainCond.Broadcast() // wake the drainLoop and any pauseDrain waiter
+	wakeR, wakeW := t.drainWakeR, t.drainWakeW
+	t.drainWakeR = -1
+	t.drainWakeW = -1
 	t.drainMu.Unlock()
+	if wakeR >= 0 {
+		unix.Close(wakeR)  //nolint:errcheck
+		unix.Close(wakeW)  //nolint:errcheck
+	}
 }
 
 // readLastInput returns a copy of the user's current unsubmitted line

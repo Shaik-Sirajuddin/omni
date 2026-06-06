@@ -8,7 +8,6 @@ import (
 
 	"github.com/Shaik-Sirajuddin/memory/cli"
 	"github.com/Shaik-Sirajuddin/memory/config"
-	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	"github.com/Shaik-Sirajuddin/memory/operator"
 	operatorimpl "github.com/Shaik-Sirajuddin/memory/operator/impl"
 )
@@ -19,10 +18,6 @@ func main() {
 	if printVersionOnly(os.Args[1:]) {
 		return
 	}
-
-	// Set up a session-scoped log file before any loggers are constructed.
-	// All in-process components and child subprocesses inherit OMNI_LOG_FILE.
-	omnilog.InitSessionLog()
 
 	var op operator.Operator
 	if commandRequiresOperator(os.Args[1:]) {

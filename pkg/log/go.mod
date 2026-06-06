@@ -1,6 +1,6 @@
 module github.com/Shaik-Sirajuddin/memory/pkg/log
 
-go 1.25.0
+go 1.22.0
 
 require (
 	go.opentelemetry.io/contrib/bridges/otelslog v0.18.0

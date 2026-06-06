@@ -20,15 +20,24 @@ type Engine interface {
 	OnPostToolUseFailure(agentID, sessionID, toolName, errMsg string)
 }
 
+// AgentResolver resolves an agent ID from a session ID. Used to handle hooks
+// that arrive before the operator's adopt call has written the agent_id (e.g.
+// SessionStart fires in the race window between ca.Resume and registerPTYSession).
+// Returns "" when the session is unknown.
+type AgentResolver func(sessionID string) string
+
 // HookHandler routes omni hook events to the engine.
 // It implements http.Handler — the caller registers it on their own mux.
 type HookHandler struct {
-	eng Engine
+	eng      Engine
+	resolver AgentResolver
 }
 
 // New creates a HookHandler wired to eng.
-func New(eng Engine) *HookHandler {
-	return &HookHandler{eng: eng}
+// Pass a non-nil AgentResolver to recover from hooks where agent_id is empty
+// by looking up the owning agent from the session ID.
+func New(eng Engine, resolver AgentResolver) *HookHandler {
+	return &HookHandler{eng: eng, resolver: resolver}
 }
 
 // ServeHTTP implements http.Handler.
@@ -56,10 +65,16 @@ func (h *HookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	agentName := base.Omni.Agent.Name
 
 	if agentID == "" {
-		logger.Warn("hook: agent_id is empty, dropping event", "session_id", base.SessionID)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(hooks.HookOuput{Continue: true})
-		return
+		if h.resolver != nil && base.SessionID != "" {
+			agentID = h.resolver(base.SessionID)
+		}
+		if agentID == "" {
+			logger.Warn("hook: agent_id is empty and session lookup failed, dropping event", "session_id", base.SessionID)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(hooks.HookOuput{Continue: true})
+			return
+		}
+		logger.Debug("hook: resolved agent_id from session_id", "session_id", base.SessionID, "agent_id", agentID)
 	}
 
 	// Prefer X-Hook-Event header (set by hook-operator) over body's hook_event_name,
