@@ -665,7 +665,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if o.ptyDaemon != nil {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
-				if info != nil && info.AgentID == agent.ID && info.SessionID == sessionID && info.Status == "active" {
+				if info != nil && (info.AgentID == agent.ID || info.AgentID == "") && info.SessionID == sessionID && info.Status == "active" {
 					if params.Detached {
 						logger.Info("ResumeAgent: PTY terminal already active, leaving running in background", "agentID", agent.ID, "sessionID", sessionID)
 						return nil
