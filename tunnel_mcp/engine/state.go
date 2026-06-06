@@ -111,6 +111,9 @@ func (s *EngineState) BeginRunIfIdle(agentID string) bool {
 	if !ok || st.Status == AgentStatusRunning || st.CodeSession.IsInterrupted {
 		return false
 	}
+	// agents is map[string]*AgentState — st is the stored pointer, so this mutates the
+	// canonical entry in place under the lock. No SetAgent write-back is needed here
+	// (unlike the value-copy callers of GetAgent, which must SetAgent to persist).
 	st.Status = AgentStatusRunning
 	return true
 }

@@ -1363,8 +1363,11 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	if len(exhausted) > 0 {
 		logger.Warn("hook: stop — recall retries exhausted, force-delivering",
 			"agent_id", agentID, "count", len(exhausted))
+		// Status callback is per-message — fire one for each exhausted message, not just the first.
 		if e.statusCallback != nil {
-			e.statusCallback.SendStatusCallback(ctx, exhausted[0].ID, agentState.Agent.Name, agentState.Agent.Team)
+			for _, msg := range exhausted {
+				e.statusCallback.SendStatusCallback(ctx, msg.ID, agentState.Agent.Name, agentState.Agent.Team)
+			}
 		}
 		e.markDelivered(ctx, exhausted, agentID, agentState, true)
 		agentState, _ = e.state.GetAgent(agentID)
