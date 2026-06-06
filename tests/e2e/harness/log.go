@@ -142,22 +142,70 @@ func FilterByID(log, messageID string) string {
 }
 
 // DumpLogsOnFailure writes journalctl + omni.log to t.Log when the test has
-// failed. Call deferred at the end of each test.
+// failed. Also fetches the last 200 lines of omni.log directly from the
+// container so nothing is missed if the streaming buffer started late.
+// Call deferred at the end of each test.
 func DumpLogsOnFailure(t *testing.T, jrnl, omniLog *SyncBuffer, msgID string) {
 	t.Helper()
 	if !t.Failed() {
 		return
 	}
+	t.Log("=== FAILURE LOG DUMP ===")
 	if jrnl != nil {
 		s := jrnl.String()
-		t.Logf("=== journalctl (%d bytes) ===\n%s", len(s), s)
+		if msgID != "" {
+			filtered := FilterByID(s, msgID)
+			t.Logf("--- journalctl filtered for message_id=%s (%d lines) ---\n%s",
+				msgID, strings.Count(filtered, "\n"), filtered)
+		}
+		t.Logf("--- journalctl full (%d bytes) ---\n%s", len(s), s)
 	}
 	if omniLog != nil {
 		s := omniLog.String()
-		t.Logf("=== omni.log (%d bytes) ===\n%s", len(s), s)
 		if msgID != "" {
 			filtered := FilterByID(s, msgID)
-			t.Logf("=== omni.log filtered for message_id=%s ===\n%s", msgID, filtered)
+			t.Logf("--- omni.log filtered for message_id=%s (%d lines) ---\n%s",
+				msgID, strings.Count(filtered, "\n"), filtered)
+		}
+		t.Logf("--- omni.log buffered (%d bytes) ---\n%s", len(s), s)
+	}
+}
+
+// DumpLogsOnFailureCfg is like DumpLogsOnFailure but also reads the last 300
+// lines of omni.log directly from the container so nothing is missed when the
+// streaming buffer was attached after some events fired.
+func DumpLogsOnFailureCfg(t *testing.T, cfg TestConfig, jrnl, omniLog *SyncBuffer, msgID string) {
+	t.Helper()
+	if !t.Failed() {
+		return
+	}
+	t.Log("=== FAILURE LOG DUMP ===")
+	// Pull a fresh snapshot from inside the container (covers pre-buffer events).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, snap, _ := cfg.Exec.RunCommand(ctx, []string{
+		"sh", "-c", "tail -n 300 /root/.omni/log/omni.log 2>/dev/null || true",
+	})
+	if len(snap) > 0 {
+		s := string(snap)
+		if msgID != "" {
+			filtered := FilterByID(s, msgID)
+			t.Logf("--- omni.log snapshot filtered for message_id=%s ---\n%s", msgID, filtered)
+		}
+		t.Logf("--- omni.log snapshot (tail 300) ---\n%s", s)
+	}
+	if jrnl != nil {
+		s := jrnl.String()
+		if msgID != "" {
+			filtered := FilterByID(s, msgID)
+			t.Logf("--- journalctl filtered for message_id=%s ---\n%s", msgID, filtered)
+		}
+		t.Logf("--- journalctl buffered (%d bytes) ---\n%s", len(s), s)
+	}
+	if omniLog != nil {
+		s := omniLog.String()
+		if s != "" {
+			t.Logf("--- omni.log streamed (%d bytes) ---\n%s", len(s), s)
 		}
 	}
 }

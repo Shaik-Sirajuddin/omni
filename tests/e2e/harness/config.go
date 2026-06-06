@@ -157,6 +157,9 @@ func ProvisionWorkspace(t *testing.T, ex CommandExecutor) string {
 	safe := strings.ToLower(reUnsafe.ReplaceAllString(t.Name(), "_"))
 	dir := fmt.Sprintf("/tmp/e2e-%s", safe)
 	ctx := context.Background()
+	// Always start fresh: remove any stale workspace from a previous crashed run
+	// where t.Cleanup did not execute (SIGKILL, OOM, timeout).
+	_, _, _ = ex.RunCommand(ctx, []string{"rm", "-rf", dir})
 	code, _, _ := ex.RunCommand(ctx, []string{"mkdir", "-p", dir})
 	if code != 0 {
 		t.Fatalf("provisionWorkspace: could not create %s", dir)
