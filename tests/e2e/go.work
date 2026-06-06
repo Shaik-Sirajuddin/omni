@@ -1,0 +1,6 @@
+go 1.26.1
+
+// Isolated workspace for the e2e test module so it stays fully decoupled from
+// the production code workspace (../../go.work). The e2e module drives omni via
+// its CLI binary and imports no omni packages, so it needs nothing else here.
+use .
