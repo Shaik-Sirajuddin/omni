@@ -25,7 +25,7 @@ func TestExecResumeLaunchesPTY(t *testing.T) {
 		t.Skip("no supported agent binary available (claude/codex)")
 	}
 
-	agent := uniqueAgent("exec-resume")
+	agent := uniqueAgent(t, "exec-resume")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agent,
 		"--workspace", cfg.Workspace, "--provider", provider)
@@ -68,7 +68,7 @@ func TestHookReceiptConfirmsDelivery(t *testing.T) {
 		t.Skip("no supported agent binary available (claude/codex)")
 	}
 
-	agent := uniqueAgent("hook-receipt")
+	agent := uniqueAgent(t, "hook-receipt")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agent,
 		"--workspace", cfg.Workspace, "--provider", provider)
@@ -98,7 +98,7 @@ func TestMultiplePromptsSequential(t *testing.T) {
 		t.Skip("no supported agent binary available (claude/codex)")
 	}
 
-	agent := uniqueAgent("multi-prompt")
+	agent := uniqueAgent(t, "multi-prompt")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agent,
 		"--workspace", cfg.Workspace, "--provider", provider)
@@ -146,7 +146,7 @@ func TestSessionPersistsAfterExec(t *testing.T) {
 		t.Skip("no supported agent binary available (claude/codex)")
 	}
 
-	agent := uniqueAgent("persist")
+	agent := uniqueAgent(t, "persist")
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agent,
 		"--workspace", cfg.Workspace, "--provider", provider)
@@ -181,6 +181,7 @@ func countOccurrences(s, substr string) int {
 	return strings.Count(s, substr)
 }
 
-func uniqueAgent(prefix string) string {
+func uniqueAgent(t *testing.T, prefix string) string {
+	t.Helper()
 	return "e2e-" + prefix + "-" + harness.AgentNameSuffix(t)
 }
