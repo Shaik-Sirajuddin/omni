@@ -149,7 +149,7 @@ var relevantSignals = []string{
 	"sender", "resolve", "not found", "is required", "iserror",
 	"send_message", "get_message", "query_result", "send_response",
 	"exec in session", "userpromptsubmit", "create session", "adopt",
-	"terminal", "sqlite", "database is locked",
+	"terminal_error", "terminal:", "sqlite", "database is locked",
 }
 
 // FilterRelevant returns only the log lines that match a relevantSignal, so a
