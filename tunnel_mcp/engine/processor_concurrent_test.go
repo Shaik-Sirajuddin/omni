@@ -51,7 +51,7 @@ func taskQueryMsg(id, to, from, taskID, creatorID string, sentTime int64) *messa
 func fullDeliver(proc *engine.ProcessingEngine, agentID, sessionID string, prompt string) {
 	proc.OnPreSessionStart(agentID, agentID, sessionID, "/ws")
 	proc.OnUserPromptSubmit(context.Background(), agentID, sessionID, prompt)
-	proc.OnPreToolUse(agentID, sessionID, "send_response", nil)
+	proc.OnPostToolUse(agentID, sessionID, "send_response", nil)
 	proc.OnStop(context.Background(), agentID, sessionID)
 }
 
@@ -186,7 +186,7 @@ func TestRecall_SucceedsOnTurn2(t *testing.T) {
 	assert.Equal(t, 2, m.Retries, "Retries must be 2 after turn 1")
 
 	// Turn 2: agent calls send_response → delivered.
-	proc.OnPreToolUse("turn2-agent", "sess-t2", "send_response", nil)
+	proc.OnPostToolUse("turn2-agent", "sess-t2", "send_response", nil)
 	r2 := proc.OnStop(ctx, "turn2-agent", "sess-t2")
 	assert.Nil(t, r2, "turn 2 must deliver (tool was invoked)")
 
@@ -441,7 +441,7 @@ func TestMixedBatch_ExecAndCoTaskQueryBundled(t *testing.T) {
 	// Deliver both with tool invocation.
 	proc.OnPreSessionStart("mixed-agent", "mixed-agent", "sess-mixed", "/ws")
 	proc.OnUserPromptSubmit(ctx, "mixed-agent", "sess-mixed", e1.prompt)
-	proc.OnPreToolUse("mixed-agent", "sess-mixed", "send_response", nil)
+	proc.OnPostToolUse("mixed-agent", "sess-mixed", "send_response", nil)
 	r := proc.OnStop(ctx, "mixed-agent", "sess-mixed")
 	assert.Nil(t, r, "OnStop must deliver both messages")
 
@@ -551,7 +551,7 @@ func TestMultiAgent_ConcurrentRecallCycles(t *testing.T) {
 	require.NotNil(t, rY1, "rc-Y turn 1 must recall")
 
 	// rc-X delivers on turn 2 (tool invoked); rc-Y continues recall.
-	proc.OnPreToolUse("rc-X", "sess-rcX", "send_response", nil)
+	proc.OnPostToolUse("rc-X", "sess-rcX", "send_response", nil)
 	rX2 := proc.OnStop(ctx, "rc-X", "sess-rcX")
 	rY2 := proc.OnStop(ctx, "rc-Y", "sess-rcY")
 

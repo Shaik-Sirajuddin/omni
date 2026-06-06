@@ -1435,11 +1435,20 @@ var mandatoryToolNames = map[string]bool{
 	"query_result":       true, // legacy query alias
 	"query_result_batch": true, // legacy query batch alias
 }
-
 // OnPreToolUse is called by HookHandler on PreToolUse events.
-// Sets MandatoryToolInvoked when a delivery-confirming tool is called.
+// Delivery confirmation is intentionally NOT set here: PreToolUse fires before the
+// tool executes, so a mandatory tool that subsequently errors (e.g. send_response
+// rejected for an already-failed/delivered message, or a schema failure) would
+// falsely confirm delivery and suppress the OnStop recall. The flag is set in
+// OnPostToolUse, which fires only after the tool succeeds.
 func (e *ProcessingEngine) OnPreToolUse(agentID, sessionID, toolName string, _ map[string]any) {
 	logger.Debug("hook: pre tool use", "agent_id", agentID, "session_id", sessionID, "tool_name", toolName)
+}
+
+// OnPostToolUse is called by HookHandler on PostToolUse events (tool succeeded).
+// Sets MandatoryToolInvoked when a delivery-confirming tool completed successfully.
+func (e *ProcessingEngine) OnPostToolUse(agentID, sessionID, toolName string, _ map[string]any) {
+	logger.Debug("hook: post tool use", "agent_id", agentID, "session_id", sessionID, "tool_name", toolName)
 	if mandatoryToolNames[toolName] {
 		agentState, _ := e.state.GetAgent(agentID)
 		agentState.CodeSession.MandatoryToolInvoked = true

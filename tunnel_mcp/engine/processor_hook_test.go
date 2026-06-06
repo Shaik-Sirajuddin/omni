@@ -201,7 +201,7 @@ func TestD4_OnStop_DeliversWhenToolInvoked(t *testing.T) {
 	// Simulate: PreSessionStart → UserPromptSubmit → PreToolUse(send_response) → Stop.
 	proc.OnPreSessionStart("onstop-deliver", "onstop-deliver", "sess-deliver-1", "/ws")
 	proc.OnUserPromptSubmit(ctx, "onstop-deliver", "sess-deliver-1", e1.prompt)
-	proc.OnPreToolUse("onstop-deliver", "sess-deliver-1", "send_response", map[string]any{"message_id": "onstop-deliver-msg"})
+	proc.OnPostToolUse("onstop-deliver", "sess-deliver-1", "send_response", map[string]any{"message_id": "onstop-deliver-msg"})
 
 	recall := proc.OnStop(ctx, "onstop-deliver", "sess-deliver-1")
 	assert.Nil(t, recall, "OnStop must return nil when mandatory tool was invoked")
@@ -376,7 +376,7 @@ func TestD1_SessionGenerationGuard(t *testing.T) {
 	// Fire full hook sequence for msg1 — markDelivered increments generation.
 	proc.OnPreSessionStart("d1-guard", "d1-guard", "sess-d1-1", "/ws")
 	proc.OnUserPromptSubmit(ctx, "d1-guard", "sess-d1-1", e1.prompt)
-	proc.OnPreToolUse("d1-guard", "sess-d1-1", "send_response", nil)
+	proc.OnPostToolUse("d1-guard", "sess-d1-1", "send_response", nil)
 	recall := proc.OnStop(ctx, "d1-guard", "sess-d1-1")
 	assert.Nil(t, recall, "msg1 must be delivered cleanly")
 

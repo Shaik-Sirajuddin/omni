@@ -13,6 +13,10 @@ import (
 type Engine interface {
 	OnPreSessionStart(agentID, agentName, sessionID, cwd string)
 	OnPreToolUse(agentID, sessionID, toolName string, toolInput map[string]any)
+	// OnPostToolUse fires after a tool completes successfully. Delivery-confirming
+	// (mandatory) tools are recognised here, not in OnPreToolUse, so a tool call that
+	// errors does not falsely confirm delivery.
+	OnPostToolUse(agentID, sessionID, toolName string, toolInput map[string]any)
 	OnUserPromptSubmit(ctx context.Context, agentID, sessionID, prompt string)
 	// OnStop returns an optional recall prompt to inject as systemMessage when the
 	// mandatory tool was not invoked and retries remain. Nil means no injection.
@@ -94,6 +98,12 @@ func (h *HookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var input hooks.PreToolUseParams
 		if err := json.Unmarshal(body, &input); err == nil {
 			h.eng.OnPreToolUse(agentID, base.SessionID, input.ToolName, input.ToolInput)
+		}
+
+	case hooks.PostToolUse:
+		var input hooks.PostToolUseParams
+		if err := json.Unmarshal(body, &input); err == nil {
+			h.eng.OnPostToolUse(agentID, base.SessionID, input.ToolName, input.ToolInput)
 		}
 
 	case hooks.PrePrompt:
