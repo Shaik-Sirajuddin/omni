@@ -3,6 +3,8 @@
 package exec_test
 
 import (
+	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -197,4 +199,87 @@ func TestSequentialBgCalls(t *testing.T) {
 	assert.Equal(t, 0, code2, "second sequential exec --bg must exit 0: %s", out2)
 	assert.Less(t, total.Milliseconds(), int64(15_000),
 		"both sequential calls must complete in <15s, took %s", total)
+}
+
+// ttyStreamer is implemented by executors that can allocate a pseudo-TTY, which
+// interactive `omni agent resume` (no --detach) requires.
+type ttyStreamer interface {
+	StreamCommandTTY(ctx context.Context, w io.Writer, cmd []string) error
+}
+
+// TestResumeAfterStopThenBgExec reproduces a reported freeze: after
+// init -> stop -> exec --bg, an INTERACTIVE `agent resume` (no --detach, which
+// attaches to the PTY) must not hang — it must stream the session buffer and
+// the queued prompt must be delivered. resume runs over a pseudo-TTY (required;
+// it refuses to attach without one) and a watchdog turns a freeze into a fast
+// failure instead of blocking until the suite timeout.
+func TestResumeAfterStopThenBgExec(t *testing.T) {
+	t.Parallel()
+	cfg := harness.NewConfig(t)
+	_, jrnl := harness.CaptureLog(t, cfg)
+	_, omniLog := harness.CaptureOmniLog(t, cfg)
+	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
+
+	provider := harness.RequireProvider(t, cfg)
+
+	tty, ok := cfg.Exec.(ttyStreamer)
+	if !ok {
+		t.Log("WARNING: executor has no TTY support (local target) — interactive resume not exercised")
+		t.Skip("interactive resume requires a TTY-capable executor (docker target)")
+	}
+
+	agent := "e2e-stop-bg-resume-" + harness.AgentNameSuffix(t)
+	harness.TeardownAgent(t, cfg, agent) // pre-clean stale state
+	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	harness.RunOmni(t, cfg, "agent", "init", agent,
+		"--workspace", cfg.Workspace, "--provider", provider)
+	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agent) })
+
+	// Ensure the agent is stopped (cold) before the exec.
+	harness.RunOmniAllowFail(t, cfg, "agent", "stop", agent)
+	time.Sleep(time.Second)
+
+	// Queue a prompt via exec --bg while stopped — must return non-blocking.
+	start := time.Now()
+	out, code := harness.RunOmniAllowFail(t, cfg,
+		"agent", "exec", agent, "--prompt", "reply with one word: pong", "--bg")
+	require.Equal(t, 0, code, "exec --bg after stop must exit 0: %s", out)
+	assert.Less(t, time.Since(start).Milliseconds(), int64(bgNonBlockingMs),
+		"exec --bg after stop must be non-blocking")
+
+	// Interactive resume: attaches to the PTY and streams the session buffer.
+	// Run it over a TTY under a cancelable context; a frozen resume produces no
+	// buffer output, which the watchdog below reports as a failure.
+	var buf harness.SyncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = tty.StreamCommandTTY(ctx, &buf,
+			[]string{cfg.OmniPath, "agent", "resume", agent, "--workspace", cfg.Workspace})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	// resume must stream buffer output within the window (i.e. not freeze).
+	gotBuffer := false
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(buf.Bytes()) > 0 {
+			gotBuffer = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	streamed := buf.String()
+	assert.NotContains(t, streamed, "attach requires an interactive terminal",
+		"interactive resume should attach over the allocated TTY, not reject it")
+	assert.True(t, gotBuffer,
+		"BUG: interactive resume produced no session buffer within 30s (froze) "+
+			"after init -> stop -> exec --bg -> resume")
+
+	// The queued command must actually be delivered once the session is back.
+	delivered := jrnl.WaitFor("UserPromptSubmit", 30*time.Second) ||
+		omniLog.WaitFor("UserPromptSubmit", 30*time.Second)
+	assert.True(t, delivered,
+		"queued prompt must be delivered (UserPromptSubmit) after resume within 30s")
 }

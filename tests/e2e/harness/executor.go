@@ -164,6 +164,45 @@ func (e *DockerExecutor) RunCommand(ctx context.Context, cmd []string) (int, []b
 	return inspect.ExitCode, buf.Bytes(), nil
 }
 
+// StreamCommandTTY runs cmd inside the container with a pseudo-TTY allocated
+// (docker exec -t equivalent) and streams its raw output into w. Use this for
+// interactive commands such as `omni agent resume` (no --detach), which refuse
+// to attach unless stdin is a TTY. With Tty=true the stream is not multiplexed,
+// so the reader is copied verbatim. Returns when ctx is cancelled or the
+// command exits.
+func (e *DockerExecutor) StreamCommandTTY(ctx context.Context, w io.Writer, cmd []string) error {
+	resp, err := e.cli.ContainerExecCreate(ctx, e.container, container.ExecOptions{
+		Cmd:          cmd,
+		Env:          e.env,
+		WorkingDir:   e.workDir,
+		Tty:          true,
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return err
+	}
+	attach, err := e.cli.ContainerExecAttach(ctx, resp.ID, container.ExecStartOptions{Tty: true})
+	if err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(w, attach.Reader)
+		done <- copyErr
+	}()
+	select {
+	case <-ctx.Done():
+		attach.Close()
+		<-done
+		return nil
+	case err := <-done:
+		attach.Close()
+		return err
+	}
+}
+
 func (e *DockerExecutor) StreamCommand(ctx context.Context, w io.Writer, cmd []string) error {
 	resp, err := e.cli.ContainerExecCreate(ctx, e.container, container.ExecOptions{
 		Cmd:          cmd,
