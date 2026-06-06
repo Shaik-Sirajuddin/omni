@@ -105,8 +105,6 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 			log.Warn("axolink-mcp: omni binary not found in PATH, skipping connector registration", "err", lookErr)
 		} else {
 			for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
-				// Remove stale tunnel_mcp entry left from before the axolink rename.
-				_, _ = mgr.DeleteMCP(codeagent.DeleteMCPParams{Name: "tunnel_mcp", Global: true})
 				if _, err := mgr.AddMCP(codeagent.AddMCPParams{
 					Server: codeagent.MCPServer{
 						Name:      "axolink",
