@@ -5,18 +5,17 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
-const defaultMCPServerURL = "http://127.0.0.1:18062/mcp"
-
-// MCPClient wraps the mark3labs/mcp-go client with axolink-specific headers.
-// Use NewMCPClient to construct; use CallTool to invoke tools.
+// MCPClient wraps the mark3labs/mcp-go client speaking to the axolink MCP server
+// over its stdio bridge (`omni axolink`). Use NewMCPClient to construct; use
+// CallTool to invoke tools.
 type MCPClient struct {
 	cli       *mcpclient.Client
 	senderID  string
@@ -24,39 +23,66 @@ type MCPClient struct {
 	t         *testing.T
 }
 
-// NewMCPClient dials the axolink MCP server and initializes an MCP session.
-// senderID is sent as X-SENDER-ID; it identifies the calling agent.
-// The test is skipped (not failed) if the server is unreachable.
+// NewMCPClient starts the axolink stdio MCP bridge INSIDE the target container
+// (`omni axolink` over `docker exec`) and initializes an MCP session.
+//
+// Using the stdio bridge — rather than an HTTP client to 127.0.0.1:18062 — means
+// the request always reaches the *same container under test* via its own service
+// socket, with no host port publishing and no risk of hitting a stray host
+// omni-server that happens to own 18062. Sender identity is passed through the
+// AXO_LINK_MCP_* env the bridge reads. Works identically for multi-worktree,
+// Docker Desktop, and CI (it's just `docker exec`).
+//
+// The test is skipped (not failed) if the bridge cannot be started/initialized.
 func NewMCPClient(t *testing.T, cfg TestConfig, senderID string) *MCPClient {
 	t.Helper()
-	serverURL := EnvOr("MCP_SERVER_URL", defaultMCPServerURL)
-	headers := map[string]string{
-		"X-SENDER-ID":       senderID,
-		"X-SENDER-TYPE":     "omni_agent",
-		"X-AGENT-WORKSPACE": cfg.Workspace,
-	}
-	cli, err := mcpclient.NewStreamableHttpClient(serverURL,
-		transport.WithHTTPHeaders(headers),
-		transport.WithHTTPTimeout(15*time.Second),
-	)
-	if err != nil {
-		t.Skipf("MCP client: failed to create (%s): %v", serverURL, err)
+
+	// Mirror exactly what `omni agent resume` injects into a real agent session
+	// so the bridge authenticates and identifies itself the same way. The token
+	// is the operator's fixed dev token (operator/impl/default.go); override via
+	// E2E_MCP_AUTH_TOKEN if the deployment uses a different one.
+	senderEnv := []string{
+		"AXO_LINK_MCP_SENDER_ID=" + senderID,
+		"AXO_LINK_MCP_SENDER_TYPE=omni_agent",
+		"AXO_LINK_MCP_AGENT_WORKSPACE=" + cfg.Workspace,
+		"AXO_LINK_MCP_AUTH_TOKEN=" + EnvOr("E2E_MCP_AUTH_TOKEN", "axolink-dev-token"),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	var (
+		command string
+		args    []string
+		env     []string
+	)
+	switch cfg.Exec.(type) {
+	case *DockerExecutor:
+		// Run the bridge inside the container; pass sender identity via -e.
+		command = "docker"
+		args = []string{"exec", "-i"}
+		for _, e := range senderEnv {
+			args = append(args, "-e", e)
+		}
+		args = append(args, cfg.Container, cfg.OmniPath, "axolink")
+	default:
+		// Local target: run the bridge directly with sender env.
+		command = cfg.OmniPath
+		args = []string{"axolink"}
+		env = append(os.Environ(), senderEnv...)
+	}
+
+	cli, err := mcpclient.NewStdioMCPClient(command, env, args...)
+	if err != nil {
+		t.Skipf("MCP client: failed to start axolink stdio bridge: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := cli.Start(ctx); err != nil {
-		t.Skipf("MCP client: start failed: %v", err)
-	}
-
-	_, err = cli.Initialize(ctx, mcp.InitializeRequest{
+	if _, err := cli.Initialize(ctx, mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo:      mcp.Implementation{Name: "e2e", Version: "1"},
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Skipf("MCP client: initialize failed: %v", err)
 	}
 
