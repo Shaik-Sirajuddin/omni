@@ -48,13 +48,12 @@ func GetDB() (*sql.DB, error) {
 			conn.Close()
 			return
 		}
-		// Cap to one open connection so every query starts a fresh read
-		// transaction against the WAL. Without this, the modernc.org/sqlite
-		// driver may serve reads from a pooled connection whose WAL snapshot
-		// predates rows written by other processes (e.g. `omni agent init`
-		// running after the service started).
-		conn.SetMaxOpenConns(1)
-		conn.SetMaxIdleConns(1)
+		// Do not pool idle connections. Each query opens a fresh SQLite
+		// connection so its read transaction sees the current WAL state,
+		// including rows written by other processes (e.g. `omni agent init`)
+		// after the service started. SetMaxOpenConns is left unlimited to
+		// avoid serialising concurrent server operations.
+		conn.SetMaxIdleConns(0)
 		db = conn
 	})
 	return db, dbErr
