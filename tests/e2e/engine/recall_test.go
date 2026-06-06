@@ -34,11 +34,19 @@ func TestRecallHTTPEndpoint(t *testing.T) {
 
 // TestSendMessageRecorded (E2) verifies that send_message via axolink MCP
 // records the message and returns a message_id.
+// Requires a running agent as sender — send_message rejects init-only agents.
 func TestSendMessageRecorded(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
+
+	// send_message validates the sender agent is active in the server; skip if
+	// no provider binary is available to resume it.
+	if _, code := harness.ExecInContainer(t, cfg, "command -v codex || command -v claude"); code != 0 {
+		t.Log("WARNING: no agent binary available — send_message requires a running sender agent")
+		t.Skip("no supported agent binary available")
+	}
 
 	ts := harness.AgentNameSuffix(t)
 	sender := "e2e-recall-sender-" + ts
@@ -82,6 +90,11 @@ func TestDeliveryChainMessageID(t *testing.T) {
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
+
+	if out, code := harness.ExecInContainer(t, cfg, "command -v claude"); code != 0 || strings.TrimSpace(out) == "" {
+		t.Log("WARNING: claude binary not found — delivery chain test requires a running claude agent")
+		t.Skip("claude not available")
+	}
 
 	agentName := "e2e-chain-" + harness.AgentNameSuffix(t)
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
@@ -227,24 +240,27 @@ func TestGetMessageAPI(t *testing.T) {
 		"get_message must return stored message for id %s", msgID)
 }
 
-// TestListAgentsReturnsAgents (E6) verifies list_agents returns the known agent.
+// TestListAgentsReturnsAgents (E6) verifies a newly created agent appears in
+// `omni agent list`. Uses the CLI rather than the MCP list_agents tool because
+// list_agents only returns agents that are currently running in the server,
+// whereas agent list shows all agents persisted to the workspace DB.
 func TestListAgentsReturnsAgents(t *testing.T) {
 	cfg := harness.NewConfig(t)
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
 	agentName := "e2e-list-agent-" + harness.AgentNameSuffix(t)
+	harness.TeardownAgent(t, cfg, agentName) // pre-clean stale state
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, agentName) })
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", agentName,
 		"--workspace", cfg.Workspace, "--provider", "claude", "--interactive=false")
 
-	mcpCli := harness.NewMCPClient(t, cfg, agentName)
-	out := mcpCli.CallTool("list_agents", map[string]any{})
-
-	assert.Contains(t, out, agentName,
-		"list_agents must include the newly created agent")
-	t.Logf("list_agents: %s", out)
+	listOut, _ := harness.RunOmniAllowFail(t, cfg,
+		"agent", "list", "--workspace", cfg.Workspace)
+	assert.Contains(t, listOut, agentName,
+		"agent list must include the newly created agent")
+	t.Logf("agent list: %s", listOut)
 }
 
 // TestListTeams (E7) verifies that list_teams returns the initialized team.

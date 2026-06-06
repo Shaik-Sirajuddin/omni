@@ -14,16 +14,30 @@ import (
 
 const bgNonBlockingMs = 10_000
 
-// initBgAgent creates a fresh agent in the service workspace and registers
-// cleanup. Returns the unique agent name.
+// initBgAgent creates a fresh agent and registers cleanup. Tears down any
+// stale same-name agent first so parallel re-runs don't see "already exists".
 func initBgAgent(t *testing.T, cfg harness.TestConfig) string {
 	t.Helper()
 	name := "e2e-bg-" + harness.AgentNameSuffix(t)
+	harness.TeardownAgent(t, cfg, name) // pre-clean stale state
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
 	harness.RunOmni(t, cfg, "agent", "init", name,
 		"--workspace", cfg.Workspace, "--provider", "codex")
 	t.Cleanup(func() { harness.TeardownAgent(t, cfg, name) })
 	return name
+}
+
+// requireProvider skips the test with a warning when no supported agent
+// binary (claude or codex) is present in the container.
+func requireProvider(t *testing.T, cfg harness.TestConfig) {
+	t.Helper()
+	for _, bin := range []string{"codex", "claude"} {
+		if _, code := harness.ExecInContainer(t, cfg, "command -v "+bin); code == 0 {
+			return
+		}
+	}
+	t.Log("WARNING: no agent binary (claude/codex) found — test requires a running agent session")
+	t.Skip("no supported agent binary available")
 }
 
 // TestBgFlagAccepted verifies --bg is a known flag and --resume is rejected.
@@ -50,6 +64,7 @@ func TestBgFlagAccepted(t *testing.T) {
 func TestExecBgNonBlocking(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
+	requireProvider(t, cfg)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
@@ -82,6 +97,7 @@ func TestExecBgNonBlocking(t *testing.T) {
 func TestExecBgOnActivePTY(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
+	requireProvider(t, cfg)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, nil, "")
 
@@ -121,6 +137,7 @@ func TestExecBgAgentNotFound(t *testing.T) {
 func TestBgShortFlag(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
+	requireProvider(t, cfg)
 
 	agent := initBgAgent(t, cfg)
 
@@ -151,6 +168,7 @@ func TestResumeNonExistent(t *testing.T) {
 func TestPromptDelivered(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
+	requireProvider(t, cfg)
 	_, jrnl := harness.CaptureLog(t, cfg)
 	_, omniLog := harness.CaptureOmniLog(t, cfg)
 	defer harness.DumpLogsOnFailure(t, jrnl, omniLog, "")
@@ -174,6 +192,7 @@ func TestPromptDelivered(t *testing.T) {
 func TestSequentialBgCalls(t *testing.T) {
 	t.Parallel()
 	cfg := harness.NewConfig(t)
+	requireProvider(t, cfg)
 	defer harness.DumpLogsOnFailure(t, nil, nil, "")
 
 	agent := initBgAgent(t, cfg)
