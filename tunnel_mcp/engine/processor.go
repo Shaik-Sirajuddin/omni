@@ -394,6 +394,16 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 				continue
 			}
 			for _, msg := range stale {
+				// Skip messages whose target agent is currently running: ExecInSession is in
+				// flight (or the session is live) and the message is being actively processed,
+				// not orphaned. During LLM cold-start (~29s) the message stays statusQueued
+				// until the UserPromptSubmit hook flips it to processing — re-queueing it here
+				// would strand it in_queue so the eventual send_response can't deliver it.
+				// A genuinely-stale message (exec never started, or the session already ended)
+				// has its agent in a non-Running state and is still swept on a later tick.
+				if st, ok := e.state.GetAgent(msg.To); ok && st.Status == AgentStatusRunning {
+					continue
+				}
 				if msg.Retries < maxQueueRetries {
 					// Re-queue so the agent can retry after a short delay.
 					msg.Status = message.StatusInQueue
