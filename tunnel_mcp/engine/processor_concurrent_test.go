@@ -4,6 +4,7 @@ package engine_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,12 +47,44 @@ func taskQueryMsg(id, to, from, taskID, creatorID string, sentTime int64) *messa
 	}
 }
 
+// extractMsgIDsFromPrompt parses the YAML prompt built by buildWarmUpPrompt and
+// returns all message_id values. Used by fullDeliver to confirm per-message delivery.
+// The YAML list format produces "- message_id: <id>" lines; we strip the "- " prefix.
+func extractMsgIDsFromPrompt(prompt string) []string {
+	var ids []string
+	for _, line := range strings.Split(prompt, "\n") {
+		line = strings.TrimSpace(line)
+		// Strip YAML list item marker so both "- message_id: x" and "message_id: x" match.
+		if strings.HasPrefix(line, "- ") {
+			line = strings.TrimSpace(line[2:])
+		}
+		if rest, ok := strings.CutPrefix(line, "message_id:"); ok {
+			id := strings.TrimSpace(rest)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
 // fullDeliver fires the hook sequence that marks all StatusProcessing messages
-// as delivered (tool invoked → OnStop returns nil).
+// as delivered. It extracts message_ids from the YAML prompt so each message
+// is individually confirmed by a delivery tool — required by per-message confirmation.
 func fullDeliver(proc *engine.ProcessingEngine, agentID, sessionID string, prompt string) {
 	proc.OnPreSessionStart(agentID, agentID, sessionID, "/ws")
 	proc.OnUserPromptSubmit(context.Background(), agentID, sessionID, prompt)
-	proc.OnPostToolUse(agentID, sessionID, "send_response", nil)
+	ids := extractMsgIDsFromPrompt(prompt)
+	switch len(ids) {
+	case 1:
+		proc.OnPostToolUse(agentID, sessionID, "send_response", map[string]any{"message_id": ids[0]})
+	default:
+		results := make([]any, len(ids))
+		for i, id := range ids {
+			results[i] = map[string]any{"message_id": id}
+		}
+		proc.OnPostToolUse(agentID, sessionID, "send_response_batch", map[string]any{"results": results})
+	}
 	proc.OnStop(context.Background(), agentID, sessionID)
 }
 
@@ -186,7 +219,7 @@ func TestRecall_SucceedsOnTurn2(t *testing.T) {
 	assert.Equal(t, 2, m.Retries, "Retries must be 2 after turn 1")
 
 	// Turn 2: agent calls send_response → delivered.
-	proc.OnPostToolUse("turn2-agent", "sess-t2", "send_response", nil)
+	proc.OnPostToolUse("turn2-agent", "sess-t2", "send_response", map[string]any{"message_id": "turn2-msg"})
 	r2 := proc.OnStop(ctx, "turn2-agent", "sess-t2")
 	assert.Nil(t, r2, "turn 2 must deliver (tool was invoked)")
 
@@ -438,10 +471,15 @@ func TestMixedBatch_ExecAndCoTaskQueryBundled(t *testing.T) {
 	assert.Contains(t, e1.prompt, "mixed-query",
 		"co-task query message ID must be bundled in the same prompt")
 
-	// Deliver both with tool invocation.
+	// Deliver both with tool invocation (batch confirming both message IDs).
 	proc.OnPreSessionStart("mixed-agent", "mixed-agent", "sess-mixed", "/ws")
 	proc.OnUserPromptSubmit(ctx, "mixed-agent", "sess-mixed", e1.prompt)
-	proc.OnPostToolUse("mixed-agent", "sess-mixed", "send_response", nil)
+	proc.OnPostToolUse("mixed-agent", "sess-mixed", "send_response_batch", map[string]any{
+		"results": []any{
+			map[string]any{"message_id": "mixed-exec"},
+			map[string]any{"message_id": "mixed-query"},
+		},
+	})
 	r := proc.OnStop(ctx, "mixed-agent", "sess-mixed")
 	assert.Nil(t, r, "OnStop must deliver both messages")
 
@@ -551,7 +589,7 @@ func TestMultiAgent_ConcurrentRecallCycles(t *testing.T) {
 	require.NotNil(t, rY1, "rc-Y turn 1 must recall")
 
 	// rc-X delivers on turn 2 (tool invoked); rc-Y continues recall.
-	proc.OnPostToolUse("rc-X", "sess-rcX", "send_response", nil)
+	proc.OnPostToolUse("rc-X", "sess-rcX", "send_response", map[string]any{"message_id": "rc-x-msg"})
 	rX2 := proc.OnStop(ctx, "rc-X", "sess-rcX")
 	rY2 := proc.OnStop(ctx, "rc-Y", "sess-rcY")
 

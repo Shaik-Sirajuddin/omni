@@ -376,7 +376,7 @@ func TestD1_SessionGenerationGuard(t *testing.T) {
 	// Fire full hook sequence for msg1 — markDelivered increments generation.
 	proc.OnPreSessionStart("d1-guard", "d1-guard", "sess-d1-1", "/ws")
 	proc.OnUserPromptSubmit(ctx, "d1-guard", "sess-d1-1", e1.prompt)
-	proc.OnPostToolUse("d1-guard", "sess-d1-1", "send_response", nil)
+	proc.OnPostToolUse("d1-guard", "sess-d1-1", "send_response", map[string]any{"message_id": "d1-msg1"})
 	recall := proc.OnStop(ctx, "d1-guard", "sess-d1-1")
 	assert.Nil(t, recall, "msg1 must be delivered cleanly")
 

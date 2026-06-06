@@ -198,7 +198,7 @@ func TestFix1_QueueTimeResetPreservesDelivered(t *testing.T) {
 	// markDelivered sets StatusDelivered during the session (while ExecInSession still blocks).
 	proc.OnPreSessionStart("fix1-agent", "fix1-agent", "sess-fix1", "/ws")
 	proc.OnUserPromptSubmit(ctx, "fix1-agent", "sess-fix1", e1.prompt)
-	proc.OnPostToolUse("fix1-agent", "sess-fix1", "send_response", nil)
+	proc.OnPostToolUse("fix1-agent", "sess-fix1", "send_response", map[string]any{"message_id": "fix1-msg"})
 	recall := proc.OnStop(ctx, "fix1-agent", "sess-fix1")
 	require.Nil(t, recall, "OnStop must deliver (no recall) when tool was invoked")
 
@@ -445,7 +445,7 @@ func TestFix4_NoEarlyDelivery(t *testing.T) {
 	// Fire the full hook sequence to deliver msg1 inside the session.
 	proc.OnPreSessionStart("fix4-agent", "fix4-agent", "sess-fix4", "/ws")
 	proc.OnUserPromptSubmit(ctx, "fix4-agent", "sess-fix4", e1.prompt)
-	proc.OnPostToolUse("fix4-agent", "sess-fix4", "send_response", nil)
+	proc.OnPostToolUse("fix4-agent", "sess-fix4", "send_response", map[string]any{"message_id": "fix4-msg1"})
 
 	// Insert msg2 WITHOUT calling MessageArrived so no external executeLoop is spawned.
 	// The only path that can pick msg2 is the post-loop retry after ExecInSession returns.

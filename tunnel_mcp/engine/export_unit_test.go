@@ -91,3 +91,9 @@ func setDeliveryWindowForTest(e *ProcessingEngine, d time.Duration) {
 func SignalSessionDoneForTest(e *ProcessingEngine, agentID string) {
 	e.state.SignalSessionDone(agentID)
 }
+
+// BeginRunIfIdleForTest exposes EngineState.BeginRunIfIdle for whitebox testing
+// of the atomic run-claim (Change 2: TOCTOU fix).
+func BeginRunIfIdleForTest(e *ProcessingEngine, agentID string) bool {
+	return e.state.BeginRunIfIdle(agentID)
+}
