@@ -402,8 +402,13 @@ func agentTemplateRoot(version string) string {
 	return filepath.Join("templates", "agents", version)
 }
 
+// memoryTemplateSchemaVersion is the fixed outer directory under templates/memory/.
+// It is separate from LatestVersion so bumping the agent layout version does not
+// change the template lookup path.
+const memoryTemplateSchemaVersion = "v1"
+
 func memoryTemplateRoot(version string) string {
-	return filepath.Join("templates", "memory", LatestVersion, version)
+	return filepath.Join("templates", "memory", memoryTemplateSchemaVersion, version)
 }
 
 // --- git helpers ---
