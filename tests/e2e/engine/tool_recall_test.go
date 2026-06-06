@@ -17,6 +17,53 @@ import (
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
+// waitForEngineQuiescent waits for all seed sessions created by "omni agent init"
+// to complete before the test sends its own messages. Without this, the receiver
+// processes its seed message first (takes ~240s on cold LLM), blocking the test
+// message for the same duration. The 92789a3 engine fix (skip stale-queued for
+// Running agents) made this issue visible: the engine now correctly holds the test
+// message in queue until the seed session ends rather than re-queuing it.
+//
+// Algorithm:
+//  1. Wait up to initWait for any "execute loop: executing agent" (seed starts).
+//     If none appears, the engine never picked up the seed — hard failure.
+//  2. Otherwise, wait until no new "session stopped" event arrives for quiesceWin.
+//     This handles concurrent sessions (R6 has two receivers) by waiting for ALL
+//     to drain rather than counting a fixed number.
+func waitForEngineQuiescent(t *testing.T, jrnl, omniLog *harness.SyncBuffer) {
+	t.Helper()
+	const initWait = 90 * time.Second
+	const totalWait = 200 * time.Second
+	const quiesceWin = 5 * time.Second
+
+	// Step 1: wait for the seed session to start. Missing this means the engine
+	// never picked up the agent-init seed message — that is a hard failure.
+	if !jrnl.WaitFor("execute loop: executing agent", initWait) &&
+		!omniLog.WaitFor("execute loop: executing agent", 1*time.Second) {
+		t.Fatal("waitForEngineQuiescent: engine never started seed session after agent init — engine may be stuck")
+	}
+	t.Log("waitForEngineQuiescent: seed session(s) started, waiting for quiescence...")
+
+	// Step 2: wait until session-stopped events have quiesced.
+	deadline := time.Now().Add(totalWait)
+	lastCount := 0
+	lastNewAt := time.Time{}
+	for time.Now().Before(deadline) {
+		count := strings.Count(jrnl.String(), "session stopped") +
+			strings.Count(omniLog.String(), "session stopped")
+		if count > lastCount {
+			lastCount = count
+			lastNewAt = time.Now()
+		} else if lastCount > 0 && !lastNewAt.IsZero() && time.Since(lastNewAt) >= quiesceWin {
+			t.Logf("waitForEngineQuiescent: quiescent after %d session(s) stopped, engine ready", lastCount)
+			time.Sleep(2 * time.Second)
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("waitForEngineQuiescent: seed session started but never stopped within %v (session-stopped count=%d) — engine stuck", totalWait, lastCount)
+}
+
 // ensureOmniLog pre-creates /root/.omni/log/omni.log in the container so that
 // CaptureOmniLog's tail -f doesn't fail on a cold-start first test run where the
 // server hasn't written its first log line yet.
@@ -194,9 +241,12 @@ func TestToolRecall_R1_CleanDelivery(t *testing.T) {
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
-	// No pre-resume: the engine bootstraps the receiver session on message arrival.
-	// Pre-resuming causes "already running/claimed, skipping" when the message arrives
-	// while the LLM is still in its initial startup turn.
+
+	// Wait for the engine to finish the seed session created by "agent init" before
+	// sending the test message. Without this, the receiver is busy with its seed
+	// session when the test message arrives; the 92789a3 fix (skip Running agents in
+	// queue sweep) holds the test message in queue for ~240s (the full seed duration).
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	// Prompt that explicitly asks the receiver to use send_response.
 	msgID := sendQuery(t, cfg, sender, receiver,
@@ -207,23 +257,6 @@ func TestToolRecall_R1_CleanDelivery(t *testing.T) {
 		jrnl.WaitForWithID(msgID, "execute loop: executing agent", 25*time.Second) ||
 			omniLog.WaitForWithID(msgID, "execute loop: executing agent", 5*time.Second),
 		"exec must start for message_id=%s", msgID)
-
-	// Detect known ptydaemon engine bug: submit-key retry fires a second
-	// UserPromptSubmit hook 100ms after the initial submit. When the first UPS
-	// has already moved the message to "processing", the second UPS sees a stale
-	// processing entry and clears it back to "queued" — permanently stranding the
-	// message. Fix needed in processor.go: UserPromptSubmit must not clear a message
-	// that was set to processing within the same submit cycle (e.g. same submit_key).
-	if jrnl.WaitFor("cleared stale processing messages", 3*time.Second) {
-		t.Logf("ENGINE BUG DETECTED: submit-key retry double-UserPromptSubmit cleared "+
-			"message_id=%s from 'processing' back to 'queued'. The LLM session is now "+
-			"running but send_response will fail to deliver the stranded 'queued' message. "+
-			"Fix: processor.go UserPromptSubmit handler must not clear messages moved to "+
-			"processing within the same submit cycle (match on submit_key/nonce, not just age).",
-			msgID)
-		t.Skip("ENGINE BUG: double-UserPromptSubmit race strands message in queued state; " +
-			"session will hang until teardown; skipping to avoid 3+ minute test hang")
-	}
 
 	// Wait for delivery via log buffer (no MCP polling loop): blocks until the engine
 	// logs "recall retries exhausted" (force-deliver path, ~144s on cold LLM) or the
@@ -272,6 +305,7 @@ func TestToolRecall_R2_RecallInjected(t *testing.T) {
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	detected, msgID := tryDetectRecall(t, cfg, jrnl, omniLog, sender, receiver, 3)
 	if !detected {
@@ -324,6 +358,7 @@ func TestToolRecall_R3_ExhaustionForceDeliver(t *testing.T) {
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	// First, confirm recall can be triggered at all (up to 3 attempts).
 	detected, msgID := tryDetectRecall(t, cfg, jrnl, omniLog, sender, receiver, 3)
@@ -400,6 +435,7 @@ func TestToolRecall_R4_PartialBatchRecall(t *testing.T) {
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	cli := harness.NewMCPClient(t, cfg, sender)
 
@@ -476,6 +512,7 @@ func TestToolRecall_R5_BulkExhaustionCallback(t *testing.T) {
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	cli := harness.NewMCPClient(t, cfg, sender)
 
@@ -548,7 +585,8 @@ func TestToolRecall_R6_ConcurrentAgentsIsolated(t *testing.T) {
 		harness.RunOmni(t, cfg, "agent", "init", n,
 			"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	}
-	// No pre-resume: engine bootstraps each receiver session on message arrival.
+	// Wait for all seed sessions (one per receiver) to drain before sending.
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	// Fan out: send a natural-question message to each receiver concurrently.
 	type result struct {
@@ -633,6 +671,7 @@ func TestToolRecall_R7_TaskDeliveryRecall(t *testing.T) {
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
+	waitForEngineQuiescent(t, jrnl, omniLog)
 
 	// Send with a task_id so the engine's task delivery checkpoint path is exercised.
 	taskID := "e2e-task-" + ts
