@@ -628,6 +628,23 @@ func (s *Service) resolveSender(ctx context.Context, sender SenderSpec, payload 
 			return sender, nil
 		}
 	}
+
+	// Global fallback: workspace-scoped lookup missed (e.g. path mismatch between
+	// CLI-stored workspace_dir and header value). Search all agents by name.
+	if all, err := s.listWorkspaceAgents(""); err == nil {
+		for _, agent := range all {
+			if agent == nil {
+				continue
+			}
+			if agent.Name == rawID {
+				sender.ID = agent.ID
+				if strings.TrimSpace(sender.Workspace) == "" {
+					sender.Workspace = strings.TrimSpace(string(agent.WorkspaceDir))
+				}
+				return sender, nil
+			}
+		}
+	}
 	return SenderSpec{}, fmt.Errorf("sender agent not found")
 }
 
