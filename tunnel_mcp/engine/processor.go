@@ -54,6 +54,9 @@ type AgentWorkspace interface {
 type StatusCallbackService interface {
 	// SendStatusCallback is called when a message is picked for delivery or fails after max retries.
 	SendStatusCallback(ctx context.Context, messageID, agentName, teamName string)
+	// SendStatusCallbackBatch is called for a set of message IDs at once (e.g. all messages
+	// force-delivered after recall exhaustion), so the status update is one bulk send.
+	SendStatusCallbackBatch(ctx context.Context, messageIDs []string, agentName, teamName string)
 }
 
 // AgentCallbackRequest carries the details of a completed (or failed) agent execution.
@@ -1363,11 +1366,13 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	if len(exhausted) > 0 {
 		logger.Warn("hook: stop — recall retries exhausted, force-delivering",
 			"agent_id", agentID, "count", len(exhausted))
-		// Status callback is per-message — fire one for each exhausted message, not just the first.
+		// Bulk status callback for all exhausted messages in one send.
 		if e.statusCallback != nil {
-			for _, msg := range exhausted {
-				e.statusCallback.SendStatusCallback(ctx, msg.ID, agentState.Agent.Name, agentState.Agent.Team)
+			ids := make([]string, len(exhausted))
+			for i, msg := range exhausted {
+				ids[i] = msg.ID
 			}
+			e.statusCallback.SendStatusCallbackBatch(ctx, ids, agentState.Agent.Name, agentState.Agent.Team)
 		}
 		e.markDelivered(ctx, exhausted, agentID, agentState, true)
 		agentState, _ = e.state.GetAgent(agentID)

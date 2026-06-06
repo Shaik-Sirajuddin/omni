@@ -169,6 +169,12 @@ func (w *waitableStatusCallback) SendStatusCallback(_ context.Context, messageID
 	w.ch <- callbackPayload{messageID, agentName, teamName}
 }
 
+func (w *waitableStatusCallback) SendStatusCallbackBatch(_ context.Context, messageIDs []string, agentName, teamName string) {
+	for _, id := range messageIDs {
+		w.ch <- callbackPayload{id, agentName, teamName}
+	}
+}
+
 func (w *waitableStatusCallback) waitForCallback(t *testing.T) callbackPayload {
 	t.Helper()
 	select {
