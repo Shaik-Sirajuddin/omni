@@ -141,13 +141,57 @@ func FilterByID(log, messageID string) string {
 	return out.String()
 }
 
-// DumpLogsOnFailure writes journalctl + omni.log to t.Log when the test has
-// failed. Call deferred at the end of each test.
+// relevantSignals are substrings that mark a log line as likely relevant to a
+// failure: warnings/errors plus the message- and session-flow signals across the
+// key components (operator, engine, tunnel_mcp service, ptydaemon).
+var relevantSignals = []string{
+	"level=warn", "level=error", "panic", "fatal error",
+	"sender", "resolve", "not found", "is required", "iserror",
+	"send_message", "get_message", "query_result", "send_response",
+	"exec in session", "userpromptsubmit", "create session", "adopt",
+	"terminal", "sqlite", "database is locked",
+}
+
+// FilterRelevant returns only the log lines that match a relevantSignal, so a
+// failure dump leads with the lines that actually explain it.
+func FilterRelevant(s string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		l := strings.ToLower(line)
+		for _, kw := range relevantSignals {
+			if strings.Contains(l, kw) {
+				b.WriteString(line)
+				b.WriteByte('\n')
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
+// DumpLogsOnFailure writes captured logs to t.Log when the test has failed.
+// It leads with a filtered "relevant" extract (errors/warnings + message/session
+// flow) from both sources so the cause is visible without re-fetching container
+// logs, then includes the full buffers and any message_id-scoped view.
+// Call deferred at the end of each test.
 func DumpLogsOnFailure(t *testing.T, jrnl, omniLog *SyncBuffer, msgID string) {
 	t.Helper()
 	if !t.Failed() {
 		return
 	}
+
+	// Relevant-only extract first — this is usually all you need.
+	var relevant strings.Builder
+	if jrnl != nil {
+		relevant.WriteString(FilterRelevant(jrnl.String()))
+	}
+	if omniLog != nil {
+		relevant.WriteString(FilterRelevant(omniLog.String()))
+	}
+	if r := strings.TrimSpace(relevant.String()); r != "" {
+		t.Logf("=== relevant log lines (errors/warnings + msg/session flow) ===\n%s", r)
+	}
+
 	if jrnl != nil {
 		s := jrnl.String()
 		t.Logf("=== journalctl (%d bytes) ===\n%s", len(s), s)
@@ -156,8 +200,7 @@ func DumpLogsOnFailure(t *testing.T, jrnl, omniLog *SyncBuffer, msgID string) {
 		s := omniLog.String()
 		t.Logf("=== omni.log (%d bytes) ===\n%s", len(s), s)
 		if msgID != "" {
-			filtered := FilterByID(s, msgID)
-			t.Logf("=== omni.log filtered for message_id=%s ===\n%s", msgID, filtered)
+			t.Logf("=== omni.log filtered for message_id=%s ===\n%s", msgID, FilterByID(s, msgID))
 		}
 	}
 }
