@@ -39,7 +39,12 @@ type Store struct {
 }
 
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
+	// modernc.org/sqlite reads PRAGMAs via "_pragma=" DSN params; the older
+	// "_journal_mode=" form (mattn syntax) is silently ignored by this driver,
+	// which left the daemon with no WAL and no busy timeout. Set both so
+	// concurrent session create/adopt/get calls wait for the lock instead of
+	// failing immediately with SQLITE_BUSY.
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
