@@ -23,6 +23,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	codexsettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/gemini"
+	enginesync "github.com/Shaik-Sirajuddin/memory/mcp/pkg/enginesync"
 	mcpdatabase "github.com/Shaik-Sirajuddin/memory/mcp/store/database"
 	mcpmessage "github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
@@ -65,6 +66,7 @@ type DefaultOperator struct {
 	newCodeAgent         func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	newCodeAgentForAgent func(agentID string, provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	nextAgentID          func() string
+	engineSync           *enginesync.Client // nil = engine notify disabled
 }
 
 type codexPTYAdapter struct {
@@ -284,6 +286,19 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 	if err != nil {
 		return fmt.Errorf("operator: switch provider: init runtime for resume: %w", err)
 	}
+
+	// Ask the engine to resume the agent before we resume the session: this
+	// clears the interrupted flag, re-triggers delivery, and hydrates the agent
+	// from the store into the engine's in-memory state ahead of the first
+	// hook/MCP traffic. Best-effort: a down or absent engine must not block resume.
+	if o.engineSync != nil {
+		syncCtx, cancelSync := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := o.engineSync.Resume(syncCtx, agent.ID); err != nil {
+			logger.Warn("SwitchProvider: engine resume notify failed", "agentID", agent.ID, "sessionID", target.Id, "err", err)
+		}
+		cancelSync()
+	}
+
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: target.Id, Envs: mcpSessionEnvs(agent)})
@@ -642,7 +657,10 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	// Resolve provider/model from persisted session; let connectors apply model defaults.
 	provider := codeagent.Provider(operator.DefaultProvider)
 	model := ""
-	sessionID := agent.ID
+	// Session ID is independent of the agent ID: prefer the persisted session,
+	// then an explicit request, else a fresh UUID (filled in below). The
+	// code_sessions.agent_id column carries the agent→session mapping.
+	sessionID := ""
 	if o.sessionStore != nil {
 		if session, sErr := o.sessionStore.GetSession(agent.ID); sErr == nil && session != nil {
 			if session.Model != nil {
@@ -664,7 +682,24 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if requestedSessionID != "" {
 		sessionID = requestedSessionID
 	}
+	if sessionID == "" {
+		// No persisted session and none requested (e.g. an agent whose session
+		// row was never written): mint a fresh UUID rather than reusing agent.ID.
+		sessionID = uuid.NewString()
+	}
 	omnilog.InitSessionLog(sessionID)
+
+	// Hydrate the agent into the engine's in-memory state and re-activate its
+	// delivery loop before attaching the PTY client. Best-effort: a down or
+	// absent engine must not block resume/attach.
+	if o.engineSync != nil {
+		syncCtx, cancelSync := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := o.engineSync.Resume(syncCtx, agent.ID); err != nil {
+			logger.Warn("ResumeAgent: engine hydrate notify failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+		}
+		cancelSync()
+	}
+
 	if o.ptyDaemon != nil {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
@@ -841,6 +876,7 @@ func New() (operator.Operator, error) {
 		agentMemory:  operator.NewDefaultAgentMemory(),
 		provisioner:  provisioner,
 		ptyDaemon:    ptyDaemon,
+		engineSync:   enginesync.New(),
 		nextAgentID:  uuid.NewString,
 		newCodeAgent: func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error) {
 			switch provider {
@@ -1364,11 +1400,15 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	// }
 
 	requestedSessionID = strings.TrimSpace(requestedSessionID)
-	createID := agent.ID
-	if requestedSessionID != "" {
-		createID = requestedSessionID
+	// Session ID is independent of the agent ID: default to a fresh UUID and let
+	// the code_sessions.agent_id column carry the agent→session mapping (mirrors
+	// SwitchProvider). An explicit requestedSessionID still wins.
+	createID := requestedSessionID
+	if createID == "" {
+		createID = uuid.NewString()
 	}
 	envs := mcpSessionEnvs(agent)
+	// provider can return a different sessionId than requested
 	createResult, err := ca.Create(codeagent.CreateSessionParams{
 		ID:        createID,
 		Name:      agent.Name,
@@ -1403,6 +1443,19 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	if !interactive {
 		logger.Info("startAgentSession: interactive session is not attached", "agentID", agent.ID, "provider", provider, "sessionID", sessionID)
 		return nil
+	}
+
+	// Bootstrap succeeded (session created and persisted). Seed the agent's bare
+	// presence into the engine's in-memory state (Status: Ready — idle, eligible,
+	// no delivery, no clear-interrupted) before we resume the session. This is a
+	// fresh agent, so there is nothing to hydrate or re-trigger; use SyncUsage,
+	// not Resume. Best-effort: a down or absent engine must not block the resume.
+	if o.engineSync != nil {
+		syncCtx, cancelSync := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := o.engineSync.SyncUsage(syncCtx, agent.ID, enginesync.SessionUsage{}); err != nil {
+			logger.Warn("startAgentSession: engine seed notify failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+		}
+		cancelSync()
 	}
 
 	resumeCtx, cancelResume := newResumeContext()

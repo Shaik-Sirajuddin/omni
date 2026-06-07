@@ -23,8 +23,13 @@ func provisionDefaultHooksWithResolver(cfg Config, resolver hookResolver) error 
 	}
 	hookURL := defaultHookURL(cfg)
 	entry := config.HookEntry{Url: &hookURL}
+	// Seed all six lifecycle events the engine's /hook handler dispatches on, each
+	// pointing at the single canonical service socket. AddHooks canonicalises and
+	// de-duplicates, so this converges to exactly one socket call per hook.
 	added, err := resolver.AddHooks(map[string][]config.HookEntry{
-		string(hooks.SessionStart):    {entry},
+		string(hooks.SessionStart):       {entry},
+		string(hooks.PreToolUse):         {entry},
+		string(hooks.PostToolUse):        {entry},
 		string(hooks.PrePrompt):          {entry},
 		string(hooks.PostPrompt):         {entry},
 		string(hooks.PostToolUseFailure): {entry},

@@ -56,7 +56,7 @@ func TestHookProvisioning(t *testing.T) {
 
 		expectedURL := "unix:///tmp/tunnel-service-test.sock/hook"
 		for _, event := range []hooks.HookID{
-			hooks.PreSessionStart,
+			hooks.SessionStart,
 			hooks.PrePrompt,
 			hooks.PostPrompt,
 			hooks.PostToolUseFailure,

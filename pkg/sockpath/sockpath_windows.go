@@ -20,6 +20,7 @@ const (
 	NameHookOperator = "hook-operator.sock"
 	NameService      = "service.sock"
 	NameMCP          = "mcp.sock"
+	NameEngineSync   = "engine-sync.sock"
 )
 
 // Resolve returns the socket path for the given service socket name.
@@ -51,3 +52,7 @@ func HookOperator() string { return Resolve("HOOK_OPERATOR_SOCKET", NameHookOper
 
 // Service returns the omni service socket path, honouring OMNI_SERVICE_SOCKET.
 func Service() string { return Resolve("OMNI_SERVICE_SOCKET", NameService) }
+
+// EngineSync returns the engine session-sync socket path, honouring OMNI_ENGINE_SYNC_SOCKET.
+// The processing engine listens here; the operator dials it to push session-sync updates.
+func EngineSync() string { return Resolve("OMNI_ENGINE_SYNC_SOCKET", NameEngineSync) }

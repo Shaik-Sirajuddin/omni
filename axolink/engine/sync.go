@@ -5,26 +5,27 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+
+	"github.com/Shaik-Sirajuddin/memory/mcp/pkg/enginesync"
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
-const DefaultSyncSocketPath = "/tmp/mcp-engine-sync.sock"
+// DefaultSyncSocketPath resolves the engine sync socket path via sockpath
+// (honouring OMNI_ENGINE_SYNC_SOCKET). The operator dials the same path through
+// the enginesync client package.
+func DefaultSyncSocketPath() string { return sockpath.EngineSync() }
 
-// SessionSyncPayload is the JSON body sent by omni-server on each /session-sync call.
-type SessionSyncPayload struct {
-	Session      string       `json:"session"`
-	SessionUsage SessionUsage `json:"session_usage"`
-}
-
-// SyncServer listens on a unix socket for session-sync callbacks from omni-server
-// and keeps the engine's in-memory state current.
+// SyncServer listens on a unix socket for engine-sync callbacks from the operator
+// and delegates them to the engine, which keeps its in-memory state current
+// (hydrating from the store as needed). The server itself holds no state.
 type SyncServer struct {
 	socketPath string
-	state      *EngineState
 	onSync     func(agentID string, usage SessionUsage)
+	onResume   func(agentID string)
 }
 
-func newSyncServer(socketPath string, state *EngineState, onSync func(string, SessionUsage)) *SyncServer {
-	return &SyncServer{socketPath: socketPath, state: state, onSync: onSync}
+func newSyncServer(socketPath string, onSync func(string, SessionUsage), onResume func(string)) *SyncServer {
+	return &SyncServer{socketPath: socketPath, onSync: onSync, onResume: onResume}
 }
 
 func (s *SyncServer) Run(ctx context.Context) error {
@@ -59,25 +60,43 @@ func (s *SyncServer) Run(ctx context.Context) error {
 func (s *SyncServer) handle(conn net.Conn) {
 	defer conn.Close()
 
-	var payload SessionSyncPayload
+	var payload enginesync.Payload
 	if err := json.NewDecoder(conn).Decode(&payload); err != nil {
 		logger.Error("sync server decode failed", "err", err)
 		return
 	}
 
-	logger.Debug("session sync received",
-		"session", payload.Session,
-		"consumed_percent", payload.SessionUsage.ConsumedPercent,
-	)
-
-	agentState, ok := s.state.GetAgent(payload.Session)
-	if !ok {
-		agentState = AgentState{Status: AgentStatusRunning}
+	if payload.Session == "" {
+		logger.Warn("engine sync: empty session, ignoring", "kind", payload.Kind)
+		return
 	}
-	agentState.SessionUsage = payload.SessionUsage
-	s.state.SetAgent(payload.Session, agentState)
 
-	if s.onSync != nil {
-		s.onSync(payload.Session, payload.SessionUsage)
+	switch payload.Kind {
+	case enginesync.KindResume:
+		// Resume and create both hydrate/sync in-memory state from the store via the
+		// engine's onResume handler; neither retriggers delivery (no executeLoop).
+		logger.Debug("engine sync: resume received", "session", payload.Session)
+		if s.onResume != nil {
+			s.onResume(payload.Session)
+		}
+	case enginesync.KindSessionSync, "":
+		logger.Debug("engine sync: session sync received",
+			"session", payload.Session,
+			"consumed_percent", payload.SessionUsage.ConsumedPercent,
+		)
+
+		// Map the wire payload onto the engine's internal SessionUsage. The named
+		// types are structurally identical, so the nested conversion is exact.
+		usage := SessionUsage{
+			Consumed:        ConsumedUsage(payload.SessionUsage.Consumed),
+			Max:             payload.SessionUsage.Max,
+			ConsumedPercent: payload.SessionUsage.ConsumedPercent,
+		}
+
+		if s.onSync != nil {
+			s.onSync(payload.Session, usage)
+		}
+	default:
+		logger.Warn("engine sync: unknown payload kind, ignoring", "kind", payload.Kind, "session", payload.Session)
 	}
 }

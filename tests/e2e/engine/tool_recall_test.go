@@ -18,50 +18,25 @@ import (
 // ── shared helpers ────────────────────────────────────────────────────────────
 
 // waitForEngineQuiescent waits for all seed sessions created by "omni agent init"
-// to complete before the test sends its own messages. Without this, the receiver
-// processes its seed message first (takes ~240s on cold LLM), blocking the test
-// message for the same duration. The 92789a3 engine fix (skip stale-queued for
-// Running agents) made this issue visible: the engine now correctly holds the test
-// message in queue until the seed session ends rather than re-queuing it.
+// to complete before the test sends its own messages.
 //
-// Algorithm:
-//  1. Wait up to initWait for any "execute loop: executing agent" (seed starts).
-//     If none appears, the engine never picked up the seed — hard failure.
-//  2. Otherwise, wait until no new "session stopped" event arrives for quiesceWin.
-//     This handles concurrent sessions (R6 has two receivers) by waiting for ALL
-//     to drain rather than counting a fixed number.
+// Seed sessions run synchronously inside the "agent init" command (not via the
+// engine's message queue), so they complete within ~5 seconds and are already
+// done by the time this function is called. The engine logs "event=SessionEnd"
+// via its hook handler for each seed session.
+//
+// We wait for at least one SessionEnd in jrnl (sanity check that the hook is
+// live), then sleep briefly to let any in-flight Stop hook writes commit.
 func waitForEngineQuiescent(t *testing.T, jrnl, omniLog *harness.SyncBuffer) {
 	t.Helper()
-	const initWait = 90 * time.Second
-	const totalWait = 200 * time.Second
-	const quiesceWin = 5 * time.Second
-
-	// Step 1: wait for the seed session to start. Missing this means the engine
-	// never picked up the agent-init seed message — that is a hard failure.
-	if !jrnl.WaitFor("execute loop: executing agent", initWait) &&
-		!omniLog.WaitFor("execute loop: executing agent", 1*time.Second) {
-		t.Fatal("waitForEngineQuiescent: engine never started seed session after agent init — engine may be stuck")
+	// Seed sessions complete synchronously, so SessionEnd should already be in
+	// the buffer. Give it 15s in case of slight hook-delivery lag.
+	if !jrnl.WaitFor("event=SessionEnd", 15*time.Second) {
+		t.Fatal("waitForEngineQuiescent: no seed session SessionEnd in hook log — engine hook may not be running")
 	}
-	t.Log("waitForEngineQuiescent: seed session(s) started, waiting for quiescence...")
-
-	// Step 2: wait until session-stopped events have quiesced.
-	deadline := time.Now().Add(totalWait)
-	lastCount := 0
-	lastNewAt := time.Time{}
-	for time.Now().Before(deadline) {
-		count := strings.Count(jrnl.String(), "session stopped") +
-			strings.Count(omniLog.String(), "session stopped")
-		if count > lastCount {
-			lastCount = count
-			lastNewAt = time.Now()
-		} else if lastCount > 0 && !lastNewAt.IsZero() && time.Since(lastNewAt) >= quiesceWin {
-			t.Logf("waitForEngineQuiescent: quiescent after %d session(s) stopped, engine ready", lastCount)
-			time.Sleep(2 * time.Second)
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	t.Fatalf("waitForEngineQuiescent: seed session started but never stopped within %v (session-stopped count=%d) — engine stuck", totalWait, lastCount)
+	// Brief settle for any remaining Stop hook processing.
+	time.Sleep(1 * time.Second)
+	t.Log("waitForEngineQuiescent: seed session(s) complete, engine ready")
 }
 
 // ensureOmniLog pre-creates /root/.omni/log/omni.log in the container so that
@@ -70,6 +45,15 @@ func waitForEngineQuiescent(t *testing.T, jrnl, omniLog *harness.SyncBuffer) {
 func ensureOmniLog(t *testing.T, cfg harness.TestConfig) {
 	t.Helper()
 	harness.ExecInContainer(t, cfg, "mkdir -p /root/.omni/log && touch /root/.omni/log/omni.log")
+}
+
+// purgeAgents deletes named agents (allow-fail) before creating them, so that
+// stale agents from a previous interrupted test run do not cause "already exists" errors.
+func purgeAgents(t *testing.T, cfg harness.TestConfig, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		harness.RunOmniAllowFail(t, cfg, "agent", "delete", name, "--workspace", cfg.Workspace)
+	}
 }
 
 // sendQuery sends a query message from sender to receiver via MCP send_message.
@@ -237,6 +221,7 @@ func TestToolRecall_R1_CleanDelivery(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, sender, receiver)
 	harness.RunOmni(t, cfg, "agent", "init", sender,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
@@ -258,10 +243,11 @@ func TestToolRecall_R1_CleanDelivery(t *testing.T) {
 			omniLog.WaitForWithID(msgID, "execute loop: executing agent", 5*time.Second),
 		"exec must start for message_id=%s", msgID)
 
-	// Wait for delivery via log buffer (no MCP polling loop): blocks until the engine
-	// logs "recall retries exhausted" (force-deliver path, ~144s on cold LLM) or the
-	// clean-delivery status appears via a short MCP poll. One MCP call at the end.
-	delivered := waitForDelivery(t, cfg, sender, msgID, jrnl, omniLog, 200*time.Second)
+	// Wait for delivery via log buffer. On cold LLM, the first Claude Code session
+	// can take 4-5 minutes; with 3 recall cycles before force-deliver the total
+	// latency can be ~15 minutes. Use a generous timeout and rely on the test binary
+	// -timeout flag as the hard ceiling.
+	delivered := waitForDelivery(t, cfg, sender, msgID, jrnl, omniLog, 900*time.Second)
 	assert.True(t, delivered, "message must reach status=delivered (msgID=%s)", msgID)
 
 	// Advisory: log a warning if recall was injected due to LLM latency.
@@ -301,6 +287,7 @@ func TestToolRecall_R2_RecallInjected(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, sender, receiver)
 	harness.RunOmni(t, cfg, "agent", "init", sender,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
@@ -354,6 +341,7 @@ func TestToolRecall_R3_ExhaustionForceDeliver(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, sender, receiver)
 	harness.RunOmni(t, cfg, "agent", "init", sender,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
@@ -431,6 +419,7 @@ func TestToolRecall_R4_PartialBatchRecall(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, sender, receiver)
 	harness.RunOmni(t, cfg, "agent", "init", sender,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
@@ -508,6 +497,7 @@ func TestToolRecall_R5_BulkExhaustionCallback(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, sender, receiver)
 	harness.RunOmni(t, cfg, "agent", "init", sender,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
@@ -581,6 +571,7 @@ func TestToolRecall_R6_ConcurrentAgentsIsolated(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, senderA, recvA, senderB, recvB)
 	for _, n := range []string{senderA, recvA, senderB, recvB} {
 		harness.RunOmni(t, cfg, "agent", "init", n,
 			"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
@@ -667,6 +658,7 @@ func TestToolRecall_R7_TaskDeliveryRecall(t *testing.T) {
 	})
 
 	harness.RunOmniAllowFail(t, cfg, "team", "init")
+	purgeAgents(t, cfg, sender, receiver)
 	harness.RunOmni(t, cfg, "agent", "init", sender,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
