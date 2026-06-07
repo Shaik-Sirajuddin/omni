@@ -121,6 +121,53 @@ func waitForStatus(t *testing.T, cfg harness.TestConfig, senderID, msgID, wantSt
 	return false
 }
 
+// lastDeliverySession scans log output for the most recent
+// "session-<uuid>.log" reference and returns the <uuid>. The engine emits this
+// (e.g. "omni: log → /root/.omni/log/session-<id>.log") when it execs a session,
+// so on a delivery failure it identifies the exact session the prompt was sent to.
+func lastDeliverySession(logs string) string {
+	const marker = "session-"
+	id := ""
+	for {
+		i := strings.Index(logs, marker)
+		if i < 0 {
+			break
+		}
+		rest := logs[i+len(marker):]
+		// UUID is 36 chars (8-4-4-4-12); the next ".log" must follow it directly.
+		if j := strings.Index(rest, ".log"); j == 36 {
+			id = rest[:j]
+		}
+		logs = rest
+	}
+	return id
+}
+
+// assertMessageProcessing is an early-failure check: after exec fires, the engine
+// sets status=processing the moment the receiver submits the prompt
+// (UserPromptSubmit) — within seconds, even when the LLM's reply is slow. If the
+// message is still "queued" after the timeout, the prompt was typed into the
+// delivery session but never submitted (the delivery-session bug). Failing here
+// surfaces that in ~timeout instead of waiting the full delivery timeout (~900s),
+// and prints the delivery session id so the failing session log is identifiable.
+func assertMessageProcessing(t *testing.T, cfg harness.TestConfig,
+	senderID, msgID string, jrnl, omniLog *harness.SyncBuffer, timeout time.Duration) {
+	t.Helper()
+	if waitForStatus(t, cfg, senderID, msgID, "processing", timeout) {
+		return
+	}
+	// May have raced past processing straight to delivered (fast clean reply).
+	if st := messageStatus(t, cfg, senderID, msgID); st == "delivered" {
+		return
+	} else {
+		sid := lastDeliverySession(omniLog.String() + jrnl.String())
+		t.Fatalf("EARLY-FAIL: message %s never reached status=processing within %s "+
+			"(current=%q) — receiver did not submit the prompt; delivery session=%q "+
+			"was likely typed-but-never-submitted (resume-vs-fresh-turn bug)",
+			msgID, timeout, st, sid)
+	}
+}
+
 // waitForDelivery waits for a delivery signal in the log buffers (fast, in-memory,
 // 300ms poll interval — no MCP roundtrips) then confirms via one MCP status call.
 //
@@ -227,6 +274,13 @@ func TestToolRecall_R1_CleanDelivery(t *testing.T) {
 	harness.RunOmni(t, cfg, "agent", "init", receiver,
 		"--workspace", cfg.Workspace, "--provider", provider, "--interactive=false")
 
+	// Verify both agents were actually created in the operator's store before
+	// proceeding. `agent init --interactive=false` creates the record but no
+	// session, so this checks the store (via `agent list`), not session/log
+	// files — see harness.AssertAgentCreated.
+	harness.AssertAgentCreated(t, cfg, sender)
+	harness.AssertAgentCreated(t, cfg, receiver)
+
 	// Wait for the engine to finish the seed session created by "agent init" before
 	// sending the test message. Without this, the receiver is busy with its seed
 	// session when the test message arrives; the 92789a3 fix (skip Running agents in
@@ -242,6 +296,11 @@ func TestToolRecall_R1_CleanDelivery(t *testing.T) {
 		jrnl.WaitForWithID(msgID, "execute loop: executing agent", 25*time.Second) ||
 			omniLog.WaitForWithID(msgID, "execute loop: executing agent", 5*time.Second),
 		"exec must start for message_id=%s", msgID)
+
+	// Early-failure check: the receiver must start processing (submit the prompt)
+	// shortly after exec. Fails fast in ~90s if the delivery session never submits
+	// the prompt, instead of waiting the full delivery timeout below.
+	assertMessageProcessing(t, cfg, sender, msgID, jrnl, omniLog, 90*time.Second)
 
 	// Wait for delivery via log buffer. On cold LLM, the first Claude Code session
 	// can take 4-5 minutes; with 3 recall cycles before force-deliver the total

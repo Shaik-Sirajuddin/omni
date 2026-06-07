@@ -85,7 +85,11 @@ docker-down:
 	docker compose -f $(COMPOSE_FILE) down
 
 # down + drop named volumes for this worktree's project
+# also clears the root-owned omni log bind-mount (logs only) via the live
+# container, so each run starts with a clean dev/local/omni/log — done before
+# `down` while the container is still up to avoid needing host sudo.
 docker-down-v:
+	-@docker compose -f $(COMPOSE_FILE) exec -T ubuntu sh -c 'rm -f /root/.omni/log/* 2>/dev/null' 2>/dev/null || true
 	docker compose -f $(COMPOSE_FILE) down -v
 
 # rebuild image and restart container in one step (drops volumes first)
