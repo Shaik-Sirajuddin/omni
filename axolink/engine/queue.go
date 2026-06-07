@@ -88,17 +88,20 @@ func (q *sqlQueue) WorkspaceForAgent(ctx context.Context, agentID string) (strin
 // re-flag the message). Other status-bearing fields (delivery_time, retries) are
 // owned by the caller via Update.
 func (q *sqlQueue) Advance(ctx context.Context, ids []string, to message.Status) error {
+	// Best-effort per id: log and continue so one bad id doesn't strand the rest
+	// (matches the per-message UpdateMessage loops this replaced).
 	for _, id := range ids {
 		m, err := q.store.GetMessage(ctx, id)
 		if err != nil {
-			return err
+			logger.Error("queue: advance — get message failed", "message_id", id, "status", to, "err", err)
+			continue
 		}
 		m.Status = to
 		if to == message.StatusInQueue {
 			m.QueueTime = 0
 		}
 		if err := q.store.UpdateMessage(ctx, m); err != nil {
-			return err
+			logger.Error("queue: advance — update failed", "message_id", id, "status", to, "err", err)
 		}
 	}
 	return nil

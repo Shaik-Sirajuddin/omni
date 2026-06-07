@@ -22,97 +22,53 @@ func (e *ProcessingEngine) OnPreSessionStart(agentID, agentName, sessionID, cwd 
 	e.state.SetAgent(agentID, agentState)
 }
 
+// extractBatchIDs parses the engine YAML payload into the current batch's message
+// IDs. Returns nil when the prompt is not an engine payload (e.g. a plain prompt).
+func extractBatchIDs(prompt string) []string {
+	var payload promptPayload
+	if yaml.Unmarshal([]byte(prompt), &payload) != nil {
+		return nil
+	}
+	var ids []string
+	for _, item := range payload.Messages {
+		if item.MessageID != "" {
+			ids = append(ids, item.MessageID)
+		}
+	}
+	return ids
+}
+
 // OnUserPromptSubmit is called by HookHandler on UserPromptSubmit / PrePrompt events.
-// Clears orphaned processing messages, then unmarshals the YAML prompt to mark current batch as processing.
+// It delegates the orphan-vs-current decision to NextMessage and applies the resulting
+// transitions via MessageQueue: orphaned processing/queued messages (not in the current
+// batch) are failed; the current batch is advanced to Processing.
+//
+// The current batch is excluded from the sweep so the ptydaemon submit-key retry (which
+// can fire UserPromptSubmit twice ~9ms apart with the SAME payload) doesn't fail a message
+// it just advanced. This hook fires only for user-originated prompts; systemMessage recall
+// injections continue the same session and trigger Stop instead, so recall messages stay
+// Processing across turns.
 func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessionID, prompt string) {
 	logger.Debug("hook: user prompt submit", "agent_id", agentID, "session_id", sessionID)
 
 	ctx := e.ctx
+	batchIDs := extractBatchIDs(prompt)
 
-	// Parse the payload FIRST so the stale sweeps below can exclude the messages that belong to
-	// THIS submit cycle. The ptydaemon submit-key retry can fire UserPromptSubmit twice ~9ms apart
-	// carrying the SAME YAML payload: the first hook moves the message to StatusProcessing, and
-	// without this exclusion the second hook's stale-processing sweep would see that very message
-	// as "orphaned" and fail it — leaving send_response unable to deliver and the session hanging.
-	// A message referenced in the payload being submitted is by definition current, not orphaned
-	// from a prior session, so it must be protected from both sweeps regardless of hook timing.
-	var payload promptPayload
-	isEnginePayload := yaml.Unmarshal([]byte(prompt), &payload) == nil
-	currentBatch := make(map[string]bool)
-	if isEnginePayload {
-		for _, item := range payload.Messages {
-			if item.MessageID != "" {
-				currentBatch[item.MessageID] = true
-			}
-		}
-	}
-
-	// A new prompt means a new session — any messages still in processing are orphaned from a prior session.
-	// Safety: this hook fires only on the UserPromptSubmit (PrePrompt) event, which Claude Code emits for
-	// user-originated prompts only. systemMessage injections (returned via PostPrompt/Stop hook response) do
-	// NOT fire this hook — they continue the same session and trigger another Stop event instead. The sweep
-	// is therefore safe on the recall path: recall messages stay StatusProcessing across Stop → systemMessage
-	// → Stop turns without being cleared here.
-	stale, err := e.queue.ForAgent(ctx, agentID, QueryOpts{Status: message.StatusProcessing})
+	out, err := e.next.OnPromptSubmit(ctx, agentID, batchIDs)
 	if err != nil {
-		logger.Error("hook: user prompt submit — query stale processing failed", "agent_id", agentID, "err", err)
-	}
-	cleared := 0
-	for _, msg := range stale {
-		if currentBatch[msg.ID] {
-			continue // belongs to this submit cycle (double-UPS race) — not orphaned
-		}
-		msg.Status = message.StatusFailed
-		if err := e.queue.Update(ctx, msg); err != nil {
-			logger.Error("hook: mark stale processing failed", "message_id", msg.ID, "err", err)
-		}
-		cleared++
-	}
-	if cleared > 0 {
-		logger.Warn("hook: user prompt submit — cleared stale processing messages", "agent_id", agentID, "count", cleared)
-	}
-
-	// Also sweep stale queued messages whose queue_time exceeded the delivery window.
-	cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
-	staleQueued, err := e.queue.ForAgent(ctx, agentID, QueryOpts{Status: statusQueued, StaleBefore: cutoff})
-	if err != nil {
-		logger.Error("hook: user prompt submit — query stale queued failed", "agent_id", agentID, "err", err)
-	}
-	clearedQueued := 0
-	for _, msg := range staleQueued {
-		if currentBatch[msg.ID] {
-			continue // belongs to this submit cycle — not orphaned
-		}
-		msg.Status = message.StatusFailed
-		if err := e.queue.Update(ctx, msg); err != nil {
-			logger.Error("hook: mark stale queued failed", "message_id", msg.ID, "err", err)
-		}
-		clearedQueued++
-	}
-	if clearedQueued > 0 {
-		logger.Warn("hook: user prompt submit — cleared stale queued messages", "agent_id", agentID, "count", clearedQueued)
-	}
-
-	if !isEnginePayload {
-		logger.Debug("hook: user prompt submit — not a engine payload, skipping", "agent_id", agentID)
+		logger.Error("hook: user prompt submit — plan failed", "agent_id", agentID, "err", err)
 		return
 	}
-
-	for _, item := range payload.Messages {
-		if item.MessageID == "" {
-			continue
-		}
-		msg, err := e.queue.Get(ctx, item.MessageID)
-		if err != nil {
-			logger.Error("hook: get message failed", "message_id", item.MessageID, "err", err)
-			continue
-		}
-		msg.Status = message.StatusProcessing
-		if err := e.queue.Update(ctx, msg); err != nil {
-			logger.Error("hook: update message to processing failed", "message_id", item.MessageID, "err", err)
-		}
+	if len(out.Fail) > 0 {
+		_ = e.queue.Advance(ctx, out.Fail, message.StatusFailed)
+		logger.Warn("hook: user prompt submit — cleared orphaned messages", "agent_id", agentID, "count", len(out.Fail))
 	}
-	logger.Debug("hook: user prompt submit processed", "agent_id", agentID, "session_id", sessionID, "count", len(payload.Messages))
+	if len(out.Process) > 0 {
+		_ = e.queue.Advance(ctx, out.Process, message.StatusProcessing)
+		logger.Debug("hook: user prompt submit processed", "agent_id", agentID, "session_id", sessionID, "count", len(out.Process))
+	} else {
+		logger.Debug("hook: user prompt submit — not a engine payload, no batch to process", "agent_id", agentID)
+	}
 }
 
 // maxMandatoryToolRetries is the number of recall injections before giving up.
@@ -160,7 +116,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
-	msgs, err := e.queue.ForAgent(ctx, agentID, QueryOpts{Status: message.StatusProcessing})
+	msgs, err := e.next.Active(ctx, agentID)
 	if err != nil {
 		logger.Error("hook: stop — query processing messages failed", "agent_id", agentID, "err", err)
 		e.state.ClearSession(sessionID)
@@ -185,66 +141,40 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		return nil
 	}
 
-	// Per-message delivery confirmation. The single source of truth for "delivered" is the
-	// agent's tool callback (send_response / batch / legacy alias) naming a specific
-	// message_id this session — recorded in OnPostToolUse. A bare Stop turn confirms nothing;
-	// unconfirmed execute/query messages ride the recall loop until their own retry counter
-	// is exhausted, then force-deliver with a failure callback. Instant (steer) messages need
-	// no confirmation and are always delivered.
-	var confirmed, unconfirmed []*message.Message
-	for _, msg := range msgs {
-		if msg.RequestType == reqTypeInstant || e.state.IsMessageConfirmed(agentID, msg.ID) {
-			confirmed = append(confirmed, msg)
-		} else {
-			unconfirmed = append(unconfirmed, msg)
-		}
+	// NextMessage decides deliver/force/recall/settle from the in-flight set and the
+	// per-message confirmation predicate; the handler applies the side effects.
+	out, err := e.next.OnStop(ctx, agentID, msgs, func(id string) bool {
+		return e.state.IsMessageConfirmed(agentID, id)
+	})
+	if err != nil {
+		logger.Error("hook: stop — onstop decision failed", "agent_id", agentID, "err", err)
+		return nil
 	}
 
 	// Deliver confirmed messages via the normal reply path.
-	if len(confirmed) > 0 {
-		e.markDelivered(ctx, confirmed, agentID, agentState, false)
+	if len(out.Deliver) > 0 {
+		e.markDelivered(ctx, out.Deliver, agentID, agentState, false)
 		agentState, _ = e.state.GetAgent(agentID) // markDelivered bumped generation / set Ready
 	}
 
-	// Split unconfirmed into still-retriable vs exhausted (msg.Retries is per-message, in DB).
-	var recallable, exhausted []*message.Message
-	for _, msg := range unconfirmed {
-		if msg.Retries <= maxMandatoryToolRetries {
-			recallable = append(recallable, msg)
-		} else {
-			exhausted = append(exhausted, msg)
-		}
-	}
-
 	// Exhausted unconfirmed messages: force-deliver + failure callback to the author.
-	if len(exhausted) > 0 {
+	if len(out.Force) > 0 {
 		logger.Warn("hook: stop — recall retries exhausted, force-delivering",
-			"agent_id", agentID, "count", len(exhausted))
-		// Bulk status callback for all exhausted messages in one send.
+			"agent_id", agentID, "count", len(out.Force))
 		if e.statusCallback != nil {
-			ids := make([]string, len(exhausted))
-			for i, msg := range exhausted {
+			ids := make([]string, len(out.Force))
+			for i, msg := range out.Force {
 				ids[i] = msg.ID
 			}
 			e.statusCallback.SendStatusCallbackBatch(ctx, ids, agentState.Agent.Name, agentState.Agent.Team)
 		}
-		e.markDelivered(ctx, exhausted, agentID, agentState, true)
+		e.markDelivered(ctx, out.Force, agentID, agentState, true)
 		agentState, _ = e.state.GetAgent(agentID)
 	}
 
 	// Still-retriable unconfirmed messages: inject a recall and keep the SAME session running.
-	if len(recallable) > 0 {
-		// Increment each message's counter before injecting recall so the per-message guard
-		// advances every turn; without this the recall would loop forever.
-		for _, msg := range recallable {
-			msg.Retries++
-			if err := e.queue.Update(ctx, msg); err != nil {
-				logger.Error("hook: stop — recall retries increment failed", "message_id", msg.ID, "err", err)
-			}
-		}
-		recall := buildRecallPrompt(recallable)
-		logger.Warn("hook: stop — mandatory tool not invoked, injecting recall",
-			"agent_id", agentID, "count", len(recallable))
+	if out.Recall != nil {
+		logger.Warn("hook: stop — mandatory tool not invoked, injecting recall", "agent_id", agentID)
 		// Keep the agent Running for the continued session. Even if we delivered confirmed/
 		// exhausted messages above (markDelivered set Ready), returning while Ready would let
 		// the watchdog or post-loop retry start a concurrent second session. Do NOT clear the
@@ -252,13 +182,15 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		cur, _ := e.state.GetAgent(agentID)
 		cur.Status = AgentStatusRunning
 		e.state.SetAgent(agentID, cur)
-		return &recall
+		return out.Recall
 	}
 
 	// Nothing left pending — settle the session.
-	e.state.ClearConfirmed(agentID)
-	e.state.ClearSession(sessionID)
-	e.state.SignalSessionDone(agentID)
+	if out.Settle {
+		e.state.ClearConfirmed(agentID)
+		e.state.ClearSession(sessionID)
+		e.state.SignalSessionDone(agentID)
+	}
 	return nil
 }
 
@@ -336,17 +268,11 @@ func (e *ProcessingEngine) OnPreToolUse(agentID, sessionID, toolName string, _ m
 // not session-wide, so answering message A no longer settles an untouched message B.
 func (e *ProcessingEngine) OnPostToolUse(agentID, sessionID, toolName string, toolInput map[string]any) {
 	logger.Debug("hook: post tool use", "agent_id", agentID, "session_id", sessionID, "tool_name", toolName)
+	// Tool detection stays inline; active-message confirmation is delegated to NextMessage.
 	if !mandatoryToolNames[toolName] {
 		return
 	}
-	ids := messageIDsFromToolInput(toolInput)
-	for _, id := range ids {
-		e.state.ConfirmMessage(agentID, id)
-		logger.Debug("hook: message confirmed by tool callback", "agent_id", agentID, "tool_name", toolName, "message_id", id)
-	}
-	if len(ids) == 0 {
-		logger.Warn("hook: mandatory tool produced no message_id, nothing confirmed", "agent_id", agentID, "tool_name", toolName)
-	}
+	e.next.OnToolSuccess(e.ctx, agentID, messageIDsFromToolInput(toolInput))
 }
 
 // messageIDsFromToolInput extracts confirmed message_ids from a delivery-tool input.
