@@ -363,7 +363,21 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	// The binary is only needed for auto-resume on the no-PTY fallback path.
 	agent, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
 	if err != nil {
-		return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
+		// No active session (e.g. the agent's only session was a throwaway seed-init
+		// session, now inactive). Mint a fresh session id and let the auto-resume path
+		// below create + persist it — never resume the dead seed. resolveAgentSession
+		// returns the resolved agent alongside errNoActiveSession.
+		if !errors.Is(err, errNoActiveSession) || agent == nil {
+			return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
+		}
+		// Continuity: the fresh id isn't PTY-live, so the auto-resume path below runs
+		// ca.Resume(not-found) → ca.Create, and ResumeAgent persists this session
+		// IsActive=true (both its create-fallback and the final sync). The NEXT delivery
+		// then resolves THIS session via GetSession rather than minting another — so we
+		// do not silently start a new session per delivery (which would lose context).
+		// If ResumeAgent's persistence ever regresses, deliveries would churn sessions.
+		sessionID = uuid.NewString()
+		logger.Info("ExecInSession: no active session, starting a fresh one", "agentID", agent.ID, "sessionID", sessionID)
 	}
 
 	// Check PTY liveness before doing anything else.
@@ -471,6 +485,11 @@ func (o *DefaultOperator) Pipe(params operator.PipeParams) error {
 	return nil
 }
 
+// errNoActiveSession is returned by resolveAgentSession when an agent has no
+// active code session. The delivery path (ExecInSession) treats this as "start a
+// fresh session" rather than an error; stop/detach/pipe propagate it.
+var errNoActiveSession = errors.New("operator: active session not found")
+
 func (o *DefaultOperator) resolveAgentSession(agentRef, requestedSessionID string) (*omniagent.AgentInfo, string, error) {
 	agent, err := o.resolveAgentRef(agentRef)
 	if err != nil {
@@ -484,11 +503,13 @@ func (o *DefaultOperator) resolveAgentSession(agentRef, requestedSessionID strin
 		return nil, "", fmt.Errorf("operator: session store is not configured")
 	}
 	session, err := o.sessionStore.GetSession(agent.ID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (session == nil || strings.TrimSpace(session.Id) == "")) {
+		// No active session. Return the resolved agent alongside the sentinel so the
+		// delivery path can mint a fresh session without re-resolving.
+		return agent, "", errNoActiveSession
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("operator: active session for agent %q: %w", agent.ID, err)
-	}
-	if session == nil || strings.TrimSpace(session.Id) == "" {
-		return nil, "", fmt.Errorf("operator: active session not found for agent %q", agent.ID)
 	}
 	return agent, strings.TrimSpace(session.Id), nil
 }

@@ -14,15 +14,15 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 )
 
-// PickNextMessagesForTest exposes pickNextMessages for direct whitebox tests of
+// PickNextMessagesForTest exposes NextMessage.Plan for direct whitebox tests of
 // the message-batching and mixed-type bundling logic.
 func PickNextMessagesForTest(e *ProcessingEngine, agentID string) ([]*message.Message, error) {
-	return e.pickNextMessages(agentID, nil)
+	return e.next.Plan(e.ctx, agentID, nil)
 }
 
-// PickNextMessagesWithBypassForTest exposes pickNextMessages in bypass mode (T2).
+// PickNextMessagesWithBypassForTest exposes NextMessage.Plan in bypass mode (T2).
 func PickNextMessagesWithBypassForTest(e *ProcessingEngine, agentID string, bypassTask TaskKey) ([]*message.Message, error) {
-	return e.pickNextMessages(agentID, &bypassTask)
+	return e.next.Plan(e.ctx, agentID, &bypassTask)
 }
 
 // SetTaskMuxForTest seeds TaskMux state for T1/T2 tests.

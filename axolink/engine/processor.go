@@ -82,6 +82,7 @@ type MessageRef struct {
 type ProcessingEngine struct {
 	state              *EngineState
 	queue              MessageQueue
+	next               NextMessage
 	agentStore         agents.AgentStore
 	omni               omnicli.OmniCLI
 	mcp                *MCPClientRegistry
@@ -174,6 +175,8 @@ func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 	for _, opt := range opts {
 		opt(e)
 	}
+	// Built after options so promptSessionStore / deliveryWindow overrides are in place.
+	e.next = newNextMessage(e.queue, e.state, e.promptSessionStore, e.deliveryWindow)
 	e.syncServer = newSyncServer(e.socketPath, e.onSessionSync, e.onSessionResume)
 	return e
 }
@@ -543,31 +546,16 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// Plain-text prompts fail the YAML parse and leave messages permanently Failed.
 	//
 	// Case (b): no processing messages — fall through to T3 check + normal pick.
-	processingRecall, procErr := e.queue.ForAgent(ctx, agentID, QueryOpts{
-		Status:         message.StatusProcessing,
-		NotRequestType: reqTypeInstant,
-	})
+	processingRecall, procErr := e.next.Recall(ctx, agentID)
 	if procErr != nil {
 		logger.Error("execute loop: preprocessing recall check failed", "agent_id", agentID, "err", procErr)
 		return
 	}
 	var msgs []*message.Message
-	var recallPrompt string
 	isPreprocessingRecall := false
 	var err error
 	if len(processingRecall) > 0 {
 		msgs = processingRecall
-		// Count this as a delivery attempt so the mandatory-tool retry counter advances.
-		// The normal markMessagesQueued path is skipped for preprocessing recall, so we
-		// must increment here to prevent the OnStop recall guard from looping forever.
-		for _, msg := range msgs {
-			msg.Retries++
-			if err := e.queue.Update(ctx, msg); err != nil {
-				logger.Error("execute loop: preprocessing recall — retries increment failed", "message_id", msg.ID, "err", err)
-				return // avoid building recall with inconsistently incremented retries
-			}
-		}
-		recallPrompt = buildWarmUpPrompt(msgs)
 		isPreprocessingRecall = true
 		logger.Warn("execute loop: preprocessing recall — unacknowledged processing messages",
 			"agent_id", agentID, "count", len(msgs))
@@ -596,7 +584,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 			logger.Debug("execute loop: execute in flight, checking bypass queries", "agent_id", agentID, "task_id", mux.TaskID)
 		}
 
-		msgs, err = e.pickNextMessages(agentID, bypassTask)
+		msgs, err = e.next.Plan(ctx, agentID, bypassTask)
 		if err != nil {
 			logger.Error("execute loop: pick messages failed", "agent_id", agentID, "err", err)
 			return
@@ -650,34 +638,9 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 
 	agentState, _ = e.state.GetAgent(agentID)
 
-	// Build the prompt: recall (preprocessing case a) takes precedence over warm-up/active.
-	var prompt string
-	if isPreprocessingRecall {
-		prompt = recallPrompt
-	} else {
-		// Determine warm-up vs active prompt via PromptSessionStore.
-		// warmupSentinel is a fixed key: once marked, all subsequent deliveries to the
-		// same session use the lean active prompt instead of the full warm-up prompt.
-		const warmupSentinel = "warmup_done"
-		sessionID := agentState.CodeSession.SessionID
-		isWarmUp := true
-		if e.promptSessionStore != nil && sessionID != "" {
-			if e.promptSessionStore.IsDelivered(ctx, sessionID, warmupSentinel) {
-				isWarmUp = false
-			}
-		}
-		if isWarmUp {
-			prompt = buildWarmUpPrompt(msgs)
-			if e.promptSessionStore != nil && sessionID != "" {
-				if err := e.promptSessionStore.MarkDelivered(ctx, sessionID, warmupSentinel); err != nil {
-					logger.Warn("execute loop: mark delivered failed", "session_id", sessionID, "err", err)
-				}
-			}
-		} else {
-			senderName := senderNameFromRefs(msgs[0].Refs)
-			prompt = buildActivePrompt(msgs, senderName)
-		}
-	}
+	// Build the prompt: recall (preprocessing case a) forces the warm-up YAML form;
+	// otherwise NextMessage chooses warm-up vs active via the prompt-session store.
+	prompt := e.next.Prompt(ctx, agentID, msgs, isPreprocessingRecall)
 
 	agentState.Status = AgentStatusRunning
 	e.state.SetAgent(agentID, agentState)
@@ -867,95 +830,6 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 		agentState.Status = AgentStatusReady
 		e.state.SetAgent(agentID, agentState)
 	}
-}
-
-// pickNextMessages selects the next batch of messages for agentID.
-//
-// bypassTask non-nil: T2 bypass mode — execute in flight, only pick queries for that task.
-//
-// Normal mode (bypassTask nil):
-//
-//	Execute: picks 1 execute; bundles co-task non-execute messages (same task_id, then same group_id fallback).
-//	Query/instant: accumulate up to 5 from same sender, stop before execute.
-//	T1 priority: TaskMux retained from last execute — messages with matching task_id sorted first.
-//	T4: messages for paused tasks are skipped.
-func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey) ([]*message.Message, error) {
-	// T2 bypass: execute in flight — pick only queries for the matching task.
-	if bypassTask != nil && !bypassTask.IsZero() {
-		return e.pickBypassQueries(agentID, *bypassTask)
-	}
-
-	// T1: use TaskMux for task_id-first ordering when available.
-	taskMux := e.state.GetTaskMux(agentID)
-	var msgs []*message.Message
-	var err error
-	opt := QueryOpts{Status: message.StatusInQueue, Limit: 20}
-	if taskMux != nil && !taskMux.IsZero() {
-		opt.TaskFirst = taskMux // T1: task_id-first ordering
-	}
-	msgs, err = e.queue.ForAgent(e.ctx, agentID, opt)
-	if err != nil {
-		return nil, err
-	}
-	if len(msgs) == 0 {
-		return nil, nil
-	}
-
-	first := msgs[0]
-
-	// T4: skip paused task.
-	if first.TaskID != "" && e.state.IsTaskPaused(agentID, first.TaskID) {
-		logger.Debug("pick: task is paused, skipping", "agent_id", agentID, "task_id", first.TaskID)
-		return nil, nil
-	}
-
-	if first.RequestType == reqTypeExecute {
-		picked := []*message.Message{first}
-		// Bundle co-task non-execute messages: prefer task_id match, fall back to group_id.
-		for _, msg := range msgs[1:] {
-			if msg.RequestType == reqTypeExecute {
-				continue
-			}
-			if first.TaskID != "" && msg.TaskID == first.TaskID && msg.CreatorAgentID == first.CreatorAgentID {
-				picked = append(picked, msg)
-			} else if first.TaskID == "" && first.GroupID != "" && msg.GroupID == first.GroupID {
-				picked = append(picked, msg)
-			}
-		}
-		return picked, nil
-	}
-
-	// Accumulate query/instant from the same sender, up to 5, stop before execute.
-	// No task filter here — in normal mode (no active execute) all pending messages are
-	// eligible regardless of task_id. Task filtering only applies in T2 bypass mode
-	// (pickBypassQueries) where an execute is actively in flight. Filtering in normal mode
-	// would permanently block task-T2 messages if TaskMux is stuck on T1 with no new
-	// execute arriving to update it.
-	senderID := first.From
-	var picked []*message.Message
-	for _, msg := range msgs {
-		if len(picked) >= 5 {
-			break
-		}
-		if msg.From != senderID {
-			break
-		}
-		if msg.RequestType == reqTypeExecute {
-			break
-		}
-		picked = append(picked, msg)
-	}
-	return picked, nil
-}
-
-// pickBypassQueries picks pending queries for the given task when an execute is in flight (T2).
-func (e *ProcessingEngine) pickBypassQueries(agentID string, key TaskKey) ([]*message.Message, error) {
-	return e.queue.ForAgent(e.ctx, agentID, QueryOpts{
-		Status:      message.StatusInQueue,
-		Task:        &key,
-		RequestType: reqTypeQuery,
-		Limit:       5,
-	})
 }
 
 type promptItem struct {
