@@ -4,7 +4,7 @@ WORKTREE_NAME := $(notdir $(CURDIR))
 IMAGE_TAG     := omni-dev:$(WORKTREE_NAME)
 export COMPOSE_PROJECT_NAME := omni-$(WORKTREE_NAME)
 
-.PHONY: build install uninstall release snapshot docker-build docker-up docker-down docker-rebuild docker-relaunch docker-connect dev-preflight docker-fix-volumes tools
+.PHONY: build install uninstall release snapshot docker-build docker-up docker-down docker-down-v docker-rebuild docker-relaunch docker-connect dev-preflight docker-fix-volumes tools
 
 # ── tools ────────────────────────────────────────────────────────────────────
 
@@ -80,11 +80,20 @@ docker-up: dev-preflight docker-fix-volumes
 	OMNI_DEV_IMAGE=$(IMAGE_TAG) docker compose -f $(COMPOSE_FILE) up -d --wait
 	docker compose -f $(COMPOSE_FILE) exec ubuntu bash -l
 
+# stop and remove containers (named volumes preserved)
 docker-down:
 	docker compose -f $(COMPOSE_FILE) down
 
-# rebuild image and restart container in one step
-docker-rebuild: docker-build docker-down docker-up
+# down + drop named volumes for this worktree's project
+# also clears the root-owned omni log bind-mount (logs only) via the live
+# container, so each run starts with a clean dev/local/omni/log — done before
+# `down` while the container is still up to avoid needing host sudo.
+docker-down-v:
+	-@docker compose -f $(COMPOSE_FILE) exec -T ubuntu sh -c 'rm -f /root/.omni/log/* 2>/dev/null' 2>/dev/null || true
+	docker compose -f $(COMPOSE_FILE) down -v
+
+# rebuild image and restart container in one step (drops volumes first)
+docker-rebuild: docker-build docker-down-v docker-up
 
 # restart container without rebuilding image
 docker-relaunch: docker-down docker-up

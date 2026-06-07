@@ -24,7 +24,7 @@ Then edit `dev/.env.docker` with your keys:
 | `CLAUDE_CODE_OAUTH_TOKEN` | claude | OAuth token (Pro/Max subscription, takes precedence over API key) |
 | `OPENAI_API_KEY` | codex | API key |
 | `OPENAI_OAUTH_TOKEN` | codex | OAuth token (ChatGPT Plus, mapped to OPENAI_API_KEY if no key set) |
-| `ANTHROPIC_MODEL` | claude | Default model — `claude-haiku-4-5` (default) |
+| `ANTHROPIC_MODEL` | claude | Default model — `claude-haiku-4-5-20251001` (default) |
 | `CODEX_MODEL` | codex | Default model — `gpt-5.4-mini` (default) |
 | `GEMINI_API_KEY` | gemini | API key (CI/non-interactive) |
 | `GOOGLE_API_KEY` | gemini | Google Cloud API key (Vertex AI express mode) |

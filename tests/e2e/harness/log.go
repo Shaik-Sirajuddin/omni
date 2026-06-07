@@ -169,6 +169,30 @@ func FilterRelevant(s string) string {
 	return b.String()
 }
 
+// DumpLogsOnFailureCfg is like DumpLogsOnFailure but also reads the last 300
+// lines of omni.log directly from the container so nothing is missed when the
+// streaming buffer was attached after some events fired.
+func DumpLogsOnFailureCfg(t *testing.T, cfg TestConfig, jrnl, omniLog *SyncBuffer, msgID string) {
+	t.Helper()
+	if !t.Failed() {
+		return
+	}
+	// Pull a fresh snapshot from inside the container (covers pre-buffer events).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, snap, _ := cfg.Exec.RunCommand(ctx, []string{
+		"sh", "-c", "tail -n 300 /root/.omni/log/omni.log 2>/dev/null || true",
+	})
+	if len(snap) > 0 {
+		s := string(snap)
+		if msgID != "" {
+			t.Logf("--- omni.log snapshot filtered for message_id=%s ---\n%s", msgID, FilterByID(s, msgID))
+		}
+		t.Logf("--- omni.log snapshot (tail 300) ---\n%s", s)
+	}
+	DumpLogsOnFailure(t, jrnl, omniLog, msgID)
+}
+
 // DumpLogsOnFailure writes captured logs to t.Log when the test has failed.
 // It leads with a filtered "relevant" extract (errors/warnings + message/session
 // flow) from both sources so the cause is visible without re-fetching container

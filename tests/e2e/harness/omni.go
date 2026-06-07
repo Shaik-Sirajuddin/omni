@@ -31,6 +31,32 @@ func RunOmniAllowFail(t *testing.T, cfg TestConfig, args ...string) (string, int
 	return string(out), exitCode
 }
 
+// AssertAgentCreated verifies that an agent with the given name exists in the
+// workspace by querying `omni agent list`, and returns its agent ID.
+//
+// Note: `agent init --interactive=false` creates the agent *record* but does
+// NOT launch a session (--interactive = "launch agent after create"), so there
+// is no session id or session-<id>.log to assert at init time — those only
+// appear once the engine execs a session for the agent (e.g. on delivery).
+// The authoritative signal that creation succeeded is the agent appearing in
+// the operator's agent index, which is what this checks.
+func AssertAgentCreated(t *testing.T, cfg TestConfig, name string) string {
+	t.Helper()
+	out := RunOmni(t, cfg, "agent", "list", "--workspace", cfg.Workspace)
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		// columns: AGENT_ID  NAME  WORKSPACE  MEMORY_DIR
+		// the header row's second field is the literal "NAME", so it is skipped.
+		if len(fields) >= 2 && fields[1] == name {
+			t.Logf("agent created: %s (id=%s)", name, fields[0])
+			return fields[0]
+		}
+	}
+	t.Fatalf("agent %q not found in `agent list` for workspace %s:\n%s",
+		name, cfg.Workspace, out)
+	return ""
+}
+
 // TeardownAgent deletes an agent by name. Safe to call in t.Cleanup.
 func TeardownAgent(t *testing.T, cfg TestConfig, name string) {
 	t.Helper()

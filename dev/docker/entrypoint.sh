@@ -144,6 +144,15 @@ sys.exit(0 if stale & set(d.get('hooks',{})) else 1)
     echo "==> rewriting $path (stale hook keys detected)"
     needs_seed=1
   fi
+  if [[ $needs_seed -eq 0 ]] && python3 -c "
+import json,sys
+d=json.load(open('$path'))
+allow=d.get('permissions',{}).get('allow',[])
+sys.exit(0 if any('tunnel-mcp' in a for a in allow) else 1)
+" 2>/dev/null; then
+    echo "==> rewriting $path (stale tunnel-mcp permission detected)"
+    needs_seed=1
+  fi
   [[ $needs_seed -eq 0 ]] && return 0
   echo "==> seeding $path"
   mkdir -p "$(dirname "$path")"

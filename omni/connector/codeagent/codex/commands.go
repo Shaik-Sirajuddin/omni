@@ -78,8 +78,13 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	}
 
 	// Persist model into .codex/config.toml so interactive sessions inherit it.
-	if syncErr := syncModelConfig(workDir, model); syncErr != nil {
-		logger.Warn("Create: could not sync model to config", "err", syncErr)
+	// Only pin the model when the caller explicitly requested one; otherwise leave
+	// the config untouched so codex uses its configured default instead of forcing
+	// our stored model.
+	if p.Model != "" {
+		if syncErr := syncModelConfig(workDir, p.Model); syncErr != nil {
+			logger.Warn("Create: could not sync model to config", "err", syncErr)
+		}
 	}
 
 	// Auto-approve axolink tool calls so Codex never pauses for MCP approval.

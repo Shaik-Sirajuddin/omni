@@ -16,11 +16,11 @@ release-check:
 
 .PHONY: build
 build:
-	bash ../development/build.sh
+	bash ../dev/build.sh
 
 .PHONY: install
 install:
-	sudo DEBUG=$(DEBUG) bash ../development/install.sh
+	sudo DEBUG=$(DEBUG) bash ../dev/install.sh
 
 .PHONY: test-unit
 test-unit:

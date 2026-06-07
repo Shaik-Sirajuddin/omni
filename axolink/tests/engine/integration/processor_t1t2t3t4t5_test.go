@@ -1,6 +1,6 @@
 //go:build integration
 
-package engine_test
+package integration
 
 import (
 	"context"
@@ -417,7 +417,7 @@ func TestT5_TaskDeliveryCheckpoints(t *testing.T) {
 		// Simulate hook sequence: PrePrompt moves message to processing, tool invoked, Stop marks delivered.
 		yamlPrompt := fmt.Sprintf("warm_up: true\nmessages:\n  - message_id: exec-t5c\n    prompt: task\ninstruction: Execute.\n")
 		proc.OnUserPromptSubmit(ctx, "ag-t5c", "sess-t5c", yamlPrompt)
-		proc.OnPreToolUse("ag-t5c", "sess-t5c", "send_response", nil)
+		proc.OnPostToolUse("ag-t5c", "sess-t5c", "send_response", map[string]any{"message_id": "exec-t5c"})
 		proc.OnStop(ctx, "ag-t5c", "sess-t5c")
 
 		// CompleteDelivery must have been called inside markDelivered.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	omnicli "github.com/Shaik-Sirajuddin/memory/mcp/engine/impl/cli"
+	omnicli "github.com/Shaik-Sirajuddin/memory/mcp/pkg/cli"
 	"gopkg.in/yaml.v3"
 )
 

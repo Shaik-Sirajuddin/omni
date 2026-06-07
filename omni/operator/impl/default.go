@@ -23,14 +23,17 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex"
 	codexsettings "github.com/Shaik-Sirajuddin/memory/connector/codeagent/codex/settings"
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent/gemini"
+	enginesync "github.com/Shaik-Sirajuddin/memory/mcp/pkg/enginesync"
+	mcpdatabase "github.com/Shaik-Sirajuddin/memory/mcp/store/database"
+	mcpmessage "github.com/Shaik-Sirajuddin/memory/mcp/store/message"
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	operator "github.com/Shaik-Sirajuddin/memory/operator"
 	// "github.com/Shaik-Sirajuddin/memory/operator/impl/defaults" // re-enable with sandbox wiring
+	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	agentstore "github.com/Shaik-Sirajuddin/memory/store/agent"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
 	operatorstore "github.com/Shaik-Sirajuddin/memory/store/operator"
-	omnilog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	ptydaemon "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon"
 	ptyclients "github.com/Shaik-Sirajuddin/memory/svc/ptydaemon/clients"
 	"github.com/google/uuid"
@@ -56,11 +59,14 @@ type DefaultOperator struct {
 	store                operatorstore.OperatorStore
 	agentStore           agentstore.AgentStore
 	sessionStore         codesession.CodeSessionStore
+	messageStore         mcpmessage.MessageStore
 	agentMemory          operator.AgentMemory
 	provisioner          sandbox.SandboxProvisioner // nil = sandboxing disabled
 	ptyDaemon            ptyclients.Client
 	newCodeAgent         func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
 	newCodeAgentForAgent func(agentID string, provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error)
+	nextAgentID          func() string
+	engineSync           *enginesync.Client // nil = engine notify disabled
 }
 
 type codexPTYAdapter struct {
@@ -172,7 +178,6 @@ func (a *codexPTYAdapter) SessionPID(_, sessionID string) (int, error) {
 	return info.PID, nil
 }
 
-
 // SwitchProvider implements [Operator].
 // SwitchProvider when switching between models , if a non fill session exists matching provider , agent , session is reused , override by CleanStart
 func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) error {
@@ -281,6 +286,19 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 	if err != nil {
 		return fmt.Errorf("operator: switch provider: init runtime for resume: %w", err)
 	}
+
+	// Ask the engine to resume the agent before we resume the session: this
+	// clears the interrupted flag, re-triggers delivery, and hydrates the agent
+	// from the store into the engine's in-memory state ahead of the first
+	// hook/MCP traffic. Best-effort: a down or absent engine must not block resume.
+	if o.engineSync != nil {
+		syncCtx, cancelSync := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := o.engineSync.Resume(syncCtx, agent.ID); err != nil {
+			logger.Warn("SwitchProvider: engine resume notify failed", "agentID", agent.ID, "sessionID", target.Id, "err", err)
+		}
+		cancelSync()
+	}
+
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: target.Id, Envs: mcpSessionEnvs(agent)})
@@ -345,7 +363,21 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	// The binary is only needed for auto-resume on the no-PTY fallback path.
 	agent, sessionID, err := o.resolveAgentSession(params.AgentID, params.SessionID)
 	if err != nil {
-		return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
+		// No active session (e.g. the agent's only session was a throwaway seed-init
+		// session, now inactive). Mint a fresh session id and let the auto-resume path
+		// below create + persist it — never resume the dead seed. resolveAgentSession
+		// returns the resolved agent alongside errNoActiveSession.
+		if !errors.Is(err, errNoActiveSession) || agent == nil {
+			return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
+		}
+		// Continuity: the fresh id isn't PTY-live, so the auto-resume path below runs
+		// ca.Resume(not-found) → ca.Create, and ResumeAgent persists this session
+		// IsActive=true (both its create-fallback and the final sync). The NEXT delivery
+		// then resolves THIS session via GetSession rather than minting another — so we
+		// do not silently start a new session per delivery (which would lose context).
+		// If ResumeAgent's persistence ever regresses, deliveries would churn sessions.
+		sessionID = uuid.NewString()
+		logger.Info("ExecInSession: no active session, starting a fresh one", "agentID", agent.ID, "sessionID", sessionID)
 	}
 
 	// Check PTY liveness before doing anything else.
@@ -358,10 +390,13 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	}
 
 	if !sessionActive {
-		if params.LiveOnly {
-			return nil, fmt.Errorf("operator: exec in session: session %q is not active", sessionID)
+		// Auto-resume a dead session only for --bg (params.Detached). Plain exec
+		// requires an already-live session and errors otherwise — it must not
+		// silently start/resume the agent.
+		if params.LiveOnly || !params.Detached {
+			return nil, fmt.Errorf("operator: exec in session: session %q is not active (pass --bg to resume it first)", sessionID)
 		}
-		logger.Info("ExecInSession: session not active, auto-resuming", "agentID", agent.ID, "sessionID", sessionID)
+		logger.Info("ExecInSession: session not active, auto-resuming (--bg)", "agentID", agent.ID, "sessionID", sessionID)
 		if err := o.ResumeAgent(operator.ResumeAgentParams{
 			Workspace: agent.WorkspaceDir,
 			Name:      agent.Name,
@@ -450,6 +485,11 @@ func (o *DefaultOperator) Pipe(params operator.PipeParams) error {
 	return nil
 }
 
+// errNoActiveSession is returned by resolveAgentSession when an agent has no
+// active code session. The delivery path (ExecInSession) treats this as "start a
+// fresh session" rather than an error; stop/detach/pipe propagate it.
+var errNoActiveSession = errors.New("operator: active session not found")
+
 func (o *DefaultOperator) resolveAgentSession(agentRef, requestedSessionID string) (*omniagent.AgentInfo, string, error) {
 	agent, err := o.resolveAgentRef(agentRef)
 	if err != nil {
@@ -463,11 +503,13 @@ func (o *DefaultOperator) resolveAgentSession(agentRef, requestedSessionID strin
 		return nil, "", fmt.Errorf("operator: session store is not configured")
 	}
 	session, err := o.sessionStore.GetSession(agent.ID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (session == nil || strings.TrimSpace(session.Id) == "")) {
+		// No active session. Return the resolved agent alongside the sentinel so the
+		// delivery path can mint a fresh session without re-resolving.
+		return agent, "", errNoActiveSession
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("operator: active session for agent %q: %w", agent.ID, err)
-	}
-	if session == nil || strings.TrimSpace(session.Id) == "" {
-		return nil, "", fmt.Errorf("operator: active session not found for agent %q", agent.ID)
 	}
 	return agent, strings.TrimSpace(session.Id), nil
 }
@@ -639,7 +681,14 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	// Resolve provider/model from persisted session; let connectors apply model defaults.
 	provider := codeagent.Provider(operator.DefaultProvider)
 	model := ""
-	sessionID := agent.ID
+	// Session ID is independent of the agent ID: prefer the persisted session,
+	// then an explicit request, else a fresh UUID (filled in below). The
+	// code_sessions.agent_id column carries the agent→session mapping.
+	sessionID := ""
+	// knownSession is true when sessionID refers to a real, already-seeded
+	// conversation (from the store or an explicit request). When false we minted a
+	// fresh id below and must seed it before resuming — never `-r` a phantom id.
+	knownSession := false
 	if o.sessionStore != nil {
 		if session, sErr := o.sessionStore.GetSession(agent.ID); sErr == nil && session != nil {
 			if session.Model != nil {
@@ -652,6 +701,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			}
 			if session.Id != "" {
 				sessionID = session.Id
+				knownSession = true
 			}
 		} else {
 			logger.Debug("ResumeAgent: no persisted session, using defaults", "agentID", agent.ID)
@@ -660,8 +710,27 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	requestedSessionID := strings.TrimSpace(params.SessionID)
 	if requestedSessionID != "" {
 		sessionID = requestedSessionID
+		knownSession = true
+	}
+	if sessionID == "" {
+		// No persisted session and none requested (e.g. an agent whose session
+		// row was never written): mint a fresh UUID rather than reusing agent.ID.
+		// knownSession stays false → it gets seeded before resume.
+		sessionID = uuid.NewString()
 	}
 	omnilog.InitSessionLog(sessionID)
+
+	// Hydrate the agent into the engine's in-memory state and re-activate its
+	// delivery loop before attaching the PTY client. Best-effort: a down or
+	// absent engine must not block resume/attach.
+	if o.engineSync != nil {
+		syncCtx, cancelSync := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := o.engineSync.Resume(syncCtx, agent.ID); err != nil {
+			logger.Warn("ResumeAgent: engine hydrate notify failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+		}
+		cancelSync()
+	}
+
 	if o.ptyDaemon != nil {
 		if infos, err := o.ptyDaemon.List(agent.ID); err == nil {
 			for _, info := range infos {
@@ -694,6 +763,31 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	if err != nil {
 		logger.Error("ResumeAgent: init code agent runtime failed", "agentID", agent.ID, "err", err)
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
+	}
+
+	envs := mcpSessionEnvs(agent)
+
+	// If we minted a fresh session id (no persisted session and none requested),
+	// the conversation does not exist in the connector's store yet. Seed it via
+	// Create *before* Resume — resuming a fabricated id runs e.g. `claude -r <id>`
+	// which fails with "No conversation found". Don't resume a phantom session.
+	if !knownSession {
+		logger.Info("ResumeAgent: no existing session, seeding a new one before resume", "agentID", agent.ID, "sessionID", sessionID)
+		seedResult, seedErr := ca.Create(codeagent.CreateSessionParams{
+			ID:      sessionID,
+			Name:    agent.Name,
+			Model:   model,
+			WorkDir: string(agent.WorkspaceDir),
+			Envs:    envs,
+		})
+		if seedErr != nil {
+			logger.Error("ResumeAgent: seed session failed", "agentID", agent.ID, "sessionID", sessionID, "err", seedErr)
+			return fmt.Errorf("operator: seed session for agent %q: %w", agent.ID, seedErr)
+		}
+		if seedResult != nil && seedResult.ID != "" {
+			sessionID = seedResult.ID
+		}
+		model = resolvedSessionModel(ca, model)
 	}
 
 	// Sandbox runtime provisioning disabled — uncomment to re-enable.
@@ -733,7 +827,6 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		}
 	}
 
-	envs := mcpSessionEnvs(agent)
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
@@ -822,6 +915,11 @@ func New() (operator.Operator, error) {
 		logger.Error("New: session store initialisation failed", "err", err)
 		return nil, fmt.Errorf("operator: init session store: %w", err)
 	}
+	mcpDB, err := mcpdatabase.GetDefaultDB()
+	if err != nil {
+		logger.Error("New: message store database initialisation failed", "err", err)
+		return nil, fmt.Errorf("operator: init message store db: %w", err)
+	}
 	// Sandbox provisioner disabled — uncomment to re-enable.
 	var provisioner sandbox.SandboxProvisioner
 	// if kinds := sandbox.HostSupportedProvisioners(); len(kinds) > 0 {
@@ -844,9 +942,12 @@ func New() (operator.Operator, error) {
 		store:        s,
 		agentStore:   as,
 		sessionStore: ss,
+		messageStore: mcpmessage.New(mcpDB),
 		agentMemory:  operator.NewDefaultAgentMemory(),
 		provisioner:  provisioner,
 		ptyDaemon:    ptyDaemon,
+		engineSync:   enginesync.New(),
+		nextAgentID:  uuid.NewString,
 		newCodeAgent: func(provider codeagent.Provider, workDir, model string) (codeagent.CodeAgent, error) {
 			switch provider {
 			case providerClaude:
@@ -1026,7 +1127,11 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Info("CreateAgent: workspace created", "workspaceID", ws.ID, "name", ws.Name, "workspace", ws.WorkspaceDir)
 	}
 
-	agentID := uuid.NewString()
+	nextAgentID := o.nextAgentID
+	if nextAgentID == nil {
+		nextAgentID = uuid.NewString
+	}
+	agentID := nextAgentID()
 	agentName := sanitizeAgentName(params.Name)
 	if agentName == "" {
 		agentName = fmt.Sprintf("agent-%s", agentID[:8])
@@ -1064,6 +1169,10 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 	}
 	logger.Info("CreateAgent: agent stored", "workspaceID", ws.ID, "agentID", agentID, "memoryDir", memDir)
 
+	if err := o.flushActiveMessagesForAgent(context.Background(), agentID); err != nil {
+		return err
+	}
+
 	if o.memoryEnabled() {
 		if err := o.agentMemory.Create(memDir); err != nil {
 			logger.Error("CreateAgent: memory seed failed", "agentID", agentID, "memoryDir", memDir, "err", err)
@@ -1076,6 +1185,30 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Warn("CreateAgent: session bootstrap failed — agent persisted; use 'omni agent resume' to start session", "agentID", agentID, "provider", params.Provider, "model", params.Model, "err", err)
 	}
 	logger.Info("CreateAgent: completed", "workspaceID", ws.ID, "agentID", agentID)
+	return nil
+}
+
+func (o *DefaultOperator) flushActiveMessagesForAgent(ctx context.Context, agentID string) error {
+	if o.messageStore == nil {
+		logger.Debug("CreateAgent: active message flush skipped; message store is not configured", "agentID", agentID)
+		return nil
+	}
+	res, err := o.messageStore.RawExec(ctx,
+		`DELETE FROM messages WHERE "to" = ? AND status IN (?, ?)`,
+		agentID, string(mcpmessage.StatusQueued), string(mcpmessage.StatusProcessing),
+	)
+	if err != nil {
+		logger.Error("CreateAgent: active message flush failed", "agentID", agentID, "err", err)
+		return fmt.Errorf("operator: create agent: flush active messages for agent %q: %w", agentID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		logger.Error("CreateAgent: active message flush rows affected failed", "agentID", agentID, "err", err)
+		return fmt.Errorf("operator: create agent: count flushed active messages for agent %q: %w", agentID, err)
+	}
+	if n > 0 {
+		logger.Info("CreateAgent: flushed active messages before session start", "agentID", agentID, "count", n)
+	}
 	return nil
 }
 
@@ -1307,7 +1440,7 @@ func mcpSessionEnvs(agent *omniagent.AgentInfo) []string {
 	return envs
 }
 
-func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) error {
+func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) (retErr error) {
 	if provider == "" {
 		provider = codeagent.Provider(operator.DefaultProvider)
 	}
@@ -1337,10 +1470,32 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	// }
 
 	requestedSessionID = strings.TrimSpace(requestedSessionID)
-	createID := agent.ID
-	if requestedSessionID != "" {
-		createID = requestedSessionID
+	// Session ID is independent of the agent ID: default to a fresh UUID and let
+	// the code_sessions.agent_id column carry the agent→session mapping (mirrors
+	// SwitchProvider). An explicit requestedSessionID still wins.
+	createID := requestedSessionID
+	if createID == "" {
+		createID = uuid.NewString()
 	}
+
+	// Invariant: is_active=true ⟺ bootstrap succeeded. If startAgentSession fails
+	// after the pre-write below, mark the session inactive/failed (is_active stays
+	// 0) so GetSession skips it and a later `init -r`/resume can safely seed a new
+	// session instead of being wedged by a lingering "starting" row.
+	defer func() {
+		if retErr == nil || o.sessionStore == nil || createID == "" {
+			return
+		}
+		failed := &omniagent.CodeSession{
+			Id:       createID,
+			Model:    &codeagent.Model{Provider: provider, Model: model},
+			IsActive: false,
+			Status:   "failed",
+		}
+		if updErr := o.sessionStore.UpdateSession(agent.ID, failed); updErr != nil {
+			logger.Warn("startAgentSession: mark-failed after bootstrap failure failed", "agentID", agent.ID, "sessionID", createID, "err", updErr)
+		}
+	}()
 
 	// Pre-write the session record so AgentResolver can route hooks that fire
 	// during ca.Create(). SessionStart fires while Create is blocking — the
@@ -1358,6 +1513,7 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	}
 
 	envs := mcpSessionEnvs(agent)
+	// provider can return a different sessionId than requested
 	createResult, err := ca.Create(codeagent.CreateSessionParams{
 		ID:        createID,
 		Name:      agent.Name,
@@ -1377,14 +1533,23 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	omnilog.InitSessionLog(sessionID)
 	model = resolvedSessionModel(ca, model)
 
-	// Persist the session to the code session store.
+	// Persist the session as the agent's active session, regardless of interactive.
+	// A preSession row was already inserted above, so CreateSession hits a PK
+	// conflict — fall back to UpdateSession so is_active actually flips to true.
+	// Without the fallback the row stays is_active=false and GetSession (which
+	// filters is_active=1) can never find it, so a later resume/exec can't locate
+	// the session the agent was started with and ends up minting a phantom id.
 	if o.sessionStore != nil {
-		if err := o.sessionStore.CreateSession(agent.ID, &omniagent.CodeSession{
+		activeSession := &omniagent.CodeSession{
 			Id:       sessionID,
 			Model:    &codeagent.Model{Provider: provider, Model: model},
 			IsActive: true,
-		}); err != nil {
-			logger.Warn("startAgentSession: session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+			Status:   "ready",
+		}
+		if createErr := o.sessionStore.CreateSession(agent.ID, activeSession); createErr != nil {
+			if updateErr := o.sessionStore.UpdateSession(agent.ID, activeSession); updateErr != nil {
+				logger.Warn("startAgentSession: session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", updateErr)
+			}
 		}
 	}
 	logger.Info("startAgentSession: session created", "agentID", agent.ID, "provider", provider, "sessionID", sessionID, "interactive", interactive)
@@ -1392,6 +1557,19 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	if !interactive {
 		logger.Info("startAgentSession: interactive session is not attached", "agentID", agent.ID, "provider", provider, "sessionID", sessionID)
 		return nil
+	}
+
+	// Bootstrap succeeded (session created and persisted). Seed the agent's bare
+	// presence into the engine's in-memory state (Status: Ready — idle, eligible,
+	// no delivery, no clear-interrupted) before we resume the session. This is a
+	// fresh agent, so there is nothing to hydrate or re-trigger; use SyncUsage,
+	// not Resume. Best-effort: a down or absent engine must not block the resume.
+	if o.engineSync != nil {
+		syncCtx, cancelSync := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := o.engineSync.SyncUsage(syncCtx, agent.ID, enginesync.SessionUsage{}); err != nil {
+			logger.Warn("startAgentSession: engine seed notify failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+		}
+		cancelSync()
 	}
 
 	resumeCtx, cancelResume := newResumeContext()

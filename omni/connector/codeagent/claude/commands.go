@@ -94,18 +94,19 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	// print-mode call with --session-id. Without this, `claude -r <id>`
 	// fails with "No conversation found" because Claude only persists a
 	// session after at least one print-mode exchange.
-	a.mu.RLock()
-	model := a.model
 	// rt := a.sbxRuntime // sandbox disabled
-	a.mu.RUnlock()
 	var rt sandbox.SandboxRuntime // sandbox disabled — always nil
 
 	seedArgs := []string{
 		"-p", "hello",
 		"--session-id", sessionID,
-		"--model", model,
 		"--output-format", "json",
 		"--max-turns", "1",
+	}
+	// Only pin --model when the caller explicitly requested one; otherwise let
+	// Claude pick its configured default instead of forcing our stored model.
+	if p.Model != "" {
+		seedArgs = append(seedArgs, "--model", p.Model)
 	}
 	seedOut, seedErr := execOutputEnv(workDir, rt, env, binPath, seedArgs...)
 	if seedErr != nil {
