@@ -376,10 +376,13 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 	}
 
 	if !sessionActive {
-		if params.LiveOnly {
-			return nil, fmt.Errorf("operator: exec in session: session %q is not active", sessionID)
+		// Auto-resume a dead session only for --bg (params.Detached). Plain exec
+		// requires an already-live session and errors otherwise — it must not
+		// silently start/resume the agent.
+		if params.LiveOnly || !params.Detached {
+			return nil, fmt.Errorf("operator: exec in session: session %q is not active (pass --bg to resume it first)", sessionID)
 		}
-		logger.Info("ExecInSession: session not active, auto-resuming", "agentID", agent.ID, "sessionID", sessionID)
+		logger.Info("ExecInSession: session not active, auto-resuming (--bg)", "agentID", agent.ID, "sessionID", sessionID)
 		if err := o.ResumeAgent(operator.ResumeAgentParams{
 			Workspace: agent.WorkspaceDir,
 			Name:      agent.Name,
@@ -661,6 +664,10 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	// then an explicit request, else a fresh UUID (filled in below). The
 	// code_sessions.agent_id column carries the agent→session mapping.
 	sessionID := ""
+	// knownSession is true when sessionID refers to a real, already-seeded
+	// conversation (from the store or an explicit request). When false we minted a
+	// fresh id below and must seed it before resuming — never `-r` a phantom id.
+	knownSession := false
 	if o.sessionStore != nil {
 		if session, sErr := o.sessionStore.GetSession(agent.ID); sErr == nil && session != nil {
 			if session.Model != nil {
@@ -673,6 +680,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			}
 			if session.Id != "" {
 				sessionID = session.Id
+				knownSession = true
 			}
 		} else {
 			logger.Debug("ResumeAgent: no persisted session, using defaults", "agentID", agent.ID)
@@ -681,10 +689,12 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	requestedSessionID := strings.TrimSpace(params.SessionID)
 	if requestedSessionID != "" {
 		sessionID = requestedSessionID
+		knownSession = true
 	}
 	if sessionID == "" {
 		// No persisted session and none requested (e.g. an agent whose session
 		// row was never written): mint a fresh UUID rather than reusing agent.ID.
+		// knownSession stays false → it gets seeded before resume.
 		sessionID = uuid.NewString()
 	}
 	omnilog.InitSessionLog(sessionID)
@@ -734,6 +744,31 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
 	}
 
+	envs := mcpSessionEnvs(agent)
+
+	// If we minted a fresh session id (no persisted session and none requested),
+	// the conversation does not exist in the connector's store yet. Seed it via
+	// Create *before* Resume — resuming a fabricated id runs e.g. `claude -r <id>`
+	// which fails with "No conversation found". Don't resume a phantom session.
+	if !knownSession {
+		logger.Info("ResumeAgent: no existing session, seeding a new one before resume", "agentID", agent.ID, "sessionID", sessionID)
+		seedResult, seedErr := ca.Create(codeagent.CreateSessionParams{
+			ID:      sessionID,
+			Name:    agent.Name,
+			Model:   model,
+			WorkDir: string(agent.WorkspaceDir),
+			Envs:    envs,
+		})
+		if seedErr != nil {
+			logger.Error("ResumeAgent: seed session failed", "agentID", agent.ID, "sessionID", sessionID, "err", seedErr)
+			return fmt.Errorf("operator: seed session for agent %q: %w", agent.ID, seedErr)
+		}
+		if seedResult != nil && seedResult.ID != "" {
+			sessionID = seedResult.ID
+		}
+		model = resolvedSessionModel(ca, model)
+	}
+
 	// Sandbox runtime provisioning disabled — uncomment to re-enable.
 	// var sbxRuntime *sandbox.SandboxRuntime
 	// if o.provisioner != nil {
@@ -771,7 +806,6 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		}
 	}
 
-	envs := mcpSessionEnvs(agent)
 	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
@@ -1385,7 +1419,7 @@ func mcpSessionEnvs(agent *omniagent.AgentInfo) []string {
 	return envs
 }
 
-func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) error {
+func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) (retErr error) {
 	if provider == "" {
 		provider = codeagent.Provider(operator.DefaultProvider)
 	}
@@ -1423,6 +1457,25 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		createID = uuid.NewString()
 	}
 
+	// Invariant: is_active=true ⟺ bootstrap succeeded. If startAgentSession fails
+	// after the pre-write below, mark the session inactive/failed (is_active stays
+	// 0) so GetSession skips it and a later `init -r`/resume can safely seed a new
+	// session instead of being wedged by a lingering "starting" row.
+	defer func() {
+		if retErr == nil || o.sessionStore == nil || createID == "" {
+			return
+		}
+		failed := &omniagent.CodeSession{
+			Id:       createID,
+			Model:    &codeagent.Model{Provider: provider, Model: model},
+			IsActive: false,
+			Status:   "failed",
+		}
+		if updErr := o.sessionStore.UpdateSession(agent.ID, failed); updErr != nil {
+			logger.Warn("startAgentSession: mark-failed after bootstrap failure failed", "agentID", agent.ID, "sessionID", createID, "err", updErr)
+		}
+	}()
+
 	// Pre-write the session record so AgentResolver can route hooks that fire
 	// during ca.Create(). SessionStart fires while Create is blocking — the
 	// codesession record must exist before that point.
@@ -1459,14 +1512,23 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	omnilog.InitSessionLog(sessionID)
 	model = resolvedSessionModel(ca, model)
 
-	// Persist the session to the code session store.
+	// Persist the session as the agent's active session, regardless of interactive.
+	// A preSession row was already inserted above, so CreateSession hits a PK
+	// conflict — fall back to UpdateSession so is_active actually flips to true.
+	// Without the fallback the row stays is_active=false and GetSession (which
+	// filters is_active=1) can never find it, so a later resume/exec can't locate
+	// the session the agent was started with and ends up minting a phantom id.
 	if o.sessionStore != nil {
-		if err := o.sessionStore.CreateSession(agent.ID, &omniagent.CodeSession{
+		activeSession := &omniagent.CodeSession{
 			Id:       sessionID,
 			Model:    &codeagent.Model{Provider: provider, Model: model},
 			IsActive: true,
-		}); err != nil {
-			logger.Warn("startAgentSession: session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
+			Status:   "ready",
+		}
+		if createErr := o.sessionStore.CreateSession(agent.ID, activeSession); createErr != nil {
+			if updateErr := o.sessionStore.UpdateSession(agent.ID, activeSession); updateErr != nil {
+				logger.Warn("startAgentSession: session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", updateErr)
+			}
 		}
 	}
 	logger.Info("startAgentSession: session created", "agentID", agent.ID, "provider", provider, "sessionID", sessionID, "interactive", interactive)
