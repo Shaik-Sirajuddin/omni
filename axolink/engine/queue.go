@@ -35,7 +35,9 @@ type MessageQueue interface {
 	Enqueue(ctx context.Context, m *message.Message) error
 	EnqueueGroup(ctx context.Context, groupID string, msgs []*message.Message) error
 	Update(ctx context.Context, m *message.Message) error
-	Advance(ctx context.Context, ids []string, to message.Status) error
+	// Advance is best-effort: it logs and continues past per-id failures and never
+	// returns an error (callers cannot meaningfully recover mid-batch).
+	Advance(ctx context.Context, ids []string, to message.Status)
 
 	// reads
 	Get(ctx context.Context, id string) (*message.Message, error)
@@ -87,7 +89,7 @@ func (q *sqlQueue) WorkspaceForAgent(ctx context.Context, agentID string) (strin
 // transitions that need it (InQueue clears it so the sweep doesn't immediately
 // re-flag the message). Other status-bearing fields (delivery_time, retries) are
 // owned by the caller via Update.
-func (q *sqlQueue) Advance(ctx context.Context, ids []string, to message.Status) error {
+func (q *sqlQueue) Advance(ctx context.Context, ids []string, to message.Status) {
 	// Best-effort per id: log and continue so one bad id doesn't strand the rest
 	// (matches the per-message UpdateMessage loops this replaced).
 	for _, id := range ids {
@@ -104,7 +106,6 @@ func (q *sqlQueue) Advance(ctx context.Context, ids []string, to message.Status)
 			logger.Error("queue: advance — update failed", "message_id", id, "status", to, "err", err)
 		}
 	}
-	return nil
 }
 
 func (q *sqlQueue) ForAgent(ctx context.Context, agentID string, opt QueryOpts) ([]*message.Message, error) {

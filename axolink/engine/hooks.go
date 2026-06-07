@@ -60,11 +60,11 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 		return
 	}
 	if len(out.Fail) > 0 {
-		_ = e.queue.Advance(ctx, out.Fail, message.StatusFailed)
+		e.queue.Advance(ctx, out.Fail, message.StatusFailed)
 		logger.Warn("hook: user prompt submit — cleared orphaned messages", "agent_id", agentID, "count", len(out.Fail))
 	}
 	if len(out.Process) > 0 {
-		_ = e.queue.Advance(ctx, out.Process, message.StatusProcessing)
+		e.queue.Advance(ctx, out.Process, message.StatusProcessing)
 		logger.Debug("hook: user prompt submit processed", "agent_id", agentID, "session_id", sessionID, "count", len(out.Process))
 	} else {
 		logger.Debug("hook: user prompt submit — not a engine payload, no batch to process", "agent_id", agentID)

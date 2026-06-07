@@ -35,7 +35,7 @@ func (f *fakeMQ) Update(_ context.Context, m *message.Message) error {
 	f.updates = append(f.updates, m)
 	return nil
 }
-func (f *fakeMQ) Advance(context.Context, []string, message.Status) error        { return nil }
+func (f *fakeMQ) Advance(context.Context, []string, message.Status)              {}
 func (f *fakeMQ) Get(context.Context, string) (*message.Message, error)          { return nil, nil }
 func (f *fakeMQ) Enqueue(context.Context, *message.Message) error                { return nil }
 func (f *fakeMQ) EnqueueGroup(context.Context, string, []*message.Message) error { return nil }

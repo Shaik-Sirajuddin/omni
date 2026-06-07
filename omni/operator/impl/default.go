@@ -370,6 +370,12 @@ func (o *DefaultOperator) ExecInSession(params operator.ExecInSessionParams) (*o
 		if !errors.Is(err, errNoActiveSession) || agent == nil {
 			return nil, fmt.Errorf("operator: load agent %q: %w", params.AgentID, err)
 		}
+		// Continuity: the fresh id isn't PTY-live, so the auto-resume path below runs
+		// ca.Resume(not-found) → ca.Create, and ResumeAgent persists this session
+		// IsActive=true (both its create-fallback and the final sync). The NEXT delivery
+		// then resolves THIS session via GetSession rather than minting another — so we
+		// do not silently start a new session per delivery (which would lose context).
+		// If ResumeAgent's persistence ever regresses, deliveries would churn sessions.
 		sessionID = uuid.NewString()
 		logger.Info("ExecInSession: no active session, starting a fresh one", "agentID", agent.ID, "sessionID", sessionID)
 	}
