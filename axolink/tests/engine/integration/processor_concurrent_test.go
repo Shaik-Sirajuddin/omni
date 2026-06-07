@@ -530,8 +530,8 @@ func TestPreprocessingRecall_MultipleMessages(t *testing.T) {
 		"first processing message ID must be in the preprocessing recall prompt")
 	assert.Contains(t, e1.prompt, "proc-q2",
 		"second processing message ID must be in the preprocessing recall prompt")
-	assert.Contains(t, e1.prompt, "send_response",
-		"preprocessing recall prompt must instruct agent to call send_response")
+	assert.Contains(t, e1.prompt, "query_result",
+		"preprocessing recall prompt (query messages) must instruct agent to call query_result")
 
 	// Both messages must have Retries incremented before ExecInSession.
 	for _, id := range []string{"proc-q1", "proc-q2"} {

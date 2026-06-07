@@ -296,8 +296,8 @@ func TestD5_PreprocessingRecall_PicksProcessingMsg(t *testing.T) {
 	// The prompt must be a YAML recall (buildWarmUpPrompt) containing the message ID.
 	assert.Contains(t, e1.prompt, "prep-recall-msg",
 		"preprocessing recall prompt must include the StatusProcessing message ID")
-	assert.Contains(t, e1.prompt, "send_response",
-		"preprocessing recall prompt must instruct the agent to call send_response")
+	assert.Contains(t, e1.prompt, "query_result",
+		"preprocessing recall prompt (query message) must instruct the agent to call query_result")
 	assert.Contains(t, e1.prompt, "query",
 		"preprocessing recall prompt must include the request_type")
 

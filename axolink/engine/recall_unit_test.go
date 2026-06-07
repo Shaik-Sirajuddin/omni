@@ -43,8 +43,8 @@ func TestPreprocessingRecall(t *testing.T) {
 			"preprocessing recall must use YAML format (buildWarmUpPrompt), not plain text (buildRecallPrompt)")
 		assert.Contains(t, e1.prompt, "prep-query-1",
 			"preprocessing recall YAML must embed the processing message ID")
-		assert.Contains(t, e1.prompt, "send_response",
-			"preprocessing recall YAML instruction must reference send_response")
+		assert.Contains(t, e1.prompt, "query_result",
+			"preprocessing recall YAML instruction (query message) must reference query_result")
 		close(e1.relCh)
 	})
 

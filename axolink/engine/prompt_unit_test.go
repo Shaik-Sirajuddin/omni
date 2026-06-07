@@ -167,7 +167,7 @@ func TestBuildWarmUpPrompt(t *testing.T) {
 		msgs := []*message.Message{{ID: "q1", RequestType: reqTypeQuery, Prompt: "what?", Refs: "{}"}}
 		out := buildWarmUpPrompt(msgs)
 		assert.NotContains(t, out, "request_type:", "homogeneous query batch must not set per-item request_type")
-		assert.Contains(t, out, "send_response", "query instruction must reference send_response tool")
+		assert.Contains(t, out, "query_result", "query instruction must reference query_result tool")
 	})
 
 	t.Run("mixed batch: per-item request_type set, unified instruction", func(t *testing.T) {

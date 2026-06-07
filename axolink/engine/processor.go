@@ -863,7 +863,7 @@ func isMixedBatch(msgs []*message.Message) bool {
 
 var warmUpInstruction = map[message.RequestType]string{
 	reqTypeExecute: "Execute the following task. Call `send_response(message_id, ...)` after completing.",
-	reqTypeQuery:   "Answer the following queries. Call `send_response(message_id, response)` for each.",
+	reqTypeQuery:   "Answer the following queries. Call `query_result(message_id, response)` for each — or `query_result_batch` for all of them.",
 	reqTypeInstant: "Process the following messages.",
 }
 
@@ -871,7 +871,7 @@ const warmUpMixedInstruction = "Complete the task and answer all queries. Call `
 
 var activeInstruction = map[message.RequestType]string{
 	reqTypeExecute: "Continue from %s. Call `send_response` when done.",
-	reqTypeQuery:   "Reply to %s using `send_response` or `send_response_batch`.",
+	reqTypeQuery:   "Reply to %s using `query_result(message_id, response)` or `query_result_batch`.",
 	reqTypeInstant: "Process the following from %s.",
 }
 
