@@ -15,11 +15,16 @@ func watchTerminal(t *PTYTerminal, store *Store, onExit func(agentID, sessionID 
 	}
 
 	t.setStatus(status)
-	_ = store.UpdateStatus(t.AgentID, t.SessionID, status)
+	// Snapshot the identity under t.mu: Adopt may have re-keyed AgentID from ""
+	// to the real id on this same object, so an unlocked read here would race it.
+	t.mu.Lock()
+	agentID, sessionID := t.AgentID, t.SessionID
+	t.mu.Unlock()
+	_ = store.UpdateStatus(agentID, sessionID, status)
 	t.closeMaster() // child is gone; release the master fd now instead of at GC
 
 	if onExit != nil {
-		onExit(t.AgentID, t.SessionID)
+		onExit(agentID, sessionID)
 	}
 }
 

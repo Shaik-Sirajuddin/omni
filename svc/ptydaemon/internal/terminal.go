@@ -111,6 +111,11 @@ type PTYTerminal struct {
 	// when pauseDrain needs to park the drain goroutine. -1 means not initialised.
 	drainWakeR int
 	drainWakeW int
+	// drainDone is closed by drainLoop when it returns, so closeMaster can JOIN
+	// the drainer before closing the master fd. Without the join, drainLoop's
+	// m.Fd()/unix.Read on the master race the master's Close (a real -race-flagged
+	// teardown data race).
+	drainDone chan struct{}
 }
 
 func (t *PTYTerminal) write(p []byte) error {
@@ -168,11 +173,22 @@ func (t *PTYTerminal) kill() error {
 // on every session-exit path so the fd is freed immediately rather than at GC.
 // Idempotent and safe to call more than once.
 func (t *PTYTerminal) closeMaster() {
-	t.stopDrain() // stop the drainer before the fd disappears
+	t.stopDrain() // signal the drainer to stop
+
+	// JOIN the drain goroutine before closing the fd: drainLoop calls m.Fd() and
+	// unix.Read on the master every iteration, so closing the master while it is
+	// still looping is a data race (caught by -race). stopDrain interrupts the
+	// poll, so this wait is bounded by at most one poll cycle.
+	t.drainMu.Lock()
+	done, has := t.drainDone, t.hasDrain
+	t.drainMu.Unlock()
+	if has && done != nil {
+		<-done
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.master != nil {
-		_ = t.master.SetReadDeadline(time.Now()) // interrupt any in-progress drain read
 		_ = t.master.Close()
 		t.master = nil
 	}
@@ -190,6 +206,7 @@ func (t *PTYTerminal) startDrain() {
 	t.drainCond = sync.NewCond(&t.drainMu)
 	t.hasDrain = true
 	t.drainActive = true
+	t.drainDone = make(chan struct{})
 	t.drainWakeR = -1
 	t.drainWakeW = -1
 	p := make([]int, 2)
@@ -207,6 +224,12 @@ func (t *PTYTerminal) startDrain() {
 // "0-buffer" drain: nothing is retained — a late client repaints from the child
 // (see repaint), it does not replay history.
 func (t *PTYTerminal) drainLoop() {
+	// Signal closeMaster that the drainer has fully stopped (so it can close the
+	// master fd without racing our m.Fd()/unix.Read), and close the wake pipe from
+	// its single owner here (never from stopDrain, which would race an in-flight
+	// poll on those fds).
+	defer close(t.drainDone)
+	defer t.closeDrainWake()
 	buf := make([]byte, 4096)
 	for {
 		t.drainMu.Lock()
@@ -249,9 +272,17 @@ func (t *PTYTerminal) drainLoop() {
 		}
 		n, pollErr := unix.Poll(pollFds, int(drainReadTimeout/time.Millisecond))
 		// Drain the wake pipe byte if signaled (keeps it ready for next pause).
+		// pauseDrain writes the wake byte right after clearing drainActive, so a
+		// wake means "re-evaluate drainActive NOW" — loop back to the top where the
+		// goroutine parks. WITHOUT this continue the loop falls through to the
+		// blocking unix.Read(master) below and only parks after the child next
+		// emits output (~80ms of attach latency); the continue makes pauseDrain
+		// near-instant. Any master bytes that were also ready are simply re-read on
+		// the next active cycle (or discarded — this is the 0-buffer drain).
 		if n > 0 && wakeR >= 0 && len(pollFds) > 1 && pollFds[1].Revents&unix.POLLIN != 0 {
 			var b [1]byte
 			unix.Read(wakeR, b[:]) //nolint:errcheck
+			continue
 		}
 		if pollErr != nil && pollErr != unix.EINTR {
 			// Poll returned a real error — treat master as gone.
@@ -339,7 +370,11 @@ func (t *PTYTerminal) resumeDrain() {
 }
 
 // stopDrain permanently stops the drainer (called from closeMaster). No-op for
-// adopted sessions or if already stopped.
+// adopted sessions or if already stopped. It only SIGNALS — it sets drainClosed,
+// wakes any cond waiter, and writes the wake byte to interrupt an in-flight poll
+// so the drainer exits within one poll cycle. The wake-pipe fds are closed by
+// drainLoop itself (closeDrainWake) so closing never races a concurrent poll on
+// them. Idempotent.
 func (t *PTYTerminal) stopDrain() {
 	t.drainMu.Lock()
 	if !t.hasDrain {
@@ -348,13 +383,26 @@ func (t *PTYTerminal) stopDrain() {
 	}
 	t.drainClosed = true
 	t.drainCond.Broadcast() // wake the drainLoop and any pauseDrain waiter
-	wakeR, wakeW := t.drainWakeR, t.drainWakeW
+	wakeW := t.drainWakeW
+	t.drainMu.Unlock()
+	if wakeW >= 0 {
+		unix.Write(wakeW, []byte{0}) //nolint:errcheck
+	}
+}
+
+// closeDrainWake closes the wake pipe. Called only from drainLoop's defer (the
+// single owner), so the close can never race a poll still referencing the fds.
+func (t *PTYTerminal) closeDrainWake() {
+	t.drainMu.Lock()
+	r, w := t.drainWakeR, t.drainWakeW
 	t.drainWakeR = -1
 	t.drainWakeW = -1
 	t.drainMu.Unlock()
-	if wakeR >= 0 {
-		unix.Close(wakeR)  //nolint:errcheck
-		unix.Close(wakeW)  //nolint:errcheck
+	if r >= 0 {
+		unix.Close(r) //nolint:errcheck
+	}
+	if w >= 0 {
+		unix.Close(w) //nolint:errcheck
 	}
 }
 
