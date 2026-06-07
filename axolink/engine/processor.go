@@ -81,9 +81,9 @@ type MessageRef struct {
 //   - registers hook routes on a caller-provided mux via RegisterHookRoutes
 type ProcessingEngine struct {
 	state              *EngineState
-	msgStore           message.MessageStore
+	queue              MessageQueue
 	agentStore         agents.AgentStore
-	omni               OmniCLI
+	omni               omnicli.OmniCLI
 	mcp                *MCPClientRegistry
 	syncServer         *SyncServer
 	socketPath         string
@@ -101,7 +101,7 @@ type ProcessingEngine struct {
 type Option func(*ProcessingEngine)
 
 // WithTestBinary replaces the default omni CLI with a test double.
-func WithTestBinary(cli OmniCLI) Option {
+func WithTestBinary(cli omnicli.OmniCLI) Option {
 	return func(e *ProcessingEngine) { e.omni = cli }
 }
 
@@ -162,7 +162,7 @@ func New(msgStore message.MessageStore, opts ...Option) *ProcessingEngine {
 	}
 	e := &ProcessingEngine{
 		state:             newEngineState(),
-		msgStore:          msgStore,
+		queue:             newMessageQueue(msgStore),
 		agentStore:        agentStore,
 		omni:              omnicli.New("omni"),
 		mcp:               newMCPClientRegistry(),
@@ -302,7 +302,7 @@ var omniStopReasonToEngine = map[string]StopReason{
 // hydrateState loads agent and session state from the DB on startup.
 // Flow: GetPendingAgents → per agentID: GetWorkspaceForAgent + GetSession → SetAgent + SetPending.
 func (e *ProcessingEngine) hydrateState(ctx context.Context) {
-	agentIDs, err := e.msgStore.GetPendingAgents(ctx)
+	agentIDs, err := e.queue.PendingAgents(ctx)
 	if err != nil {
 		logger.Error("hydrate state: get pending agents failed", "err", err)
 		return
@@ -315,7 +315,7 @@ func (e *ProcessingEngine) hydrateState(ctx context.Context) {
 	logger.Info("hydrate state: loading agents", "count", len(agentIDs))
 
 	for _, agentID := range agentIDs {
-		workspace, err := e.msgStore.GetWorkspaceForAgent(ctx, agentID)
+		workspace, err := e.queue.WorkspaceForAgent(ctx, agentID)
 		if err != nil {
 			logger.Warn("hydrate state: workspace not found", "agent_id", agentID, "err", err)
 		}
@@ -393,12 +393,8 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 			return
 		case <-ticker.C:
 			cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
-			stale, err := e.msgStore.RawQuery(ctx,
-				`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-				        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-				 FROM messages WHERE status = ? AND queue_time > 0 AND queue_time < ?`,
-				string(statusQueued), cutoff,
-			)
+			// Global stale-queued sweep across all agents (no agent filter).
+			stale, err := e.queue.ForAgent(ctx, "", QueryOpts{Status: statusQueued, StaleBefore: cutoff})
 			if err != nil {
 				logger.Error("queue sweep: query failed", "err", err)
 				continue
@@ -418,7 +414,7 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 					// Re-queue so the agent can retry after a short delay.
 					msg.Status = message.StatusInQueue
 					msg.QueueTime = 0 // cleared so the sweep doesn't immediately re-flag it
-					if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+					if err := e.queue.Update(ctx, msg); err != nil {
 						logger.Error("queue sweep: re-queue failed", "message_id", msg.ID, "err", err)
 						continue
 					}
@@ -435,7 +431,7 @@ func (e *ProcessingEngine) runQueueSweep(ctx context.Context) {
 					}()
 				} else {
 					msg.Status = message.StatusFailed
-					if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+					if err := e.queue.Update(ctx, msg); err != nil {
 						logger.Error("queue sweep: mark failed error", "message_id", msg.ID, "err", err)
 					}
 					logger.Warn("queue sweep: max retries exceeded, message failed",
@@ -462,7 +458,7 @@ func (e *ProcessingEngine) bootstrapAgent(agentID string) bool {
 		logger.Error("bootstrap agent: agent not found in omni store", "agent_id", agentID, "err", err)
 		return false
 	}
-	workspace, err := e.msgStore.GetWorkspaceForAgent(ctx, agentID)
+	workspace, err := e.queue.WorkspaceForAgent(ctx, agentID)
 	if err != nil {
 		logger.Warn("bootstrap agent: workspace not found, will use message workspace", "agent_id", agentID, "err", err)
 	}
@@ -547,12 +543,10 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// Plain-text prompts fail the YAML parse and leave messages permanently Failed.
 	//
 	// Case (b): no processing messages — fall through to T3 check + normal pick.
-	processingRecall, procErr := e.msgStore.RawQuery(ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ? AND request_type != ?`,
-		agentID, string(message.StatusProcessing), string(reqTypeInstant),
-	)
+	processingRecall, procErr := e.queue.ForAgent(ctx, agentID, QueryOpts{
+		Status:         message.StatusProcessing,
+		NotRequestType: reqTypeInstant,
+	})
 	if procErr != nil {
 		logger.Error("execute loop: preprocessing recall check failed", "agent_id", agentID, "err", procErr)
 		return
@@ -568,7 +562,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 		// must increment here to prevent the OnStop recall guard from looping forever.
 		for _, msg := range msgs {
 			msg.Retries++
-			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			if err := e.queue.Update(ctx, msg); err != nil {
 				logger.Error("execute loop: preprocessing recall — retries increment failed", "message_id", msg.ID, "err", err)
 				return // avoid building recall with inconsistently incremented retries
 			}
@@ -580,12 +574,11 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	} else {
 		// Case (b): T3: only an in-flight execute blocks new picks. Queries may bypass when task_id matches (T2).
 		var activeExecute []*message.Message
-		activeExecute, err = e.msgStore.RawQuery(ctx,
-			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-			 FROM messages WHERE "to" = ? AND status IN (?, ?) AND request_type = ? LIMIT 1`,
-			agentID, string(statusQueued), string(message.StatusProcessing), string(reqTypeExecute),
-		)
+		activeExecute, err = e.queue.ForAgent(ctx, agentID, QueryOpts{
+			StatusIn:    []message.Status{statusQueued, message.StatusProcessing},
+			RequestType: reqTypeExecute,
+			Limit:       1,
+		})
 		if err != nil {
 			logger.Error("execute loop: active execute check failed", "agent_id", agentID, "err", err)
 			return
@@ -642,7 +635,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 			msg.Status = statusQueued
 			msg.Retries++
 			msg.QueueTime = queueTime
-			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			if err := e.queue.Update(ctx, msg); err != nil {
 				logger.Error("execute loop: update message to queued failed", "message_id", msg.ID, "err", err)
 			}
 		}
@@ -778,7 +771,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 	// causing the post-loop executeLoop to pick and re-deliver the same message.
 	now := time.Now().UnixMilli()
 	for _, msg := range msgs {
-		fresh, ferr := e.msgStore.GetMessage(ctx, msg.ID)
+		fresh, ferr := e.queue.Get(ctx, msg.ID)
 		if ferr != nil {
 			logger.Error("execute loop: get message for queue_time reset failed", "message_id", msg.ID, "err", ferr)
 			continue
@@ -787,7 +780,7 @@ func (e *ProcessingEngine) executeLoop(agentID string) {
 			continue // OnStop already advanced the status; don't overwrite
 		}
 		fresh.QueueTime = now
-		if err := e.msgStore.UpdateMessage(ctx, fresh); err != nil {
+		if err := e.queue.Update(ctx, fresh); err != nil {
 			logger.Error("execute loop: reset queue_time failed", "message_id", msg.ID, "err", err)
 		}
 	}
@@ -840,7 +833,7 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 	anyRequeued := false
 
 	for _, id := range ids {
-		msg, err := e.msgStore.GetMessage(ctx, id)
+		msg, err := e.queue.Get(ctx, id)
 		if err != nil {
 			logger.Error("session end: get message failed", "message_id", id, "err", err)
 			continue
@@ -853,7 +846,7 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 			msg.QueueTime = 0
 			logger.Warn("session end: exec failed, re-queuing for retry",
 				"message_id", id, "retries", msg.Retries)
-			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			if err := e.queue.Update(ctx, msg); err != nil {
 				logger.Error("session end: re-queue failed", "message_id", id, "err", err)
 			} else {
 				anyRequeued = true
@@ -862,7 +855,7 @@ func (e *ProcessingEngine) onSessionEnd(agentID string, msgs []*message.Message,
 			logger.Warn("session end: orphaned message, marking failed",
 				"message_id", id, "status", msg.Status, "exec_failed", execFailed)
 			msg.Status = message.StatusFailed
-			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			if err := e.queue.Update(ctx, msg); err != nil {
 				logger.Error("session end: mark failed error", "message_id", id, "err", err)
 			}
 		}
@@ -896,22 +889,11 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 	taskMux := e.state.GetTaskMux(agentID)
 	var msgs []*message.Message
 	var err error
+	opt := QueryOpts{Status: message.StatusInQueue, Limit: 20}
 	if taskMux != nil && !taskMux.IsZero() {
-		msgs, err = e.msgStore.RawQuery(e.ctx,
-			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-			 FROM messages WHERE "to" = ? AND status = ?
-			 ORDER BY CASE WHEN task_id = ? AND creator_agent_id = ? THEN 0 ELSE 1 END, sent_time ASC LIMIT 20`,
-			agentID, string(message.StatusInQueue), taskMux.TaskID, taskMux.CreatorAgentID,
-		)
-	} else {
-		msgs, err = e.msgStore.RawQuery(e.ctx,
-			`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-			        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-			 FROM messages WHERE "to" = ? AND status = ? ORDER BY sent_time ASC LIMIT 20`,
-			agentID, string(message.StatusInQueue),
-		)
+		opt.TaskFirst = taskMux // T1: task_id-first ordering
 	}
+	msgs, err = e.queue.ForAgent(e.ctx, agentID, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -968,13 +950,12 @@ func (e *ProcessingEngine) pickNextMessages(agentID string, bypassTask *TaskKey)
 
 // pickBypassQueries picks pending queries for the given task when an execute is in flight (T2).
 func (e *ProcessingEngine) pickBypassQueries(agentID string, key TaskKey) ([]*message.Message, error) {
-	return e.msgStore.RawQuery(e.ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ? AND task_id = ? AND creator_agent_id = ? AND request_type = ?
-		 ORDER BY sent_time ASC LIMIT 5`,
-		agentID, string(message.StatusInQueue), key.TaskID, key.CreatorAgentID, string(reqTypeQuery),
-	)
+	return e.queue.ForAgent(e.ctx, agentID, QueryOpts{
+		Status:      message.StatusInQueue,
+		Task:        &key,
+		RequestType: reqTypeQuery,
+		Limit:       5,
+	})
 }
 
 type promptItem struct {
@@ -1127,7 +1108,7 @@ func senderNameFromRefs(refs string) string {
 
 func (e *ProcessingEngine) handlePostExec(req AgentCallbackRequest) {
 	ctx := e.ctx
-	msg, err := e.msgStore.GetMessage(ctx, req.Source.MessageID)
+	msg, err := e.queue.Get(ctx, req.Source.MessageID)
 	if err != nil {
 		logger.Error("post exec: get message failed", "message_id", req.Source.MessageID, "err", err)
 		go e.executeLoop(req.AgentID)
@@ -1144,7 +1125,7 @@ func (e *ProcessingEngine) handlePostExec(req AgentCallbackRequest) {
 	now := time.Now().UnixMilli()
 	msg.Status = message.StatusDelivered
 	msg.DeliveryTime = &now
-	if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+	if err := e.queue.Update(ctx, msg); err != nil {
 		logger.Error("post exec: update message failed", "message_id", msg.ID, "err", err)
 	}
 
@@ -1157,7 +1138,7 @@ func (e *ProcessingEngine) handlePostExec(req AgentCallbackRequest) {
 
 func (e *ProcessingEngine) handleFailedExec(req AgentCallbackRequest) {
 	ctx := e.ctx
-	msg, err := e.msgStore.GetMessage(ctx, req.Source.MessageID)
+	msg, err := e.queue.Get(ctx, req.Source.MessageID)
 	if err != nil {
 		logger.Error("failed exec: get message failed", "message_id", req.Source.MessageID, "err", err)
 		go e.executeLoop(req.AgentID)
@@ -1165,7 +1146,7 @@ func (e *ProcessingEngine) handleFailedExec(req AgentCallbackRequest) {
 	}
 
 	msg.Retries++
-	if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+	if err := e.queue.Update(ctx, msg); err != nil {
 		logger.Error("failed exec: update retries failed", "message_id", msg.ID, "err", err)
 	}
 
@@ -1173,7 +1154,7 @@ func (e *ProcessingEngine) handleFailedExec(req AgentCallbackRequest) {
 		logger.Warn("failed exec: max retries reached, stopping agent",
 			"message_id", msg.ID, "retries", msg.Retries)
 		msg.Status = message.StatusFailed
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		if err := e.queue.Update(ctx, msg); err != nil {
 			logger.Error("failed exec: mark failed error", "message_id", msg.ID, "err", err)
 		}
 		agentState, _ := e.state.GetAgent(req.AgentID)

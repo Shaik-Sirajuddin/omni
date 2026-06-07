@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// OmniCLI shells out to the real omni binary.
-type OmniCLI struct {
+// Binary shells out to the real omni binary.
+type Binary struct {
 	binaryPath string
 }
 
-// New returns an OmniCLI using the binary at binaryPath.
-func New(binaryPath string) *OmniCLI {
-	return &OmniCLI{binaryPath: binaryPath}
+// New returns a Binary-backed OmniCLI using the binary at binaryPath.
+func New(binaryPath string) *Binary {
+	return &Binary{binaryPath: binaryPath}
 }
 
-func (c *OmniCLI) ExecInSession(ctx context.Context, agentID, agentName, workspace, prompt string) error {
+func (c *Binary) ExecInSession(ctx context.Context, agentID, agentName, workspace, prompt string) error {
 	logger.Debug("exec in session", "agent_id", agentID, "agent_name", agentName, "workspace", workspace, "binary", c.binaryPath)
 
 	cmd := exec.CommandContext(ctx, c.binaryPath, "agent", "exec", agentName, "--bg", "--prompt", prompt)
@@ -32,7 +32,7 @@ func (c *OmniCLI) ExecInSession(ctx context.Context, agentID, agentName, workspa
 	return nil
 }
 
-func (c *OmniCLI) GetPromptState(ctx context.Context, agentID string) (string, error) {
+func (c *Binary) GetPromptState(ctx context.Context, agentID string) (string, error) {
 	logger.Debug("get prompt state", "agent_id", agentID)
 
 	cmd := exec.CommandContext(ctx, c.binaryPath, "agent", "prompt-state", "--agent", agentID)

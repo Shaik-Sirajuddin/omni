@@ -89,12 +89,7 @@ func IncrementGenerationForTest(e *ProcessingEngine, agentID string) {
 // Uses MaxInt64 cutoff so every queued message is eligible regardless of queue_time.
 func RunQueueSweepOnceForTest(e *ProcessingEngine, ctx context.Context) {
 	cutoff := int64(math.MaxInt64)
-	stale, err := e.msgStore.RawQuery(ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE status = ? AND queue_time > 0 AND queue_time < ?`,
-		string(statusQueued), cutoff,
-	)
+	stale, err := e.queue.ForAgent(ctx, "", QueryOpts{Status: statusQueued, StaleBefore: cutoff})
 	if err != nil {
 		return
 	}
@@ -102,10 +97,10 @@ func RunQueueSweepOnceForTest(e *ProcessingEngine, ctx context.Context) {
 		if msg.Retries < maxQueueRetries {
 			msg.Status = message.StatusInQueue
 			msg.QueueTime = 0
-			_ = e.msgStore.UpdateMessage(ctx, msg)
+			_ = e.queue.Update(ctx, msg)
 		} else {
 			msg.Status = message.StatusFailed
-			_ = e.msgStore.UpdateMessage(ctx, msg)
+			_ = e.queue.Update(ctx, msg)
 		}
 	}
 }

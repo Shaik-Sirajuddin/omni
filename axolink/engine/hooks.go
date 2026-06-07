@@ -53,12 +53,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 	// NOT fire this hook — they continue the same session and trigger another Stop event instead. The sweep
 	// is therefore safe on the recall path: recall messages stay StatusProcessing across Stop → systemMessage
 	// → Stop turns without being cleared here.
-	stale, err := e.msgStore.RawQuery(ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ?`,
-		agentID, string(message.StatusProcessing),
-	)
+	stale, err := e.queue.ForAgent(ctx, agentID, QueryOpts{Status: message.StatusProcessing})
 	if err != nil {
 		logger.Error("hook: user prompt submit — query stale processing failed", "agent_id", agentID, "err", err)
 	}
@@ -68,7 +63,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 			continue // belongs to this submit cycle (double-UPS race) — not orphaned
 		}
 		msg.Status = message.StatusFailed
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		if err := e.queue.Update(ctx, msg); err != nil {
 			logger.Error("hook: mark stale processing failed", "message_id", msg.ID, "err", err)
 		}
 		cleared++
@@ -79,12 +74,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 
 	// Also sweep stale queued messages whose queue_time exceeded the delivery window.
 	cutoff := time.Now().Add(-e.deliveryWindow).UnixMilli()
-	staleQueued, err := e.msgStore.RawQuery(ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ? AND queue_time > 0 AND queue_time < ?`,
-		agentID, string(statusQueued), cutoff,
-	)
+	staleQueued, err := e.queue.ForAgent(ctx, agentID, QueryOpts{Status: statusQueued, StaleBefore: cutoff})
 	if err != nil {
 		logger.Error("hook: user prompt submit — query stale queued failed", "agent_id", agentID, "err", err)
 	}
@@ -94,7 +84,7 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 			continue // belongs to this submit cycle — not orphaned
 		}
 		msg.Status = message.StatusFailed
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		if err := e.queue.Update(ctx, msg); err != nil {
 			logger.Error("hook: mark stale queued failed", "message_id", msg.ID, "err", err)
 		}
 		clearedQueued++
@@ -112,13 +102,13 @@ func (e *ProcessingEngine) OnUserPromptSubmit(_ context.Context, agentID, sessio
 		if item.MessageID == "" {
 			continue
 		}
-		msg, err := e.msgStore.GetMessage(ctx, item.MessageID)
+		msg, err := e.queue.Get(ctx, item.MessageID)
 		if err != nil {
 			logger.Error("hook: get message failed", "message_id", item.MessageID, "err", err)
 			continue
 		}
 		msg.Status = message.StatusProcessing
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		if err := e.queue.Update(ctx, msg); err != nil {
 			logger.Error("hook: update message to processing failed", "message_id", item.MessageID, "err", err)
 		}
 	}
@@ -170,12 +160,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 	ctx := e.ctx
 	agentState, _ := e.state.GetAgent(agentID)
 
-	msgs, err := e.msgStore.RawQuery(ctx,
-		`SELECT id, "to", "from", from_spec, to_spec, request_type, is_response, should_reply,
-		        responded_to, prompt, schema, refs, workspace, task_id, creator_agent_id, status, retries, queue_time, delivery_time, sent_time, group_id
-		 FROM messages WHERE "to" = ? AND status = ?`,
-		agentID, string(message.StatusProcessing),
-	)
+	msgs, err := e.queue.ForAgent(ctx, agentID, QueryOpts{Status: message.StatusProcessing})
 	if err != nil {
 		logger.Error("hook: stop — query processing messages failed", "agent_id", agentID, "err", err)
 		e.state.ClearSession(sessionID)
@@ -187,7 +172,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		logger.Info("hook: stop — interrupted, resetting messages to in_queue", "agent_id", agentID, "count", len(msgs))
 		for _, msg := range msgs {
 			msg.Status = message.StatusInQueue
-			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			if err := e.queue.Update(ctx, msg); err != nil {
 				logger.Error("hook: reset message failed", "message_id", msg.ID, "err", err)
 			}
 		}
@@ -253,7 +238,7 @@ func (e *ProcessingEngine) OnStop(_ context.Context, agentID, sessionID string) 
 		// advances every turn; without this the recall would loop forever.
 		for _, msg := range recallable {
 			msg.Retries++
-			if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+			if err := e.queue.Update(ctx, msg); err != nil {
 				logger.Error("hook: stop — recall retries increment failed", "message_id", msg.ID, "err", err)
 			}
 		}
@@ -287,7 +272,7 @@ func (e *ProcessingEngine) markDelivered(ctx context.Context, msgs []*message.Me
 	for _, msg := range msgs {
 		msg.Status = message.StatusDelivered
 		msg.DeliveryTime = &now
-		if err := e.msgStore.UpdateMessage(ctx, msg); err != nil {
+		if err := e.queue.Update(ctx, msg); err != nil {
 			logger.Error("hook: deliver message failed", "message_id", msg.ID, "err", err)
 			continue
 		}
