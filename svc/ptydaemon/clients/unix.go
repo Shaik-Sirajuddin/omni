@@ -114,9 +114,16 @@ func (c *UnixSocketClient) List(agentID string) ([]*PTYTerminalInfo, error) {
 		ptylog.Debug("client: list ok", "count", len(resp.Sessions))
 		return resp.Sessions, nil
 	}
+	// Apply the SAME leniency as the daemon's get()/ListSessions and the server
+	// side: a terminal created by the Start path carries agent_id="" until adopt
+	// rewrites it ~ms later. Filtering by an EXACT agent_id match here would strip
+	// that still-un-adopted terminal back out of the response, re-introducing the
+	// Start→adopt loop the server fix exists to prevent. The caller disambiguates
+	// by SessionID (globally unique UUID), so including agent_id="" entries cannot
+	// cross-contaminate a different agent's guard check.
 	var filtered []*PTYTerminalInfo
 	for _, info := range resp.Sessions {
-		if info != nil && info.AgentID == agentID {
+		if info != nil && (info.AgentID == agentID || info.AgentID == "") {
 			filtered = append(filtered, info)
 		}
 	}

@@ -167,23 +167,60 @@ func (d *defaultDaemon) Exec(agentID, sessionID, prompt string) error {
 	return t.execPrompt(prompt)
 }
 
+// Adopt attaches the real agent id to a session. The common case (a Start-path
+// terminal already exists for this session, keyed under agent_id="") must NOT
+// create a second terminal: that produced two map entries for one session — the
+// drain-owning Start terminal holding the real PTY master, and an adopt terminal
+// holding /proc/PID/fd/0 (the SLAVE) with hasDrain=false. When the start entry
+// was reaped first, get() fell through to the adopt entry whose master was nil,
+// and every writeUser failed with "no pty master" (the stdin-relay failure).
+// Instead we RE-KEY the existing terminal under the real agent id, keeping its
+// drain goroutine and real master fd on the one object.
 func (d *defaultDaemon) Adopt(agentID, sessionID string, pid int, submitKey string) error {
-	key := termKey(agentID, sessionID)
+	newKey := termKey(agentID, sessionID)
 
-	d.mu.RLock()
-	_, exists := d.terminals[key]
-	d.mu.RUnlock()
-	if exists {
-		return nil // idempotent
+	d.mu.Lock()
+	if _, exists := d.terminals[newKey]; exists {
+		d.mu.Unlock()
+		return nil // already adopted under the real id — idempotent
 	}
+	// Find the Start-path terminal for this session (its agent_id is usually "").
+	var found *PTYTerminal
+	var oldKey, oldAgentID string
+	for k, t := range d.terminals {
+		if t.SessionID == sessionID {
+			found, oldKey, oldAgentID = t, k, t.AgentID
+			break
+		}
+	}
+	if found != nil {
+		delete(d.terminals, oldKey)
+		found.mu.Lock()
+		found.AgentID = agentID
+		if submitKey != "" {
+			found.submitKey = submitKey
+		}
+		info := found.PTYTerminalInfo
+		sk := found.submitKey
+		found.mu.Unlock()
+		d.terminals[newKey] = found
+		d.mu.Unlock()
 
-	// Recover submit_key from store when caller omits it on re-adopt after restart.
-	// Non-fatal on error: exec falls back to plain \r.
+		// Re-key the DB row too: drop the stale Start-path row so a later
+		// GetBySessionOnly can't resurrect an orphaned active "" record, then
+		// upsert under the real agent id.
+		if oldAgentID != agentID {
+			_ = d.store.DeleteSession(oldAgentID, sessionID)
+		}
+		_ = d.store.Insert(&info, sk)
+		return nil
+	}
+	d.mu.Unlock()
+
+	// Fallback: no live Start-path terminal (e.g. daemon restarted). Build a
+	// standalone adopted terminal from the running process.
 	if submitKey == "" {
-		rec, recErr := d.store.GetBySession(agentID, sessionID)
-		if recErr != nil {
-			_ = recErr // internal pkg has no logger; surfaced to caller if needed
-		} else if rec != nil {
+		if rec, recErr := d.store.GetBySession(agentID, sessionID); recErr == nil && rec != nil {
 			submitKey = rec.SubmitKey
 		}
 	}
@@ -214,7 +251,7 @@ func (d *defaultDaemon) Adopt(agentID, sessionID string, pid int, submitKey stri
 	}
 
 	d.mu.Lock()
-	d.terminals[key] = t
+	d.terminals[newKey] = t
 	d.mu.Unlock()
 
 	if err := d.store.Insert(&info, submitKey); err != nil {
@@ -303,19 +340,87 @@ func (d *defaultDaemon) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// ListSessions is the agent-scoped session listing behind the client's
+// List(agentID) call. The in-memory registry is the AUTHORITY for which
+// terminals currently exist; the store supplies the full record fields
+// (timestamps) and covers sessions recovered after a daemon restart.
+//
+// The bug this fixes: a Start-path terminal is created with agent_id="" and
+// only rewritten to the real agent_id ~ms later when adopt runs. The old
+// `SELECT ... WHERE agent_id = ?` query (ListByAgent) therefore could not see a
+// live, un-adopted terminal during that window, so the operator's guard found
+// nothing, re-issued Start, hit "terminal already exists" (the in-memory map had
+// it), and looped forever. We resolve live terminals with the SAME leniency as
+// get() — agent_id=="" matches any requested agent — so List can never miss a
+// terminal that Exec/Attach/GetMasterFd can see. One source of truth.
 func (d *defaultDaemon) ListSessions(agentID string) ([]*PTYSessionRecord, error) {
-	return d.store.ListByAgent(agentID)
+	// Live view: which sessions exist right now, with get()-style leniency.
+	d.mu.RLock()
+	liveSessions := make(map[string]struct{}, len(d.terminals))
+	for _, t := range d.terminals {
+		if agentID != "" && t.AgentID != "" && t.AgentID != agentID {
+			continue // a genuinely different agent colliding on sessionID
+		}
+		liveSessions[t.SessionID] = struct{}{}
+	}
+	d.mu.RUnlock()
+
+	// Persistent records for the agent (full fields, plus restart recovery).
+	records, err := d.store.ListByAgent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(records))
+	for _, r := range records {
+		seen[r.SessionID] = struct{}{}
+	}
+
+	// Add any live session the agent-scoped query missed because it is still
+	// stored with agent_id="" (created but not yet adopted). Create always
+	// inserts the row, so GetBySessionOnly resolves the full record.
+	for sid := range liveSessions {
+		if _, ok := seen[sid]; ok {
+			continue
+		}
+		rec, gerr := d.store.GetBySessionOnly(sid)
+		if gerr != nil || rec == nil {
+			continue
+		}
+		records = append(records, rec)
+		seen[sid] = struct{}{}
+	}
+	return records, nil
 }
 
 func (d *defaultDaemon) GetSession(agentID, sessionID string) (*PTYSessionRecord, error) {
-	// When the caller does not pin an agent — the client Get sends an empty
-	// agentID and resolves purely by sessionID — look up by sessionID alone.
-	// An exact `WHERE agent_id=?` match otherwise races the Start→adopt window:
-	// ResumeAgent(Detached) Starts the session inserted with agent_id="", and the
-	// adopt path ~2ms later rewrites it to the real agent_id. A fixed
-	// `agent_id=''` predicate therefore flips from matching to not-matching, so
-	// ptySessionLive/waitPTYReady intermittently see "session not found".
-	// SessionIDs are globally unique UUIDs, so resolving by sessionID is safe.
+	// The in-memory registry is the AUTHORITY for a live session, with the same
+	// leniency as get()/ListSessions. Going to the DB first races the Start→adopt
+	// window and can return a stale stopped row from a previous iteration, so
+	// waitPTYReady never sees status=active and the operator loops Start forever.
+	// When the session is live we report the live status (overriding any stale DB
+	// row) and borrow the DB record only for timestamps/submit_key.
+	if t := d.get(agentID, sessionID); t != nil {
+		t.mu.Lock()
+		cp := t.PTYTerminalInfo
+		t.mu.Unlock()
+		if rec, err := d.store.GetBySessionOnly(sessionID); err == nil && rec != nil {
+			rec.AgentID = cp.AgentID
+			rec.PID = cp.PID
+			rec.Status = cp.Status // live status wins over the DB
+			return rec, nil
+		}
+		// No DB record yet — synthesize from live state.
+		return &PTYSessionRecord{
+			AgentID:   cp.AgentID,
+			SessionID: cp.SessionID,
+			PID:       cp.PID,
+			Status:    cp.Status,
+		}, nil
+	}
+
+	// Not live: fall back to the DB for restart recovery. SessionIDs are globally
+	// unique UUIDs, so resolving by sessionID alone is safe when the agent is
+	// unpinned.
 	if agentID == "" {
 		return d.store.GetBySessionOnly(sessionID)
 	}

@@ -150,11 +150,31 @@ type PTYSessionRecord struct {
 }
 
 func (s *Store) GetBySessionOnly(sessionID string) (*PTYSessionRecord, error) {
+	// A session_id can have several rows (one per agent_id it was created/adopted
+	// under across resume iterations). Without an ORDER BY, LIMIT 1 returns an
+	// arbitrary row — frequently a stale stopped one — so a live session reads as
+	// stopped and the operator loops Start forever. Prefer active, then stopped,
+	// then crashed; break ties with the most recently started row.
 	row := s.db.QueryRow(
-		`SELECT agent_id, session_id, pid, status, submit_key, started_at, stopped_at FROM pty_sessions WHERE session_id = ? LIMIT 1`,
+		`SELECT agent_id, session_id, pid, status, submit_key, started_at, stopped_at
+		 FROM pty_sessions
+		 WHERE session_id = ?
+		 ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'stopped' THEN 1 ELSE 2 END, started_at DESC
+		 LIMIT 1`,
 		sessionID,
 	)
 	return scanRecord(row.Scan)
+}
+
+// DeleteSession removes the row for exactly (agentID, sessionID). Used by Adopt
+// to re-key a Start-path row (agent_id="") to the real agent without leaving a
+// stale active duplicate behind.
+func (s *Store) DeleteSession(agentID, sessionID string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM pty_sessions WHERE agent_id = ? AND session_id = ?`,
+		agentID, sessionID,
+	)
+	return err
 }
 
 func (s *Store) GetBySession(agentID, sessionID string) (*PTYSessionRecord, error) {
