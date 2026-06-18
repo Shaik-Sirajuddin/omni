@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"syscall"
 
+	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
 	pkglog "github.com/Shaik-Sirajuddin/memory/pkg/log"
 	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
@@ -34,6 +35,14 @@ func main() {
 	log := pkglog.NewLogger("component", "svc")
 	username := currentUsername()
 
+	cfg, cfgErr := (&omniconfig.DefaultOmniConfigResolver{}).GetUserSettings()
+	if cfgErr != nil {
+		log.Warn("failed to load omni config, using defaults", "err", cfgErr)
+		cfg = nil
+	}
+
+	axolinkMCPEnabled := resolveAxolinkMCPEnabled(*disableMCP, cfg)
+
 	mux := &ServiceMux{
 		PTYDaemon: PTYDaemonConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disablePTY},
@@ -45,7 +54,7 @@ func main() {
 			SocketPath:    sockpath.HookOperator(),
 		},
 		AxolinkMCP: AxolinkMCPConfig{
-			ServiceConfig: ServiceConfig{Enabled: !*disableMCP},
+			ServiceConfig: ServiceConfig{Enabled: axolinkMCPEnabled},
 		},
 		ConfigSync: ConfigSyncConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disableConfigSync},
@@ -78,4 +87,18 @@ func currentUsername() string {
 		return v
 	}
 	return "omni"
+}
+
+// resolveAxolinkMCPEnabled determines whether the Axolink MCP service should
+// be enabled. The CLI flag --disable-axolink-mcp always wins (disables the
+// service when set). When the flag is not set, the config feature flag is
+// consulted; it defaults to true when absent.
+func resolveAxolinkMCPEnabled(cliDisable bool, cfg *omniconfig.OmniConfig) bool {
+	if cliDisable {
+		return false
+	}
+	if cfg != nil && cfg.Features != nil && !cfg.Features.AxolinkMCP {
+		return false
+	}
+	return true
 }

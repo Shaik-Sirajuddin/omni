@@ -9,6 +9,8 @@ type Features struct {
 	// AutoSync propagates config changes from any agent to all configured agents; default true
 	AutoSync         bool `json:"auto_sync"           jsonschema:"title=Auto Sync,description=Propagate config changes from any agent to all configured agents"`
 	RandomAgentNames bool `json:"random_agent_names" jsonschema:"title=Random Agent Names,description=Assign random display names to agents"`
+	// AxolinkMCP registers and runs the Axolink MCP service; defaults to true
+	AxolinkMCP bool `json:"axolink_mcp" jsonschema:"title=Axolink MCP,description=Register and run the Axolink MCP service; defaults to true"`
 }
 
 // OmniConfig is the root configuration for omni.

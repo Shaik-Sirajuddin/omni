@@ -168,6 +168,7 @@ func ProvisionDefaultOmniConfig() *OmniConfig {
 		Features: &Features{
 			AutoSync:         true,
 			RandomAgentNames: true,
+			AxolinkMCP:       true,
 		},
 		Dev: &Developer{
 			Debug: false,
@@ -185,6 +186,7 @@ func ApplyOmniConfigDefaults(cfg *OmniConfig) *OmniConfig {
 		cfg.Features = &Features{
 			AutoSync:         true,
 			RandomAgentNames: true,
+			AxolinkMCP:       true,
 		}
 	}
 
