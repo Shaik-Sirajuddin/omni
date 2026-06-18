@@ -1671,13 +1671,15 @@ func (o *DefaultOperator) ensureWorkspaceAndGuideAgent(workspace sandbox.Workspa
 	return nil
 }
 
-// sandboxConfigDir returns the per-agent sandbox config directory:
-// <workspaceDir>/memory/agents/<agentName>/sandbox
+// sandboxConfigDir returns the per-agent sandbox config directory.
+// The path is resolved version-aware using ResolveAgentMemDir so that agents
+// on v1/v2 (memory/agents/<name>/sandbox) and v3 (memory/<name>/sandbox) are
+// handled correctly without hardcoding the intermediate "agents/" segment.
 func sandboxConfigDir(workspaceDir, agentName string) string {
 	if workspaceDir == "" || agentName == "" {
 		return ""
 	}
-	return filepath.Join(workspaceDir, operator.MemoryDirName, "agents", agentName, "sandbox")
+	return filepath.Join(operator.ResolveAgentMemDir(workspaceDir, agentName), "sandbox")
 }
 
 // GetCodeAgentResolver returns the SettingsResolver for the given provider.

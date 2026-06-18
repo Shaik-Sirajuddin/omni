@@ -77,6 +77,7 @@ func EntrypointWithVersion(op operator.Operator, resolver config.OmniConfigResol
 	root.AddCommand(c.newDoctorCommand())
 	root.AddCommand(c.newServerCommand())
 	root.AddCommand(c.newAxoLinkCommand())
+	root.AddCommand(c.newMemoryCommand())
 
 	c.root = root
 	return c
@@ -244,8 +245,61 @@ func (c *DefaultCli) newAgentCommand() *cobra.Command {
 	agentCmd.AddCommand(c.newAgentExecCommand())
 	agentCmd.AddCommand(c.newAgentStopCommand())
 	agentCmd.AddCommand(c.newAgentDetachCommand())
+	agentCmd.AddCommand(c.newAgentGetCommand())
 
 	return agentCmd
+}
+
+// newAgentGetCommand returns the "agent <name> get <key>" subcommand group.
+// Supported keys:
+//
+//	sys-instructs  — print the resolved filesystem path to the agent's
+//	                 system-instructions for its current layout version.
+func (c *DefaultCli) newAgentGetCommand() *cobra.Command {
+	var workspace string
+
+	getCmd := &cobra.Command{
+		Use:   "get <name> <key>",
+		Short: "Get a named property for an agent",
+		Long: `Get a named property for a named agent.  The agent's layout version is
+auto-detected from its on-disk metadata.yaml.
+
+Supported keys:
+  sys-instructs  Print the resolved path to the agent's system instructions.
+                 Version mapping:
+                   v1 → <agentdir>/entry/instructions   (directory)
+                   v2 → <agentdir>/instructions/memory.md
+                   v3 → <agentdir>/instructions/memory.md`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			key := args[1]
+
+			ws := workspace
+			if ws == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("resolve workspace: %w", err)
+				}
+				ws = wd
+			}
+
+			switch key {
+			case "sys-instructs":
+				path, err := operator.ResolveAgentSysInstructionsPath(ws, name)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), path)
+				return nil
+			default:
+				return fmt.Errorf("unknown key %q (supported: sys-instructs)", key)
+			}
+		},
+	}
+
+	getCmd.Flags().StringVar(&workspace, "workspace", "", "Workspace directory (default: current directory)")
+	return getCmd
 }
 
 func (c *DefaultCli) newTeamInitCommand() *cobra.Command {
@@ -1186,7 +1240,9 @@ func sandboxConfigDir(workspaceDir, agentName string) string {
 	if strings.TrimSpace(workspaceDir) == "" || strings.TrimSpace(agentName) == "" {
 		return ""
 	}
-	return filepath.Join(workspaceDir, operator.MemoryDirName, "agents", agentName, "sandbox")
+	// Use version-aware resolution so v1/v2 agents (memory/agents/<name>/sandbox)
+	// and v3 agents (memory/<name>/sandbox) are both handled correctly.
+	return filepath.Join(operator.ResolveAgentMemDir(workspaceDir, agentName), "sandbox")
 }
 
 func serviceUnitName() string {
