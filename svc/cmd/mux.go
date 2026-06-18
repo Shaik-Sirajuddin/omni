@@ -130,7 +130,7 @@ func startAxolinkMCP(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := runner.Run(axoCtx, cfg); err != nil {
+		if err := runner.Run(axoCtx, cfg); err != nil && !errors.Is(err, context.Canceled) {
 			onErr(fmt.Errorf("axolink-mcp: %w", err))
 		}
 	}()
