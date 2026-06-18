@@ -63,6 +63,89 @@ type ServiceMux struct {
 	HookOperator HookOperatorConfig
 	AxolinkMCP   AxolinkMCPConfig
 	ConfigSync   ConfigSyncConfig
+
+	// ConfigResolver is used to watch for live config changes. When non-nil,
+	// changes to axolink_mcp in the config file are applied without restart.
+	// When nil, live watching is skipped.
+	ConfigResolver omniconfig.OmniConfigResolver
+}
+
+// axolinkEnabled returns true when the *bool config field is nil (absent →
+// default on) or points to true.
+func axolinkEnabled(f *bool) bool {
+	return f == nil || *f
+}
+
+// startAxolinkMCP registers axolink with all providers in the global MCP
+// registry and launches the MCP runner goroutine under axoCtx. It adds 1 to wg
+// and calls onErr with any fatal error, then calls onDone regardless of exit
+// reason. The caller is responsible for cancelling axoCtx to stop the goroutine.
+func startAxolinkMCP(
+	axoCtx context.Context,
+	log *slog.Logger,
+	onErr func(error),
+	onDone func(),
+) {
+	cfg := runner.DefaultConfig()
+	omniPath, lookErr := exec.LookPath("omni")
+	if lookErr != nil {
+		log.Warn("axolink-mcp: omni binary not found in PATH, skipping connector registration", "err", lookErr)
+	} else {
+		for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
+			if _, err := mgr.AddMCP(codeagent.AddMCPParams{
+				Server: codeagent.MCPServer{
+					Name:      "axolink",
+					Transport: codeagent.MCPTransportStdio,
+					Command:   omniPath,
+					Args:      []string{"axolink"},
+					// Codex clears the parent env before spawning stdio MCP subprocesses
+					// (env_clear in codex-rs). AXO_LINK_MCP_TRANSPORT must be set as a
+					// literal since it is not present in the parent env.
+					Env: map[string]string{
+						"AXO_LINK_MCP_TRANSPORT": "stdio",
+					},
+					// Forward session-specific vars from the codex PTY process env.
+					// The operator injects these via p.Envs on every session; codex
+					// merges them into the PTY env. env_vars tells codex to re-forward
+					// those names into the omni axolink stdio subprocess.
+					EnvVars: []string{
+						"AXO_LINK_MCP_AUTH_TOKEN",
+						"AXO_LINK_MCP_SENDER_ID",
+						"AXO_LINK_MCP_SENDER_TYPE",
+						"AXO_LINK_MCP_AGENT_WORKSPACE",
+					},
+				},
+				Global: true,
+			}); err != nil {
+				if errors.Is(err, codeagent.ErrMCPNotSupported) {
+					log.Warn("axolink-mcp: connector does not support MCP", "provider", provider)
+				} else {
+					log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
+				}
+			} else {
+				log.Info("axolink-mcp: registered with connector", "provider", provider, "command", omniPath, "args", []string{"axolink"})
+			}
+		}
+	}
+	go func() {
+		defer onDone()
+		if err := runner.Run(axoCtx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+			onErr(fmt.Errorf("axolink-mcp: %w", err))
+		}
+	}()
+}
+
+// stopAxolinkMCP cancels the axolink goroutine and deregisters axolink from
+// all providers in the global MCP registry.
+func stopAxolinkMCP(cancel context.CancelFunc, log *slog.Logger) {
+	cancel()
+	for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
+		if _, err := mgr.DeleteMCP(codeagent.DeleteMCPParams{Name: "axolink", Global: true}); err != nil {
+			log.Warn("axolink-mcp: deregister from connector failed", "provider", provider, "err", err)
+		} else {
+			log.Info("axolink-mcp: deregistered from connector", "provider", provider)
+		}
+	}
 }
 
 // Run starts all enabled services and blocks until all have exited. The first
@@ -98,55 +181,81 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 		}()
 	}
 
-	if m.AxolinkMCP.Enabled {
-		cfg := runner.DefaultConfig()
-		omniPath, lookErr := exec.LookPath("omni")
-		if lookErr != nil {
-			log.Warn("axolink-mcp: omni binary not found in PATH, skipping connector registration", "err", lookErr)
-		} else {
-			for provider, mgr := range codeagent.GlobalMCPRegistry.All() {
-				if _, err := mgr.AddMCP(codeagent.AddMCPParams{
-					Server: codeagent.MCPServer{
-						Name:      "axolink",
-						Transport: codeagent.MCPTransportStdio,
-						Command:   omniPath,
-						Args:      []string{"axolink"},
-						// Codex clears the parent env before spawning stdio MCP subprocesses
-						// (env_clear in codex-rs). AXO_LINK_MCP_TRANSPORT must be set as a
-						// literal since it is not present in the parent env.
-						Env: map[string]string{
-							"AXO_LINK_MCP_TRANSPORT": "stdio",
-						},
-						// Forward session-specific vars from the codex PTY process env.
-						// The operator injects these via p.Envs on every session; codex
-						// merges them into the PTY env. env_vars tells codex to re-forward
-						// those names into the omni axolink stdio subprocess.
-						EnvVars: []string{
-							"AXO_LINK_MCP_AUTH_TOKEN",
-							"AXO_LINK_MCP_SENDER_ID",
-							"AXO_LINK_MCP_SENDER_TYPE",
-							"AXO_LINK_MCP_AGENT_WORKSPACE",
-						},
-					},
-					Global: true,
-				}); err != nil {
-					if errors.Is(err, codeagent.ErrMCPNotSupported) {
-						log.Warn("axolink-mcp: connector does not support MCP", "provider", provider)
-					} else {
-						log.Error("axolink-mcp: register with connector failed", "provider", provider, "err", err)
-					}
-				} else {
-					log.Info("axolink-mcp: registered with connector", "provider", provider, "command", omniPath, "args", []string{"axolink"})
-				}
-			}
+	// axoMu guards axoCancel and axoRunning so the config watcher goroutine
+	// and the main Run goroutine don't race.
+	//
+	// axoRunning is only cleared by the goroutine's onDone callback (not by
+	// stopAxo) so a rapid disable→enable toggle can't spawn a second runner
+	// while the first is still winding down.
+	var axoMu sync.Mutex
+	var axoWg sync.WaitGroup
+	var axoCancel context.CancelFunc
+	axoRunning := false
+
+	startAxo := func() {
+		axoCtx, cancel := context.WithCancel(ctx)
+		axoCancel = cancel
+		axoRunning = true
+		startAxolinkMCP(axoCtx, log,
+			func(err error) { ch <- result{err} },
+			func() {
+				// Reset axoRunning under the mutex whenever the goroutine
+				// exits — whether via error, intentional cancel, or parent
+				// context cancellation — so the watcher never sees a stale
+				// "running" state after an unplanned exit.
+				axoMu.Lock()
+				axoRunning = false
+				axoMu.Unlock()
+			},
+		)
+	}
+	stopAxo := func() {
+		if axoCancel != nil {
+			stopAxolinkMCP(axoCancel, log)
+			axoCancel = nil
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := runner.Run(ctx, cfg); err != nil {
-				ch <- result{fmt.Errorf("axolink-mcp: %w", err)}
+		// axoRunning is cleared by the goroutine's onDone callback, not here.
+		// Clearing it immediately would allow a second runner to start before
+		// the first has actually exited.
+	}
+
+	if m.AxolinkMCP.Enabled {
+		axoMu.Lock()
+		startAxo()
+		axoMu.Unlock()
+	}
+
+	// axoWg.Wait() must run regardless of whether a live watcher is installed,
+	// because the initial axolink goroutine (started above) uses axoWg, not
+	// the shared wg. Register the drain defer unconditionally; if a config
+	// resolver is also present, register Unwatch right after so it runs first
+	// (LIFO: last-registered defer runs first).
+	defer axoWg.Wait()
+
+	// Install a live config watcher if a resolver was provided. Config changes
+	// to axolink_mcp take effect immediately without restarting the daemon.
+	if m.ConfigResolver != nil {
+		if err := m.ConfigResolver.WatchSettings(func(cfg *omniconfig.OmniConfig) {
+			want := cfg == nil || cfg.Features == nil || axolinkEnabled(cfg.Features.AxolinkMCP)
+
+			axoMu.Lock()
+			defer axoMu.Unlock()
+
+			switch {
+			case want && !axoRunning:
+				log.Info("axolink-mcp: enabled via config change")
+				startAxo()
+			case !want && axoRunning:
+				log.Info("axolink-mcp: disabled via config change")
+				stopAxo()
 			}
-		}()
+		}); err != nil {
+			log.Warn("axolink-mcp: failed to install config watcher", "err", err)
+		}
+		// Unwatch is deferred after axoWg.Wait(), so it runs first (LIFO).
+		// This ensures no new goroutines can be added to axoWg after Unwatch
+		// returns, before axoWg.Wait() drains the last one.
+		defer m.ConfigResolver.Unwatch()
 	}
 
 	if m.ConfigSync.Enabled {
