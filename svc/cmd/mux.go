@@ -78,13 +78,13 @@ func axolinkEnabled(f *bool) bool {
 
 // startAxolinkMCP registers axolink with all providers in the global MCP
 // registry and launches the MCP runner goroutine under axoCtx. It adds 1 to wg
-// and calls onErr with any fatal error. The caller is responsible for
-// cancelling axoCtx to stop the goroutine.
+// and calls onErr with any fatal error, then calls onDone regardless of exit
+// reason. The caller is responsible for cancelling axoCtx to stop the goroutine.
 func startAxolinkMCP(
 	axoCtx context.Context,
 	log *slog.Logger,
-	wg *sync.WaitGroup,
 	onErr func(error),
+	onDone func(),
 ) {
 	cfg := runner.DefaultConfig()
 	omniPath, lookErr := exec.LookPath("omni")
@@ -127,9 +127,8 @@ func startAxolinkMCP(
 			}
 		}
 	}
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer onDone()
 		if err := runner.Run(axoCtx, cfg); err != nil && !errors.Is(err, context.Canceled) {
 			onErr(fmt.Errorf("axolink-mcp: %w", err))
 		}
@@ -184,6 +183,10 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 
 	// axoMu guards axoCancel and axoRunning so the config watcher goroutine
 	// and the main Run goroutine don't race.
+	//
+	// axoRunning is only cleared by the goroutine's onDone callback (not by
+	// stopAxo) so a rapid disable→enable toggle can't spawn a second runner
+	// while the first is still winding down.
 	var axoMu sync.Mutex
 	var axoCancel context.CancelFunc
 	axoRunning := false
@@ -192,16 +195,27 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 		axoCtx, cancel := context.WithCancel(ctx)
 		axoCancel = cancel
 		axoRunning = true
-		startAxolinkMCP(axoCtx, log, &wg, func(err error) {
-			ch <- result{err}
-		})
+		startAxolinkMCP(axoCtx, log,
+			func(err error) { ch <- result{err} },
+			func() {
+				// Reset axoRunning under the mutex whenever the goroutine
+				// exits — whether via error, intentional cancel, or parent
+				// context cancellation — so the watcher never sees a stale
+				// "running" state after an unplanned exit.
+				axoMu.Lock()
+				axoRunning = false
+				axoMu.Unlock()
+			},
+		)
 	}
 	stopAxo := func() {
 		if axoCancel != nil {
 			stopAxolinkMCP(axoCancel, log)
 			axoCancel = nil
 		}
-		axoRunning = false
+		// axoRunning is cleared by the goroutine's onDone callback, not here.
+		// Clearing it immediately would allow a second runner to start before
+		// the first has actually exited.
 	}
 
 	if m.AxolinkMCP.Enabled {
@@ -209,6 +223,13 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 		startAxo()
 		axoMu.Unlock()
 	}
+
+	// axoWg.Wait() must run regardless of whether a live watcher is installed,
+	// because the initial axolink goroutine (started above) uses axoWg, not
+	// the shared wg. Register the drain defer unconditionally; if a config
+	// resolver is also present, register Unwatch right after so it runs first
+	// (LIFO: last-registered defer runs first).
+	defer axoWg.Wait()
 
 	// Install a live config watcher if a resolver was provided. Config changes
 	// to axolink_mcp take effect immediately without restarting the daemon.
@@ -230,6 +251,9 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 		}); err != nil {
 			log.Warn("axolink-mcp: failed to install config watcher", "err", err)
 		}
+		// Unwatch is deferred after axoWg.Wait(), so it runs first (LIFO).
+		// This ensures no new goroutines can be added to axoWg after Unwatch
+		// returns, before axoWg.Wait() drains the last one.
 		defer m.ConfigResolver.Unwatch()
 	}
 
