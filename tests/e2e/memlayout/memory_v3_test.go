@@ -73,6 +73,18 @@ func memTestConfig(t *testing.T) (harness.TestConfig, string) {
 	require.NoError(t, err, "cp migrate.sh")
 	require.Equal(t, 0, code, "cp migrate.sh: %s", string(out))
 
+	// Purge any stale agent records for this workspace from the global SQLite DB.
+	// ProvisionWorkspace removes the filesystem directory but the global DB at
+	// ~/.local/share/memory/omniagent.db retains rows from previous runs, causing
+	// "agent already exists" collisions on re-runs. Uses python3 sqlite3 module
+	// (always present in the container); ignore the exit code — non-fatal if DB
+	// doesn't exist yet (first run).
+	agentDB := "/root/.local/share/memory/omniagent.db"
+	purgeScript := fmt.Sprintf(
+		"import sqlite3,sys; db=sqlite3.connect('%s'); db.execute(\"DELETE FROM agents WHERE workspace_dir='%s'\"); db.commit(); db.close()",
+		agentDB, cfg.Workspace)
+	_, _, _ = cfg.Exec.RunCommand(ctx, []string{"python3", "-c", purgeScript})
+
 	// Note: /tmp is noexec in the container; all migrate.sh invocations use
 	// `bash /path/migrate.sh` rather than executing the script directly.
 
@@ -89,6 +101,7 @@ func makeV1Agent(t *testing.T, cfg harness.TestConfig, memDir, name string) {
 	dirs := []string{
 		agentDir + "/entry/instructions",
 		agentDir + "/entry/tasks",
+		agentDir + "/entry/data", // v1 semantics lists entry/data/; YAML comment strip makes it appear required
 		agentDir + "/generated",
 		agentDir + "/state",
 	}

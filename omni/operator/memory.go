@@ -12,13 +12,21 @@ import (
 	"strings"
 )
 
+const versionConfigFile = "version.yaml"
+
 //go:embed all:templates/**
 var templateFS embed.FS
 
 const (
-	LatestVersion = "v1"
+	LatestVersion = "v3"
 	MemoryDirName = "memory"
 	metadataFile  = "metadata.yaml"
+
+	// memoryTemplateNamespace is the top-level directory under templates/memory/
+	// that contains all per-version memory template sub-directories.
+	// It is intentionally pinned to "v1" and decoupled from LatestVersion so
+	// that adding new agent layout versions does not move the template storage root.
+	memoryTemplateNamespace = "v1"
 )
 
 const (
@@ -130,6 +138,51 @@ func layoutForVersion(code int) layoutConfig {
 	return versionLayouts[highest]
 }
 
+// latestEmbeddedVersion returns the version short-name (e.g. "v3") of the
+// highest-numbered agent template embedded in the binary.  It iterates over
+// versionLayouts and returns the entry whose template files both exist in the
+// embedded FS.
+func latestEmbeddedVersion() string {
+	highest := 0
+	for code := range versionLayouts {
+		v := fmt.Sprintf("v%d", code)
+		if templateExists(v) && code > highest {
+			highest = code
+		}
+	}
+	if highest == 0 {
+		return LatestVersion
+	}
+	return fmt.Sprintf("v%d", highest)
+}
+
+// defaultVersion resolves the default layout version for the given memory
+// root directory.
+//
+//   - If <memDir>/version.yaml exists and contains a non-empty
+//     `default_version:` key, that value is used.
+//   - Otherwise the highest embedded template version is used (computed by
+//     latestEmbeddedVersion).
+func defaultVersion(memDir string) string {
+	data, err := os.ReadFile(filepath.Join(memDir, versionConfigFile))
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "default_version:") {
+				v := strings.TrimSpace(strings.TrimPrefix(line, "default_version:"))
+				// strip inline YAML comments
+				if idx := strings.Index(v, "#"); idx >= 0 {
+					v = strings.TrimSpace(v[:idx])
+				}
+				if v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return latestEmbeddedVersion()
+}
+
 // discoverAvailableVersions lists version codes present as memory/v<x>/ dirs
 // under the given memory root.  Returns nil if none are found.
 func discoverAvailableVersions(memRoot string) []int {
@@ -200,23 +253,31 @@ func (m *defaultAgentMemory) Init(workspaceRoot, repoURL string) error {
 		}
 	}
 
-	if err := seedMemoryRoot(memDir, LatestVersion); err != nil {
-		logger.Error("memory.Init: seed root failed", "memoryDir", memDir, "version", LatestVersion, "err", err)
+	version := defaultVersion(memDir)
+	if err := seedMemoryRoot(memDir, version); err != nil {
+		logger.Error("memory.Init: seed root failed", "memoryDir", memDir, "version", version, "err", err)
 		return err
 	}
-	logger.Info("memory.Init: completed", "memoryDir", memDir, "version", LatestVersion)
+	// Pin the resolved default so that later `memory.Create` calls use the same
+	// version without re-computing it each time.
+	if err := writeVersionConfig(memDir, version); err != nil {
+		logger.Error("memory.Init: write version config failed", "memoryDir", memDir, "version", version, "err", err)
+		return err
+	}
+	logger.Info("memory.Init: completed", "memoryDir", memDir, "version", version)
 	return nil
 }
 
 func (m *defaultAgentMemory) Create(memDir string) error {
-	logger.Info("memory.Create: start", "memoryDir", memDir, "version", LatestVersion)
 	workspaceRoot := workspaceRootFromAgentDir(memDir)
+	version := defaultVersion(workspaceRoot)
+	logger.Info("memory.Create: start", "memoryDir", memDir, "version", version)
 	agentName := filepath.Base(memDir)
-	if err := applyTemplate(workspaceRoot, memDir, agentName, LatestVersion); err != nil {
-		logger.Error("memory.Create: apply template failed", "memoryDir", memDir, "version", LatestVersion, "err", err)
+	if err := applyTemplate(workspaceRoot, memDir, agentName, version); err != nil {
+		logger.Error("memory.Create: apply template failed", "memoryDir", memDir, "version", version, "err", err)
 		return err
 	}
-	logger.Info("memory.Create: completed", "memoryDir", memDir, "version", LatestVersion)
+	logger.Info("memory.Create: completed", "memoryDir", memDir, "version", version)
 	return nil
 }
 
@@ -399,6 +460,15 @@ func writeAgentCollabTasksDir(ctx templateContext, layout layoutConfig) error {
 	dest := filepath.Join(dir, "default.yaml")
 	content := "task_group_name: default\nauthor: " + ctx.AgentName + "\ninstructions:\n  -\n"
 	logger.Debug("writeAgentCollabTasksDir: write file", "dest", dest)
+	return os.WriteFile(dest, []byte(content), 0o644)
+}
+
+// writeVersionConfig writes (or overwrites) version.yaml at the memory root
+// with the supplied default_version value.
+func writeVersionConfig(memDir, version string) error {
+	dest := filepath.Join(memDir, versionConfigFile)
+	content := fmt.Sprintf("default_version: %s\n", version)
+	logger.Debug("writeVersionConfig: write", "dest", dest, "version", version)
 	return os.WriteFile(dest, []byte(content), 0o644)
 }
 
@@ -605,7 +675,7 @@ func agentTemplateRoot(version string) string {
 }
 
 func memoryTemplateRoot(version string) string {
-	return filepath.Join("templates", "memory", LatestVersion, version)
+	return filepath.Join("templates", "memory", memoryTemplateNamespace, version)
 }
 
 // --- git helpers ---

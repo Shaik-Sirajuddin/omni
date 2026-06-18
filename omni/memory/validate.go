@@ -136,10 +136,15 @@ func Validate(targetPath string, opts Options) (Report, error) {
 	isAgentDir := isAgentDirectory(absTarget, memRoot)
 
 	if opts.AgentName != "" {
-		// Force single-agent mode by name.
-		agentPath := filepath.Join(memRoot, opts.AgentName)
-		if _, err := os.Stat(agentPath); err != nil {
-			return Report{}, fmt.Errorf("agent %q not found at %s", opts.AgentName, agentPath)
+		// Force single-agent mode by name. Agents may live at the v3 location
+		// (<memRoot>/<name>) or the legacy v1/v2 location (<memRoot>/agents/<name>);
+		// probe both so coexistence works in a mixed workspace.
+		agentPath, ok := resolveAgentByName(memRoot, opts.AgentName)
+		if !ok {
+			return Report{}, fmt.Errorf("agent %q not found at %s or %s",
+				opts.AgentName,
+				filepath.Join(memRoot, opts.AgentName),
+				filepath.Join(memRoot, "agents", opts.AgentName))
 		}
 		return validateSingleAgent(agentPath, memRoot, opts, available)
 	}
@@ -323,6 +328,30 @@ func inferVersion(agentPath string) int {
 
 // ─── Validate tree ───────────────────────────────────────────────────────────
 
+// resolveAgentByName locates an agent dir by name, supporting both the v3
+// layout (<memRoot>/<name>) and the legacy v1/v2 layout (<memRoot>/agents/<name>).
+func resolveAgentByName(memRoot, name string) (string, bool) {
+	if p := filepath.Join(memRoot, name); dirExists(p) {
+		return p, true
+	}
+	if p := filepath.Join(memRoot, "agents", name); dirExists(p) {
+		return p, true
+	}
+	return "", false
+}
+
+// infraDirs are non-agent directories that may sit at the memory root. They
+// carry no agent metadata/layout and must not be validated as agents (doing so
+// mis-infers them as v3 and reports spurious missing-file errors).
+var infraDirs = map[string]bool{
+	"templates": true, // version templates (also copied by e2e setup)
+	"collab":    true, // v3 cross-agent collaboration
+	"circuits":  true, // v3 shared circuits
+	"tools":     true, // migrate.sh etc.
+}
+
+var versionDirRE = regexp.MustCompile(`^v\d+$`)
+
 func validateTree(targetPath, memRoot string, opts Options, available map[int]string, report Report) (Report, error) {
 	entries, err := os.ReadDir(targetPath)
 	if err != nil {
@@ -330,7 +359,17 @@ func validateTree(targetPath, memRoot string, opts Options, available map[int]st
 	}
 
 	rosterRE := regexp.MustCompile(`^(agent_.*\.md|agents_v\d+\.md)$`)
-	forbiddenDirs := []string{"entry", "team"}
+	forbiddenDirs := map[string]bool{"entry": true, "team": true}
+
+	validateAgentInto := func(agentPath string) {
+		sub, err := validateSingleAgent(agentPath, memRoot, opts, available)
+		if err != nil {
+			report.addWarn(agentPath, fmt.Sprintf("skipped: %v", err))
+			return
+		}
+		report.Version = sub.Version // last wins; callers should check per-agent
+		report.Violations = append(report.Violations, sub.Violations...)
+	}
 
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -342,26 +381,35 @@ func validateTree(targetPath, memRoot string, opts Options, available map[int]st
 			continue
 		}
 		name := e.Name()
-		// Skip contract dirs.
-		if regexp.MustCompile(`^v\d+$`).MatchString(name) {
+		// Skip contract dirs, hidden dirs, and known infrastructure dirs —
+		// none of these are agents.
+		if versionDirRE.MatchString(name) || strings.HasPrefix(name, ".") || infraDirs[name] {
 			continue
 		}
-		// Forbidden dirs at tree root.
-		for _, forbidden := range forbiddenDirs {
-			if name == forbidden {
-				report.addWarn(filepath.Join(targetPath, name),
-					fmt.Sprintf("directory %q should not exist in a v3 memory tree", name))
+		// Forbidden dirs at tree root: warn, but do NOT validate as an agent.
+		if forbiddenDirs[name] {
+			report.addWarn(filepath.Join(targetPath, name),
+				fmt.Sprintf("directory %q should not exist in a v3 memory tree", name))
+			continue
+		}
+		// Legacy v1/v2 wrapper: agents/ holds the agent dirs — descend into it
+		// and validate each child as an agent (each resolves its own version).
+		if name == "agents" {
+			agentsDir := filepath.Join(targetPath, name)
+			subEntries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				report.addWarn(agentsDir, fmt.Sprintf("read legacy agents dir: %v", err))
+				continue
 			}
-		}
-		// Treat everything else as a potential agent dir.
-		agentPath := filepath.Join(targetPath, name)
-		sub, err := validateSingleAgent(agentPath, memRoot, opts, available)
-		if err != nil {
-			report.addWarn(agentPath, fmt.Sprintf("skipped: %v", err))
+			for _, se := range subEntries {
+				if se.IsDir() {
+					validateAgentInto(filepath.Join(agentsDir, se.Name()))
+				}
+			}
 			continue
 		}
-		report.Version = sub.Version // last wins; callers should check per-agent
-		report.Violations = append(report.Violations, sub.Violations...)
+		// Everything else at root is a v3 agent dir.
+		validateAgentInto(filepath.Join(targetPath, name))
 	}
 	return report, nil
 }
@@ -546,11 +594,13 @@ func validateV1V2Agent(agentPath, semPath string, version int, report *Report) {
 		if dir == "" {
 			continue
 		}
-		// Mark optional dirs (only present in semantics as optional).
-		// We check all listed dirs as required for simplicity; optional dirs
-		// in v1/v2 semantics are documented with "(optional)" in description.
-		// Skip data/ and sandbox/ which are explicitly optional in both versions.
-		if strings.Contains(rawDir, "optional") || dir == "data/" || dir == "sandbox/" {
+		// Skip dirs that are optional in v1/v2. The "(optional)" hint in
+		// semantics.yaml is a YAML comment that is stripped on unmarshal, so we
+		// can't detect it from the parsed value — match the known optional paths
+		// explicitly. The data dir is optional and lives at entry/data/ in v1 and
+		// data/ in v2; sandbox/ is optional in both.
+		switch dir {
+		case "data/", "entry/data/", "sandbox/":
 			continue
 		}
 		p := filepath.Join(agentPath, filepath.FromSlash(dir))
