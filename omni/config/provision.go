@@ -162,13 +162,17 @@ func ProvisionDoctorInstallFlags() CLIDoctorInstallFlags {
 	return CLIDoctorInstallFlags{Output: "table"}
 }
 
+// boolPtr returns a pointer to b. Used for *bool config fields whose absence
+// (nil) must be distinguishable from an explicit false.
+func boolPtr(b bool) *bool { return &b }
+
 // ProvisionDefaultOmniConfig returns a new default OmniConfig instance.
 func ProvisionDefaultOmniConfig() *OmniConfig {
 	return &OmniConfig{
 		Features: &Features{
 			AutoSync:         true,
 			RandomAgentNames: true,
-			AxolinkMCP:       true,
+			AxolinkMCP:       boolPtr(true),
 		},
 		Dev: &Developer{
 			Debug: false,
@@ -186,8 +190,15 @@ func ApplyOmniConfigDefaults(cfg *OmniConfig) *OmniConfig {
 		cfg.Features = &Features{
 			AutoSync:         true,
 			RandomAgentNames: true,
-			AxolinkMCP:       true,
+			AxolinkMCP:       boolPtr(true),
 		}
+	}
+
+	// Backfill individual *bool fields that may be absent (nil) in an existing
+	// config file — JSON omits unset pointer fields, so nil means "not set by
+	// the user" rather than "explicitly false".
+	if cfg.Features.AxolinkMCP == nil {
+		cfg.Features.AxolinkMCP = boolPtr(true)
 	}
 
 	if cfg.Dev == nil {

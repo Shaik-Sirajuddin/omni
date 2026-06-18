@@ -6,12 +6,14 @@ import (
 	omniconfig "github.com/Shaik-Sirajuddin/memory/config"
 )
 
+func boolP(b bool) *bool { return &b }
+
 func TestResolveAxolinkMCPEnabled(t *testing.T) {
 	featureOn := &omniconfig.OmniConfig{
-		Features: &omniconfig.Features{AxolinkMCP: true},
+		Features: &omniconfig.Features{AxolinkMCP: boolP(true)},
 	}
 	featureOff := &omniconfig.OmniConfig{
-		Features: &omniconfig.Features{AxolinkMCP: false},
+		Features: &omniconfig.Features{AxolinkMCP: boolP(false)},
 	}
 
 	tests := []struct {
@@ -60,6 +62,12 @@ func TestResolveAxolinkMCPEnabled(t *testing.T) {
 			name:       "nil cfg.Features → defaults to enabled",
 			cliDisable: false,
 			cfg:        &omniconfig.OmniConfig{Features: nil},
+			want:       true,
+		},
+		{
+			name:       "cfg.Features.AxolinkMCP nil (key absent from config) → defaults to enabled",
+			cliDisable: false,
+			cfg:        &omniconfig.OmniConfig{Features: &omniconfig.Features{AxolinkMCP: nil}},
 			want:       true,
 		},
 	}
