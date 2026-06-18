@@ -188,6 +188,7 @@ func (m *ServiceMux) Run(ctx context.Context, log *slog.Logger) error {
 	// stopAxo) so a rapid disable→enable toggle can't spawn a second runner
 	// while the first is still winding down.
 	var axoMu sync.Mutex
+	var axoWg sync.WaitGroup
 	var axoCancel context.CancelFunc
 	axoRunning := false
 
