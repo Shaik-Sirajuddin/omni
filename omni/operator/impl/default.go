@@ -1279,11 +1279,20 @@ func (o *DefaultOperator) UpgradeAgent(params operator.UpgradeAgentParams) error
 	if version == "" {
 		version = operator.LatestVersion
 	}
-	if err := o.agentMemory.Upgrade(agent.MemoryDir, version); err != nil {
+	newDir, err := o.agentMemory.Upgrade(agent.MemoryDir, version)
+	if err != nil {
 		logger.Error("UpgradeAgent: template upgrade failed", "agentID", params.ID, "version", version, "memoryDir", agent.MemoryDir, "err", err)
 		return fmt.Errorf("operator: upgrade agent %q: %w", params.ID, err)
 	}
-	logger.Info("UpgradeAgent: completed", "agentID", params.ID, "version", version, "memoryDir", agent.MemoryDir)
+	if newDir != agent.MemoryDir {
+		logger.Info("UpgradeAgent: agent dir relocated, updating store", "agentID", params.ID, "oldDir", agent.MemoryDir, "newDir", newDir)
+		agent.MemoryDir = newDir
+		if err := o.store.UpdateAgent(agent); err != nil {
+			logger.Error("UpgradeAgent: store update failed after relocation", "agentID", params.ID, "newDir", newDir, "err", err)
+			return fmt.Errorf("operator: upgrade agent %q: update store after relocation: %w", params.ID, err)
+		}
+	}
+	logger.Info("UpgradeAgent: completed", "agentID", params.ID, "version", version, "memoryDir", newDir)
 	return nil
 }
 

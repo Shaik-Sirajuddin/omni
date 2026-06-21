@@ -222,7 +222,10 @@ type AgentMemory interface {
 
 	// Upgrade applies a (newer) template version to an existing agent memory dir.
 	// Non-destructive: files not part of the template are left untouched.
-	Upgrade(memDir, version string) error
+	// Returns the (possibly relocated) memory directory path and any error.
+	// When the agent's layout version changes (e.g. v1→v3), the directory is
+	// moved to the new canonical location before the template is applied.
+	Upgrade(memDir, version string) (string, error)
 
 	// Delete removes the agent memory directory from disk.
 	Delete(memDir string) error
@@ -281,25 +284,34 @@ func (m *defaultAgentMemory) Create(memDir string) error {
 	return nil
 }
 
-func (m *defaultAgentMemory) Upgrade(memDir, version string) error {
+func (m *defaultAgentMemory) Upgrade(memDir, version string) (string, error) {
 	logger.Info("memory.Upgrade: start", "memoryDir", memDir, "version", version)
 	if !templateExists(version) {
 		logger.Error("memory.Upgrade: unknown template version", "memoryDir", memDir, "version", version)
-		return fmt.Errorf("unknown template version %q", version)
+		return memDir, fmt.Errorf("unknown template version %q", version)
 	}
+	targetCode := versionCode(version)
 	current, err := readVersionCode(memDir)
-	if err == nil && current >= versionCode(version) {
-		logger.Error("memory.Upgrade: upgrade not needed", "memoryDir", memDir, "currentVersionCode", current, "targetVersion", version)
-		return fmt.Errorf("already at version %s (code %d)", version, current)
+	if err == nil && current >= targetCode {
+		logger.Info("memory.Upgrade: already at target version, no-op", "memoryDir", memDir, "currentVersionCode", current, "targetVersion", version)
+		return memDir, nil
 	}
-	workspaceRoot := workspaceRootFromAgentDir(memDir)
 	agentName := filepath.Base(memDir)
-	if err := applyTemplate(workspaceRoot, memDir, agentName, version); err != nil {
-		logger.Error("memory.Upgrade: apply template failed", "memoryDir", memDir, "version", version, "err", err)
-		return err
+	memRoot := workspaceRootFromAgentDir(memDir)
+	targetDir := filepath.Join(memRoot, layoutForVersion(targetCode).agentSubDir(agentName))
+	if targetDir != memDir {
+		logger.Info("memory.Upgrade: relocating agent dir", "from", memDir, "to", targetDir)
+		if err := os.Rename(memDir, targetDir); err != nil {
+			logger.Error("memory.Upgrade: relocation failed", "from", memDir, "to", targetDir, "err", err)
+			return memDir, fmt.Errorf("relocate agent dir: %w", err)
+		}
 	}
-	logger.Info("memory.Upgrade: completed", "memoryDir", memDir, "version", version)
-	return nil
+	if err := applyTemplate(memRoot, targetDir, agentName, version); err != nil {
+		logger.Error("memory.Upgrade: apply template failed", "memoryDir", targetDir, "version", version, "err", err)
+		return targetDir, err
+	}
+	logger.Info("memory.Upgrade: completed", "memoryDir", targetDir, "version", version)
+	return targetDir, nil
 }
 
 func (m *defaultAgentMemory) Delete(memDir string) error {
@@ -387,7 +399,8 @@ func copyTemplateTree(root, destDir string, ctx templateContext) error {
 			return err
 		}
 		logger.Debug("copyTemplateTree: write file", "dest", dest)
-		return os.WriteFile(dest, data, 0o644)
+		rendered := renderTemplateName(string(data), ctx)
+		return os.WriteFile(dest, []byte(rendered), 0o644)
 	})
 }
 
