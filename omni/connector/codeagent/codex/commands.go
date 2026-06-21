@@ -24,6 +24,11 @@ const (
 	Codex codeagent.Provider = "codex"
 )
 
+// createSeedTimeout is the maximum time allowed for the bootstrap seed call
+// when no deadline is already set on p.Context. This guards against an
+// unauthenticated or hung CLI blocking the operator indefinitely.
+const createSeedTimeout = 120 * time.Second
+
 // submitKey is the key sequence codex uses to submit a prompt in interactive mode.
 const submitKey = "\r"
 
@@ -111,9 +116,24 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	if sessionID == "" {
 		// Bootstrap a real codex session to obtain the actual codex session ID.
 		// Runs `codex exec . --json` and parses the thread_id from the first JSON line.
+		//
+		// Derive a context for the bootstrap: honour p.Context when provided; if it
+		// has no deadline apply a bounded default so a hung CLI cannot block forever.
+		bootstrapCtx := p.Context
+		if bootstrapCtx == nil {
+			bootstrapCtx = context.Background()
+		}
+		if _, hasDeadline := bootstrapCtx.Deadline(); !hasDeadline {
+			var cancelBootstrap context.CancelFunc
+			bootstrapCtx, cancelBootstrap = context.WithTimeout(bootstrapCtx, createSeedTimeout)
+			defer cancelBootstrap()
+		}
 		var bootstrapErr error
-		sessionID, bootstrapErr = bootstrapSession(workDir, binPath, model, env)
+		sessionID, bootstrapErr = bootstrapSessionCtx(bootstrapCtx, workDir, binPath, model, env)
 		if bootstrapErr != nil || sessionID == "" {
+			if bootstrapCtx.Err() != nil {
+				return nil, fmt.Errorf("codex: create: bootstrap timed out after %s (is the CLI authenticated?): %w", createSeedTimeout, bootstrapCtx.Err())
+			}
 			// Non-fatal: fall back to the caller-supplied ID (or a generated one).
 			if p.ID != "" {
 				sessionID = p.ID
@@ -187,6 +207,13 @@ func verifySessionExists(workDir, binPath, sessionID string) error {
 func bootstrapSession(workDir, binPath, model string, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	return bootstrapSessionCtx(ctx, workDir, binPath, model, env)
+}
+
+// bootstrapSessionCtx is the context-aware core of bootstrapSession.
+// The caller provides ctx, which may already carry a deadline from the operator
+// (operatorCreateTimeout) or from the connector's own createSeedTimeout.
+func bootstrapSessionCtx(ctx context.Context, workDir, binPath, model string, env []string) (string, error) {
 
 	args := []string{"exec", ".", "--json", "--skip-git-repo-check", "-C", workDir}
 	logger.Info("bootstrapSession: running command", "bin", binPath, "args", args)
