@@ -31,7 +31,7 @@ func TestVFX01CreatedAgentHasNoAgentNamePlaceholder(t *testing.T) {
 	ctx := context.Background()
 
 	agentName := "vfxcreated"
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", "--name", agentName, "--workspace", cfg.Workspace)
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	t.Logf("create: %s", out)
 	require.Equal(t, 0, code, "agent create failed: %s", out)
 
@@ -118,7 +118,7 @@ func TestVFX04ValidateFixIdempotentOnCleanFile(t *testing.T) {
 	makeV3Agent(t, cfg, memDir, agentName)
 
 	agentDir := fmt.Sprintf("%s/%s", memDir, agentName)
-	original, origCode, origErr := cfg.Exec.RunCommand(ctx, []string{"cat", agentDir + "/memory.md"})
+	origCode, original, origErr := cfg.Exec.RunCommand(ctx, []string{"cat", agentDir + "/memory.md"})
 	require.NoError(t, origErr)
 	require.Equal(t, 0, origCode)
 
@@ -133,7 +133,7 @@ func TestVFX04ValidateFixIdempotentOnCleanFile(t *testing.T) {
 	assert.Equal(t, 0, code2, "second --fix must succeed (idempotent)")
 
 	// File content must be unchanged (no spurious rewrites).
-	after, afterCode, afterErr := cfg.Exec.RunCommand(ctx, []string{"cat", agentDir + "/memory.md"})
+	afterCode, after, afterErr := cfg.Exec.RunCommand(ctx, []string{"cat", agentDir + "/memory.md"})
 	require.NoError(t, afterErr)
 	require.Equal(t, 0, afterCode)
 	assert.Equal(t, string(original), string(after),

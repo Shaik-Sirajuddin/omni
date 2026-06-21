@@ -40,7 +40,7 @@ func TestUPG01UpgradeRelocatesV1AgentToV3(t *testing.T) {
 	writeFile(t, cfg, memDir+"/version.yaml", "default_version: v1\n")
 
 	// Create a v1 agent using the CLI.
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", "--name", agentName, "--workspace", cfg.Workspace)
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	t.Logf("create v1 agent: %s", out)
 	require.Equal(t, 0, code, "agent create (v1) failed: %s", out)
 
@@ -67,7 +67,7 @@ func TestUPG01UpgradeRelocatesV1AgentToV3(t *testing.T) {
 	assert.NotEqual(t, 0, v1Code, "old v1 agent dir must not exist after upgrade")
 
 	// metadata.yaml must report version_code: 3.
-	metaOut, metaCode, metaErr := cfg.Exec.RunCommand(ctx, []string{"grep", "version_code", v3Dir + "/metadata.yaml"})
+	metaCode, metaOut, metaErr := cfg.Exec.RunCommand(ctx, []string{"grep", "version_code", v3Dir + "/metadata.yaml"})
 	require.NoError(t, metaErr)
 	require.Equal(t, 0, metaCode, "metadata.yaml must be readable")
 	assert.True(t, strings.Contains(string(metaOut), "3"), "version_code must be 3 in metadata.yaml, got: %s", metaOut)
@@ -83,7 +83,7 @@ func TestUPG02UpgradeIdempotentOnV3Agent(t *testing.T) {
 	agentName := "upgv3idem"
 
 	// Create a v3 agent (default version).
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", "--name", agentName, "--workspace", cfg.Workspace)
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	t.Logf("create v3 agent: %s", out)
 	require.Equal(t, 0, code, "agent create failed: %s", out)
 
@@ -114,7 +114,7 @@ func TestUPG03UpgradePersistsNewMemoryDirInStore(t *testing.T) {
 
 	// Create under v1.
 	writeFile(t, cfg, memDir+"/version.yaml", "default_version: v1\n")
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", "--name", agentName, "--workspace", cfg.Workspace)
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	require.Equal(t, 0, code, "agent create (v1): %s", out)
 
 	// Upgrade to v3.
