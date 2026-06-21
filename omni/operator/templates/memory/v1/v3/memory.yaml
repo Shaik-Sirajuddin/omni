@@ -1,0 +1,18 @@
+apiVersion: memory.v3
+patch: 1
+
+definitions:
+  - agent_folder: memory/<AGENT_NAME>/
+  - collab_folder: memory/collab/tasks/<AGENT_NAME>/
+  - collab_tasks: memory/collab/tasks/*/
+
+instructions:
+  - agent_folder/instructions/memory.md contains your primary instructions — read at session start
+  - agent_folder/skills/ holds reusable skill definitions
+  - agent_folder/knowledge/ holds domain knowledge; com/ sub-folder for inter-agent shared facts
+  - agent_folder/gen/plans/ is where you write execution plans
+  - agent_folder/gen/state/ is where you record state snapshots after each execution
+  - collab_folder contains incoming task files from other agents
+  - to send a task to another agent, write a file into memory/collab/tasks/<target_agent>/
+  - discover available agents by listing directories directly under memory/
+  - strictly respect your sandbox: memory/<AGENT_NAME>/ — do not write outside it without delegation

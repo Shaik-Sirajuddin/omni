@@ -93,17 +93,25 @@ func TestCreateAgent(t *testing.T) {
 
 		assert.DirExists(t, result.Agents[0].MemoryDir, "Agent memory directory should exist")
 		assert.Equal(t, "operator-a", result.Agents[0].Name, "Requested agent name should be preserved")
-		assert.Equal(t, filepath.Join(string(workspace), "memory", "agents", result.Agents[0].Name), result.Agents[0].MemoryDir, "Agent memory directory should follow the new layout")
+		// v3 layout: agent lives directly under memory/<name> (no agents/ sub-dir).
+		assert.Equal(t, filepath.Join(string(workspace), "memory", result.Agents[0].Name), result.Agents[0].MemoryDir, "Agent memory directory should follow the v3 layout")
 		_, memoryStatErr := os.Stat(filepath.Join(result.Agents[0].MemoryDir, "entry", "data", "memory.yaml"))
-		assert.ErrorIs(t, memoryStatErr, os.ErrNotExist, "Per-agent memory.yaml should not be created")
+		assert.ErrorIs(t, memoryStatErr, os.ErrNotExist, "Per-agent legacy memory.yaml should not be created")
 		_, semanticsStatErr := os.Stat(filepath.Join(result.Agents[0].MemoryDir, "entry", "data", "semantics.yaml"))
-		assert.ErrorIs(t, semanticsStatErr, os.ErrNotExist, "Per-agent semantics.yaml should not be created")
-		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "generated"), "Generated directory should be created")
-		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "state"), "State directory should be created")
-		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "entry", "tasks"), "entry/tasks directory should be created")
-		assert.FileExists(t, filepath.Join(string(workspace), "memory", "memory.yaml"), "Workspace memory.yaml should be created instead")
-		assert.FileExists(t, filepath.Join(string(workspace), "memory", "agent_"+result.Agents[0].Name+".md"), "Workspace should include the agent entry markdown")
-		assert.FileExists(t, filepath.Join(string(workspace), "memory", "team", "entry", "tasks", result.Agents[0].Name, "default.yaml"), "Collab tasks dir should be seeded for the agent")
+		assert.ErrorIs(t, semanticsStatErr, os.ErrNotExist, "Per-agent legacy semantics.yaml should not be created")
+		// v3 required dirs: instructions, skills, knowledge/com, gen/plans, gen/state.
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "instructions"), "instructions directory should be created (v3)")
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "skills"), "skills directory should be created (v3)")
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "knowledge", "com"), "knowledge/com directory should be created (v3)")
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "gen", "plans"), "gen/plans directory should be created (v3)")
+		assert.DirExists(t, filepath.Join(result.Agents[0].MemoryDir, "gen", "state"), "gen/state directory should be created (v3)")
+		assert.FileExists(t, filepath.Join(result.Agents[0].MemoryDir, "instructions", "memory.md"), "instructions/memory.md should be created (v3)")
+		assert.FileExists(t, filepath.Join(string(workspace), "memory", "memory.yaml"), "Workspace memory.yaml should be created")
+		// v3 does not write a per-agent workspace doc (agent_<name>.md is v1/v2 only).
+		_, agentDocErr := os.Stat(filepath.Join(string(workspace), "memory", "agent_"+result.Agents[0].Name+".md"))
+		assert.ErrorIs(t, agentDocErr, os.ErrNotExist, "v3 should not create a per-agent workspace doc")
+		// v3 collab tasks dir is under memory/collab/tasks/<name>/.
+		assert.FileExists(t, filepath.Join(string(workspace), "memory", "collab", "tasks", result.Agents[0].Name, "default.yaml"), "Collab tasks dir should be seeded for the agent (v3)")
 
 		workspaces, err := op.ListWorkspaces(operator.ListWorkspacesParams{})
 		require.NoError(t, err, "ListWorkspaces should succeed after agent creation")
@@ -150,7 +158,9 @@ func TestCreateAgent(t *testing.T) {
 		require.NotEmpty(t, result.Agents, "Stored agent should be returned")
 		assert.Equal(t, sandbox.WorkspaceDir(cwd), result.Agents[0].WorkspaceDir, "Workspace should default to the current directory when no memory root exists")
 		assert.FileExists(t, filepath.Join(cwd, "memory", "memory.yaml"), "Workspace memory root should be created automatically")
-		assert.FileExists(t, filepath.Join(cwd, "memory", "agent_operator-c.md"), "Workspace agent markdown should be created")
+		// v3 does not create a per-agent workspace markdown doc.
+		_, agentDocErr := os.Stat(filepath.Join(cwd, "memory", "agent_operator-c.md"))
+		assert.ErrorIs(t, agentDocErr, os.ErrNotExist, "v3 should not create a per-agent workspace doc")
 	})
 
 	t.Run("ResolvesWorkspaceFromNearestAncestorMemory", func(t *testing.T) {
@@ -175,7 +185,9 @@ func TestCreateAgent(t *testing.T) {
 		require.NoError(t, err, "ListCodeAgents should default to the resolved ancestor workspace")
 		require.NotEmpty(t, result.Agents, "Stored agent should be returned")
 		assert.Equal(t, sandbox.WorkspaceDir(workspace), result.Agents[0].WorkspaceDir, "Workspace should resolve to the ancestor containing memory")
-		assert.FileExists(t, filepath.Join(workspace, "memory", "agent_operator-d.md"), "Workspace agent markdown should be created in the ancestor workspace")
+		// v3 does not create a per-agent workspace doc.
+		_, agentDocErr := os.Stat(filepath.Join(workspace, "memory", "agent_operator-d.md"))
+		assert.ErrorIs(t, agentDocErr, os.ErrNotExist, "v3 should not create a per-agent workspace doc")
 	})
 
 	t.Run("RejectsDuplicateNameInSameWorkspace", func(t *testing.T) {
@@ -348,14 +360,21 @@ func TestTeamInit(t *testing.T) {
 		require.NoError(t, err, "TeamInit should succeed when memory is enabled")
 
 		assert.FileExists(t, filepath.Join(workspace, "memory", "memory.yaml"), "Workspace memory.yaml should be created")
-		assert.FileExists(t, filepath.Join(workspace, "memory", "semantics.yaml"), "Workspace semantics.yaml should be created")
+		// semantics.yaml is v1-only; v3 memory template does not include it.
+		_, semanticsErr := os.Stat(filepath.Join(workspace, "memory", "semantics.yaml"))
+		assert.ErrorIs(t, semanticsErr, os.ErrNotExist, "v3 workspace should not have a semantics.yaml")
 		assert.FileExists(t, filepath.Join(workspace, "memory", "metadata.yaml"), "memory metadata should be created")
 		assert.DirExists(t, filepath.Join(workspace, "memory", ".git"), "memory directory should be initialised as a git repo")
 		assert.FileExists(t, filepath.Join(workspace, "agent_memory.md"), "Workspace should include the memory entry markdown")
-		assert.DirExists(t, filepath.Join(workspace, "memory", "agents", "guide"), "TeamInit should create the default guide agent")
+		// v3 layout: guide agent lives directly under memory/guide (no agents/ sub-dir).
+		assert.DirExists(t, filepath.Join(workspace, "memory", "guide"), "TeamInit should create the default guide agent (v3 layout)")
+		_, guideLegacyErr := os.Stat(filepath.Join(workspace, "memory", "agents", "guide"))
+		assert.ErrorIs(t, guideLegacyErr, os.ErrNotExist, "v3 should not create guide under agents/ sub-dir")
 		_, guideMemoryErr := os.Stat(filepath.Join(workspace, "memory", "guide", "entry", "data", "memory.yaml"))
-		assert.ErrorIs(t, guideMemoryErr, os.ErrNotExist, "Guide agent should not receive per-agent memory data files")
-		assert.FileExists(t, filepath.Join(workspace, "memory", "agent_guide.md"), "Guide agent workspace markdown should be created")
+		assert.ErrorIs(t, guideMemoryErr, os.ErrNotExist, "Guide agent should not receive per-agent legacy memory data files")
+		// v3 does not write a per-agent workspace doc.
+		_, guideDocErr := os.Stat(filepath.Join(workspace, "memory", "agent_guide.md"))
+		assert.ErrorIs(t, guideDocErr, os.ErrNotExist, "v3 should not create a per-agent workspace doc for guide")
 
 		result, err := op.ListCodeAgents(operator.GetCodeAgentsParams{Workspace: sandbox.WorkspaceDir(workspace)})
 		require.NoError(t, err, "ListCodeAgents should resolve agents for the initialised workspace")
