@@ -3,6 +3,7 @@ patch: 1
 
 definitions:
   - agent_folder: memory/<AGENT_NAME>/
+  - tasks_folder: memory/<AGENT_NAME>/tasks/
   - collab_folder: memory/collab/tasks/<AGENT_NAME>/
   - collab_tasks: memory/collab/tasks/*/
 
@@ -12,6 +13,7 @@ instructions:
   - agent_folder/knowledge/ holds domain knowledge; com/ sub-folder for inter-agent shared facts
   - agent_folder/gen/plans/ is where you write execution plans
   - agent_folder/gen/state/ is where you record state snapshots after each execution
+  - tasks_folder holds your OWN task definitions, flat and version-namespaced (e.g. tasks/v1.2.8/agent.yaml); do not use entry/tasks/ or a top-level memory/tasks/
   - collab_folder contains incoming task files from other agents
   - to send a task to another agent, write a file into memory/collab/tasks/<target_agent>/
   - discover available agents by listing directories directly under memory/

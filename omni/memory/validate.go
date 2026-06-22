@@ -386,6 +386,15 @@ func validateTree(targetPath, memRoot string, opts Options, available map[int]st
 		if versionDirRE.MatchString(name) || strings.HasPrefix(name, ".") || infraDirs[name] {
 			continue
 		}
+		// A top-level tasks/ bucket is invalid in v3: own task files belong under
+		// an agent (memory/<agent>/tasks/), cross-agent handoffs under collab/tasks/.
+		// Consequently the name "tasks" is reserved at the memory root and is never
+		// validated as an agent.
+		if name == "tasks" {
+			report.addWarn(filepath.Join(targetPath, name),
+				"top-level memory/tasks/ is not a valid v3 location; own tasks belong at memory/<agent>/tasks/ and handoffs at memory/collab/tasks/<agent>/")
+			continue
+		}
 		// Forbidden dirs at tree root: warn, but do NOT validate as an agent.
 		if forbiddenDirs[name] {
 			report.addWarn(filepath.Join(targetPath, name),
@@ -458,6 +467,9 @@ func validateSingleAgent(agentPath, memRoot string, opts Options, available map[
 	// Format checks: all *.yaml in the agent dir must parse.
 	lintYAMLUnder(agentPath, &report)
 
+	// Schema checks for the agent's own task files (warnings only).
+	lintTaskFilesUnder(agentPath, &report)
+
 	return report, nil
 }
 
@@ -523,7 +535,14 @@ func validateV3Dir(base string, d v3AgentDir, opts Options, report *Report) {
 }
 
 // enforceCircuitRule checks that every directory under agentPath has a memory.md.
+// It runs after the structural checks (validateV3Dir), which already flag missing
+// required memory.md files by their full path; we skip those paths here to avoid
+// double-reporting the same missing file.
 func enforceCircuitRule(agentPath string, opts Options, report *Report) {
+	alreadyReported := make(map[string]bool)
+	for _, v := range report.Violations {
+		alreadyReported[v.Path] = true
+	}
 	err := filepath.Walk(agentPath, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -532,6 +551,9 @@ func enforceCircuitRule(agentPath string, opts Options, report *Report) {
 			return nil
 		}
 		mmd := filepath.Join(path, "memory.md")
+		if alreadyReported[mmd] {
+			return nil
+		}
 		if _, err := os.Stat(mmd); err != nil {
 			if opts.Fix {
 				scaffoldMemoryMd(mmd, filepath.Base(path), report)
@@ -646,6 +668,71 @@ func lintYAMLUnder(root string, report *Report) {
 		}
 		return nil
 	})
+}
+
+// lintTaskFilesUnder applies light schema checks to the agent's own task files
+// under <agentPath>/tasks/.  These are warnings, not errors, because the operator's
+// task files use a custom YAML-like syntax that predates strict schemas; the goal is
+// to nudge the loose, drifted shapes toward a consistent one.
+func lintTaskFilesUnder(agentPath string, report *Report) {
+	tasksRoot := filepath.Join(agentPath, "tasks")
+	if !dirExists(tasksRoot) {
+		return
+	}
+	_ = filepath.Walk(tasksRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		text := string(data)
+		// `instructions :` with a space before the colon (malformed key).
+		if strings.Contains(text, "instructions :") {
+			report.addWarn(path, "task schema: 'instructions :' has a space before the colon; use 'instructions:'")
+		}
+		// `task:` checks: warn on a bare/empty task value, and on a file that
+		// declares no task entry at all.
+		hasTaskKey, hasEmptyTask := false, false
+		for _, line := range strings.Split(text, "\n") {
+			t := strings.TrimPrefix(strings.TrimSpace(line), "- ")
+			switch {
+			case t == "task:" || t == "task :":
+				hasTaskKey, hasEmptyTask = true, true
+			case strings.HasPrefix(t, "task:") || strings.HasPrefix(t, "task :"):
+				hasTaskKey = true
+			}
+		}
+		if hasEmptyTask {
+			report.addWarn(path, "task schema: 'task:' has an empty value; give the task a name or file")
+		}
+		if !hasTaskKey {
+			report.addWarn(path, "task schema: no 'task:' entry found; a task file must declare at least one task")
+		}
+		// Missing recommended top-level keys.
+		for _, key := range []string{"type", "version", "status"} {
+			if !taskHasKey(text, key) {
+				report.addWarn(path, fmt.Sprintf("task schema: missing recommended '%s:' field", key))
+			}
+		}
+		return nil
+	})
+}
+
+// taskHasKey reports whether text declares the given top-level-ish key, tolerating
+// a leading list dash and an errant space before the colon.
+func taskHasKey(text, key string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimPrefix(strings.TrimSpace(line), "- ")
+		if strings.HasPrefix(t, key+":") || strings.HasPrefix(t, key+" :") {
+			return true
+		}
+	}
+	return false
 }
 
 func lintYAMLFile(path string) error {
