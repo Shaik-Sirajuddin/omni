@@ -239,6 +239,37 @@ func TestUpgradeRelocatesV1ToV3(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Upgrade rolls back the relocation when applyTemplate fails
+// ---------------------------------------------------------------------------
+
+func TestUpgradeRollsBackRelocationOnApplyTemplateFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("file-permission enforcement is bypassed for root; cannot force applyTemplate failure")
+	}
+	memRoot := t.TempDir()
+	require.NoError(t, writeVersionConfig(memRoot, "v1"))
+	agentName := "myagent"
+	v1Dir := filepath.Join(memRoot, "agents", agentName)
+	require.NoError(t, os.MkdirAll(filepath.Join(v1Dir, "entry", "instructions"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(v1Dir, "metadata.yaml"), []byte("version: v1\nversion_code: 1\n"), 0o644))
+
+	// Make the agent dir read-only so applyTemplate (which writes into the
+	// relocated dir) fails after the rename succeeds. Restore perms on cleanup
+	// so t.TempDir can remove the tree.
+	require.NoError(t, os.Chmod(v1Dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(v1Dir, 0o755) })
+
+	mem := NewDefaultAgentMemory()
+	newDir, err := mem.Upgrade(v1Dir, "v3")
+
+	require.Error(t, err, "Upgrade must fail when applyTemplate cannot write")
+	assert.Equal(t, v1Dir, newDir, "on rollback, Upgrade should return the original dir")
+	assert.DirExists(t, v1Dir, "original v1 dir must be restored after rollback")
+	_, statErr := os.Stat(filepath.Join(memRoot, agentName))
+	assert.True(t, os.IsNotExist(statErr), "relocated v3 dir must not remain after rollback")
+}
+
+// ---------------------------------------------------------------------------
 // Upgrade is idempotent
 // ---------------------------------------------------------------------------
 

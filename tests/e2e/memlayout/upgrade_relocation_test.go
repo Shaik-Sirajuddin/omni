@@ -40,7 +40,7 @@ func TestUPG01UpgradeRelocatesV1AgentToV3(t *testing.T) {
 	writeFile(t, cfg, memDir+"/version.yaml", "default_version: v1\n")
 
 	// Create a v1 agent using the CLI.
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "init", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	t.Logf("create v1 agent: %s", out)
 	require.Equal(t, 0, code, "agent create (v1) failed: %s", out)
 
@@ -83,7 +83,7 @@ func TestUPG02UpgradeIdempotentOnV3Agent(t *testing.T) {
 	agentName := "upgv3idem"
 
 	// Create a v3 agent (default version).
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "init", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	t.Logf("create v3 agent: %s", out)
 	require.Equal(t, 0, code, "agent create failed: %s", out)
 
@@ -114,7 +114,7 @@ func TestUPG03UpgradePersistsNewMemoryDirInStore(t *testing.T) {
 
 	// Create under v1.
 	writeFile(t, cfg, memDir+"/version.yaml", "default_version: v1\n")
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "init", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	require.Equal(t, 0, code, "agent create (v1): %s", out)
 
 	// Upgrade to v3.

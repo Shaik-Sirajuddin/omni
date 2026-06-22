@@ -31,7 +31,7 @@ func TestVFX01CreatedAgentHasNoAgentNamePlaceholder(t *testing.T) {
 	ctx := context.Background()
 
 	agentName := "vfxcreated"
-	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "create", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
+	out, code := harness.RunOmniAllowFail(t, cfg, "agent", "init", agentName, "--workspace", cfg.Workspace, "--provider", "claude")
 	t.Logf("create: %s", out)
 	require.Equal(t, 0, code, "agent create failed: %s", out)
 

@@ -308,7 +308,21 @@ func (m *defaultAgentMemory) Upgrade(memDir, version string) (string, error) {
 	}
 	if err := applyTemplate(memRoot, targetDir, agentName, version); err != nil {
 		logger.Error("memory.Upgrade: apply template failed", "memoryDir", targetDir, "version", version, "err", err)
-		return targetDir, err
+		// Roll back the relocation so the filesystem matches the store record,
+		// which still points at memDir. Otherwise the DB references memDir while
+		// the files live at targetDir, and a retry starts from a path that no
+		// longer exists.
+		if targetDir != memDir {
+			if rbErr := os.Rename(targetDir, memDir); rbErr != nil {
+				// Rollback failed: the files are stuck at targetDir. Report
+				// targetDir so the caller can persist the new location and a
+				// retry can resume from where the files actually are.
+				logger.Error("memory.Upgrade: rollback of relocation failed", "from", targetDir, "to", memDir, "err", rbErr)
+				return targetDir, fmt.Errorf("apply template: %w (relocated to %s but rollback failed: %v)", err, targetDir, rbErr)
+			}
+			logger.Info("memory.Upgrade: rolled back relocation after apply-template failure", "restoredDir", memDir)
+		}
+		return memDir, err
 	}
 	logger.Info("memory.Upgrade: completed", "memoryDir", targetDir, "version", version)
 	return targetDir, nil
