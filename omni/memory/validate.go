@@ -686,6 +686,14 @@ func lintTaskFilesUnder(agentPath string, report *Report) {
 		if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
 			return nil
 		}
+		// Placement: task files must live under a namespace sub-circuit
+		// (tasks/<namespace>/<name>.yaml), never directly in tasks/. A file whose
+		// path relative to tasksRoot has no separator is non-namespaced — reject it.
+		if rel, relErr := filepath.Rel(tasksRoot, path); relErr == nil &&
+			!strings.Contains(rel, string(os.PathSeparator)) {
+			report.addError(path, "task file must live under a namespace dir (tasks/<namespace>/<name>.yaml), not directly in tasks/")
+			return nil
+		}
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return nil

@@ -241,6 +241,23 @@ func TestTasksNamespaceMissingMemoryMd(t *testing.T) {
 	}
 }
 
+// A task file placed directly under tasks/ (no namespace dir) is rejected.
+func TestTaskFileMustBeNamespaced(t *testing.T) {
+	root := newV3Root(t)
+	a := scaffoldV3Agent(t, root, "kappa")
+	// Well-formed schema, but placed directly in tasks/ instead of tasks/<ns>/.
+	writeFileT(t, filepath.Join(a, "tasks", "foo.yaml"),
+		"tasks:\n- task: do-thing\n  type: impl\n  version: v1\n  status: open\n")
+
+	rep, err := Validate(a, Options{MemoryRoot: root})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if !hasMsg(rep, SeverityError, "must live under a namespace dir") {
+		t.Fatalf("expected non-namespaced task-file error, got:\n%s", errorMessages(rep))
+	}
+}
+
 // A task file with no task: entry at all is flagged.
 func TestTaskSchemaMissingTaskEntry(t *testing.T) {
 	root := newV3Root(t)
