@@ -14,6 +14,7 @@ This is the memory root for agent `<agent_name>` (layout v3).
 |------|---------|
 | `instructions/memory.md` | Primary system instructions — read at session start |
 | `skills/` | Reusable skill definitions |
+| `tasks/` | Your own task definitions, flat and version-namespaced (`tasks/<ns>/<name>.yaml`) |
 | `knowledge/` | Domain knowledge; `com/` for inter-agent shared facts |
 | `gen/plans/` | Execution plans |
 | `gen/state/` | State snapshots after each execution |

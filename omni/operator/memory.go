@@ -106,6 +106,7 @@ var versionLayouts = map[int]layoutConfig{
 		requiredDirs: []string{
 			"instructions",
 			"skills",
+			"tasks",
 			filepath.Join("knowledge", "com"),
 			filepath.Join("gen", "plans"),
 			filepath.Join("gen", "state"),
