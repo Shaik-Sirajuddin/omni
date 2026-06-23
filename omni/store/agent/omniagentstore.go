@@ -108,11 +108,11 @@ func (s *sqlOmniAgentStore) CreateSession(ID string, session *omniagent.CodeSess
 // GetSettings returns the settings for the given agent.
 func (s *sqlOmniAgentStore) GetSettings(ID string) (*omniagent.Settings, error) {
 	row := s.db.QueryRow(
-		`SELECT sandbox, default_model_provider, default_model_name
+		`SELECT sandbox, default_model_provider, default_model_name, run_config
 		 FROM agent_settings WHERE agent_id = ?`, ID,
 	)
-	var sandboxJSON, provider, modelName string
-	if err := row.Scan(&sandboxJSON, &provider, &modelName); err != nil {
+	var sandboxJSON, provider, modelName, runCfgJSON string
+	if err := row.Scan(&sandboxJSON, &provider, &modelName, &runCfgJSON); err != nil {
 		return nil, err
 	}
 	settings := &omniagent.Settings{
@@ -125,6 +125,13 @@ func (s *sqlOmniAgentStore) GetSettings(ID string) (*omniagent.Settings, error) 
 		}
 		settings.Sandbox = &sb
 	}
+	if runCfgJSON != "" && runCfgJSON != "{}" {
+		var rc omniagent.RunConfig
+		if err := json.Unmarshal([]byte(runCfgJSON), &rc); err != nil {
+			return nil, err
+		}
+		settings.RunConfig = &rc
+	}
 	return settings, nil
 }
 
@@ -134,15 +141,20 @@ func (s *sqlOmniAgentStore) UpdateSettings(ID string, settings *omniagent.Settin
 	if err != nil {
 		return err
 	}
+	runCfgJSON, err := marshalRunConfig(settings.RunConfig)
+	if err != nil {
+		return err
+	}
 	provider, modelName := utils.ModelFields(settings.DefaultModel)
 	_, err = s.db.Exec(
-		`INSERT INTO agent_settings (agent_id, sandbox, default_model_provider, default_model_name)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO agent_settings (agent_id, sandbox, default_model_provider, default_model_name, run_config)
+		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(agent_id) DO UPDATE SET
 		   sandbox = excluded.sandbox,
 		   default_model_provider = excluded.default_model_provider,
-		   default_model_name = excluded.default_model_name`,
-		ID, sandboxJSON, provider, modelName,
+		   default_model_name = excluded.default_model_name,
+		   run_config = excluded.run_config`,
+		ID, sandboxJSON, provider, modelName, runCfgJSON,
 	)
 	return err
 }
@@ -232,5 +244,13 @@ func marshalSandbox(sb *sandbox.Config) (string, error) {
 		return "{}", nil
 	}
 	b, err := json.Marshal(sb)
+	return string(b), err
+}
+
+func marshalRunConfig(rc *omniagent.RunConfig) (string, error) {
+	if rc == nil {
+		return "{}", nil
+	}
+	b, err := json.Marshal(rc)
 	return string(b), err
 }

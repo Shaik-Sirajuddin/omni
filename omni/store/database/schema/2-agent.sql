@@ -10,5 +10,6 @@ CREATE TABLE IF NOT EXISTS agent_settings (
     sandbox                TEXT NOT NULL DEFAULT '{}',
     default_model_provider TEXT NOT NULL DEFAULT '',
     default_model_name     TEXT NOT NULL DEFAULT '',
+    run_config             TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY (agent_id) REFERENCES agents(id)
 );

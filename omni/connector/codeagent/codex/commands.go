@@ -316,6 +316,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		args = append(args, "--last")
 		resolvedSessionID = "last"
 	}
+	args = append(args, p.ExtraArgs...)
 
 	logger.Info("Resume: running command", "bin", binPath, "args", args)
 

@@ -730,6 +730,14 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 			if len(args) == 1 {
 				resolved.Name = args[0]
 			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
 			return c.operator.CreateAgent(operator.CreateAgentParams{
 				Workspace:          sandbox.WorkspaceDir(resolved.Workspace),
 				Name:               resolved.Name,
@@ -739,6 +747,7 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 				ResumeIfExists:     resolved.ResumeIfExists,
 				Interactive:        resolved.Interactive,
 				SessionID:          sessionID,
+				RunConfig:          runCfg,
 			})
 		},
 	}
@@ -750,6 +759,8 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 	createCmd.Flags().BoolP("resume_if_exists", "r", flags.ResumeIfExists, "Resume agent when the provided name already exists in workspace")
 	createCmd.Flags().Bool("interactive", flags.Interactive, "Launch agent after create")
 	createCmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
+	createCmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	createCmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
 
 	return createCmd
 }
@@ -771,6 +782,14 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
 			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
 			return c.operator.ResumeAgent(operator.ResumeAgentParams{
 				Workspace:     sandbox.WorkspaceDir(resolved.Workspace),
 				Name:          args[0],
@@ -779,6 +798,9 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 				Model:         resolved.Model,
 				SessionID:     sessionID,
 				Detached:      detach,
+				RunConfig:     runCfg,
+				ClearArgs:     resolved.ClearArgs,
+				ClearEnvs:     resolved.ClearEnvs,
 			})
 		},
 	}
@@ -789,6 +811,10 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 	cmd.Flags().String("model", flags.Model, "Model used only when --init_if_missing creates a new agent")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start PTY daemon session and return immediately without attaching")
+	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
+	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
+	cmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
 	return cmd
 }
 
@@ -1344,6 +1370,23 @@ func loadFlags(cmd *cobra.Command, target any) error {
 		return fmt.Errorf("resolve command flags: %w", err)
 	}
 	return nil
+}
+
+// parseEnvSlice converts ["KEY=VALUE", ...] strings into a map[string]string.
+// Returns an error on any entry that does not contain "=".
+func parseEnvSlice(envs []string) (map[string]string, error) {
+	if len(envs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(envs))
+	for _, e := range envs {
+		idx := strings.IndexByte(e, '=')
+		if idx <= 0 {
+			return nil, fmt.Errorf("--env %q: expected KEY=VALUE format", e)
+		}
+		out[e[:idx]] = e[idx+1:]
+	}
+	return out, nil
 }
 
 func printOutput(kind, format string, v any) error {

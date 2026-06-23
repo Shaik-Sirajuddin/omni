@@ -25,7 +25,8 @@ type CreateSessionParams struct {
 	PermissionMode PermissionMode
 	SystemPrompt   string
 	SessionID      string
-	Envs []string
+	Envs      []string
+	ExtraArgs []string // pass-through flags appended to the provider binary's arg list
 	// RunTime        *sandbox.SandboxRuntime // sandbox disabled
 }
 
@@ -40,8 +41,9 @@ type ResumeSessionParams struct {
 	ID          string
 	ForkSession bool
 	SessionID   string
-	Detached bool
-	Envs     []string
+	Detached  bool
+	Envs      []string
+	ExtraArgs []string // pass-through flags appended to the provider binary's arg list
 	// RunTime     *sandbox.SandboxRuntime // sandbox disabled
 }
 

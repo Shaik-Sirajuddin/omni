@@ -37,13 +37,15 @@ type CLIAgentListFlags struct {
 
 // CLIAgentCreateFlags is a koanf-compatible flag schema for `agent init`.
 type CLIAgentCreateFlags struct {
-	Workspace          string `koanf:"workspace" json:"workspace"`
-	Name               string `koanf:"name" json:"name"`
-	Provider           string `koanf:"provider" json:"provider"`
-	Model              string `koanf:"model" json:"model"`
-	AllowGeneratedName bool   `koanf:"allow_generated_name" json:"allow_generated_name"`
-	ResumeIfExists     bool   `koanf:"resume_if_exists" json:"resume_if_exists"`
-	Interactive        bool   `koanf:"interactive" json:"interactive"`
+	Workspace          string   `koanf:"workspace" json:"workspace"`
+	Name               string   `koanf:"name" json:"name"`
+	Provider           string   `koanf:"provider" json:"provider"`
+	Model              string   `koanf:"model" json:"model"`
+	AllowGeneratedName bool     `koanf:"allow_generated_name" json:"allow_generated_name"`
+	ResumeIfExists     bool     `koanf:"resume_if_exists" json:"resume_if_exists"`
+	Interactive        bool     `koanf:"interactive" json:"interactive"`
+	ExtraArgs          []string `koanf:"arg" json:"arg"`
+	ExtraEnvs          []string `koanf:"env" json:"env"`
 }
 
 // CLIAgentDeleteFlags is a koanf-compatible flag schema for `agent delete`.
@@ -78,10 +80,14 @@ type CLIAgentSandboxSyncFlags struct {
 
 // CLIAgentResumeFlags is a koanf-compatible flag schema for `agent resume`.
 type CLIAgentResumeFlags struct {
-	Workspace     string `koanf:"workspace" json:"workspace"`
-	InitIfMissing bool   `koanf:"init_if_missing" json:"init_if_missing"`
-	Provider      string `koanf:"provider" json:"provider"`
-	Model         string `koanf:"model" json:"model"`
+	Workspace     string   `koanf:"workspace" json:"workspace"`
+	InitIfMissing bool     `koanf:"init_if_missing" json:"init_if_missing"`
+	Provider      string   `koanf:"provider" json:"provider"`
+	Model         string   `koanf:"model" json:"model"`
+	ExtraArgs     []string `koanf:"arg" json:"arg"`
+	ExtraEnvs     []string `koanf:"env" json:"env"`
+	ClearArgs     bool     `koanf:"clear_args" json:"clear_args"`
+	ClearEnvs     bool     `koanf:"clear_envs" json:"clear_envs"`
 }
 
 // CLIAgentUpgradeFlags is a koanf-compatible flag schema for `agent upgrade`.

@@ -108,6 +108,7 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	if p.Model != "" {
 		seedArgs = append(seedArgs, "--model", p.Model)
 	}
+	seedArgs = append(seedArgs, p.ExtraArgs...)
 	seedOut, seedErr := execOutputEnv(workDir, rt, env, binPath, seedArgs...)
 	if seedErr != nil {
 		return nil, fmt.Errorf("claude: create: seed session: %w", seedErr)
@@ -164,6 +165,7 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 	if p.ForkSession {
 		args = append(args, "--fork-session")
 	}
+	args = append(args, p.ExtraArgs...)
 
 	// sandbox disabled:
 	// if rt != nil {
