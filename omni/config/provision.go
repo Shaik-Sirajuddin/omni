@@ -101,8 +101,10 @@ type CLIAgentUpdateFlags struct {
 
 // CLIAgentUpgradeFlags is a koanf-compatible flag schema for `agent upgrade`.
 type CLIAgentUpgradeFlags struct {
-	ID      string `koanf:"id" json:"id"`
-	Version string `koanf:"version" json:"version"`
+	ID        string `koanf:"id" json:"id"`
+	Name      string `koanf:"name" json:"name"`
+	Workspace string `koanf:"workspace" json:"workspace"`
+	Version   string `koanf:"version" json:"version"`
 }
 
 // CLIDoctorCheckFlags is a koanf-compatible flag schema for `doctor check`.

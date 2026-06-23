@@ -868,8 +868,9 @@ func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
 	flags := config.ProvisionAgentUpgradeFlags()
 
 	cmd := &cobra.Command{
-		Use:   "upgrade",
+		Use:   "upgrade [name]",
 		Short: "Upgrade an agent memory template",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if c.operator == nil {
 				return errors.New("operator is required")
@@ -878,8 +879,19 @@ func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
 			}
+			// Accept agent name as positional arg (mirrors `omni agent resume`).
+			if len(args) == 1 {
+				resolved.Name = args[0]
+			}
 			if resolved.ID == "" {
-				return errors.New("agent id is required")
+				if resolved.Name == "" {
+					return errors.New("agent name or --id is required")
+				}
+				id, err := c.resolveAgentIDByName(resolved.Workspace, resolved.Name)
+				if err != nil {
+					return err
+				}
+				resolved.ID = id
 			}
 			return c.operator.UpgradeAgent(operator.UpgradeAgentParams{
 				ID:      resolved.ID,
@@ -888,7 +900,9 @@ func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().String("id", flags.ID, "Agent ID")
+	cmd.Flags().String("id", flags.ID, "Agent ID (alternative to positional name)")
+	cmd.Flags().String("name", flags.Name, "Agent name (alternative to --id)")
+	cmd.Flags().String("workspace", flags.Workspace, "Workspace directory (used with name)")
 	cmd.Flags().String("version", flags.Version, "Target version (default: latest)")
 	return cmd
 }
