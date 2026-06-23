@@ -218,6 +218,72 @@ func TestResumeAgent_ClearArgsThenAddNew(t *testing.T) {
 		"after ClearArgs, only the new flag should reach the connector")
 }
 
+func TestUpdateAgent_PersistsRunConfig(t *testing.T) {
+	op, as, _ := newCapturingOperator(t)
+	workspace := sandbox.WorkspaceDir(t.TempDir())
+
+	// Init with no RunConfig.
+	require.NoError(t, op.CreateAgent(operator.CreateAgentParams{
+		Workspace:   workspace,
+		Name:        "cap-update",
+		Interactive: false,
+	}))
+
+	// Update with new args + envs.
+	require.NoError(t, op.UpdateAgent(operator.UpdateAgentParams{
+		Workspace: workspace,
+		Name:      "cap-update",
+		RunConfig: &omniagent.RunConfig{
+			ExtraArgs: []string{"--dangerously-skip-permissions"},
+			Envs:      map[string]string{"TOKEN": "abc"},
+		},
+	}))
+
+	agents, _ := op.ListCodeAgents(operator.GetCodeAgentsParams{Workspace: workspace})
+	require.Len(t, agents.Agents, 1)
+	settings, err := as.GetSettings(agents.Agents[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, settings.RunConfig)
+	assert.Equal(t, []string{"--dangerously-skip-permissions"}, settings.RunConfig.ExtraArgs)
+	assert.Equal(t, "abc", settings.RunConfig.Envs["TOKEN"])
+}
+
+func TestUpdateAgent_ClearArgsThenSet(t *testing.T) {
+	op, as, _ := newCapturingOperator(t)
+	workspace := sandbox.WorkspaceDir(t.TempDir())
+
+	require.NoError(t, op.CreateAgent(operator.CreateAgentParams{
+		Workspace:   workspace,
+		Name:        "cap-update-clear",
+		RunConfig:   &omniagent.RunConfig{ExtraArgs: []string{"--old"}},
+		Interactive: false,
+	}))
+
+	require.NoError(t, op.UpdateAgent(operator.UpdateAgentParams{
+		Workspace: workspace,
+		Name:      "cap-update-clear",
+		RunConfig: &omniagent.RunConfig{ExtraArgs: []string{"--new"}},
+		ClearArgs: true,
+	}))
+
+	agents, _ := op.ListCodeAgents(operator.GetCodeAgentsParams{Workspace: workspace})
+	settings, _ := as.GetSettings(agents.Agents[0].ID)
+	require.NotNil(t, settings.RunConfig)
+	assert.Equal(t, []string{"--new"}, settings.RunConfig.ExtraArgs)
+}
+
+func TestUpdateAgent_UnknownNameReturnsError(t *testing.T) {
+	op, _, _ := newCapturingOperator(t)
+	workspace := sandbox.WorkspaceDir(t.TempDir())
+
+	err := op.UpdateAgent(operator.UpdateAgentParams{
+		Workspace: workspace,
+		Name:      "does-not-exist",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 func TestResumeAgent_NoOverrideIsNoop(t *testing.T) {
 	op, as, _ := newCapturingOperator(t)
 	workspace := sandbox.WorkspaceDir(t.TempDir())

@@ -237,6 +237,7 @@ func (c *DefaultCli) newAgentCommand() *cobra.Command {
 	agentCmd.AddCommand(c.newAgentListCommand())
 	agentCmd.AddCommand(c.newAgentCreateCommand())
 	agentCmd.AddCommand(c.newAgentResumeCommand())
+	agentCmd.AddCommand(c.newAgentUpdateCommand())
 	agentCmd.AddCommand(c.newAgentUpgradeCommand())
 	agentCmd.AddCommand(c.newAgentDeleteCommand())
 	agentCmd.AddCommand(c.newAgentSwitchProviderCommand())
@@ -811,6 +812,51 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 	cmd.Flags().String("model", flags.Model, "Model used only when --init_if_missing creates a new agent")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start PTY daemon session and return immediately without attaching")
+	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
+	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
+	cmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
+	return cmd
+}
+
+func (c *DefaultCli) newAgentUpdateCommand() *cobra.Command {
+	flags := config.ProvisionAgentUpdateFlags()
+
+	cmd := &cobra.Command{
+		Use:   "update <name>",
+		Short: "Update a persisted agent's run config (args/envs) without launching a session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c.operator == nil {
+				return errors.New("operator is required")
+			}
+			resolved := flags
+			if err := loadFlags(cmd, &resolved); err != nil {
+				return err
+			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
+			if err := c.operator.UpdateAgent(operator.UpdateAgentParams{
+				Workspace: sandbox.WorkspaceDir(resolved.Workspace),
+				Name:      args[0],
+				RunConfig: runCfg,
+				ClearArgs: resolved.ClearArgs,
+				ClearEnvs: resolved.ClearEnvs,
+			}); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "agent %q updated\n", args[0])
+			return nil
+		},
+	}
+
+	cmd.Flags().String("workspace", flags.Workspace, "Workspace directory")
 	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
 	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
 	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")

@@ -90,6 +90,15 @@ type CLIAgentResumeFlags struct {
 	ClearEnvs     bool     `koanf:"clear_envs" json:"clear_envs"`
 }
 
+// CLIAgentUpdateFlags is a koanf-compatible flag schema for `agent update`.
+type CLIAgentUpdateFlags struct {
+	Workspace string   `koanf:"workspace" json:"workspace"`
+	ExtraArgs []string `koanf:"arg" json:"arg"`
+	ExtraEnvs []string `koanf:"env" json:"env"`
+	ClearArgs bool     `koanf:"clear_args" json:"clear_args"`
+	ClearEnvs bool     `koanf:"clear_envs" json:"clear_envs"`
+}
+
 // CLIAgentUpgradeFlags is a koanf-compatible flag schema for `agent upgrade`.
 type CLIAgentUpgradeFlags struct {
 	ID      string `koanf:"id" json:"id"`
@@ -154,6 +163,10 @@ func ProvisionAgentDiscoverFlags() CLIAgentDiscoverFlags {
 
 func ProvisionAgentResumeFlags() CLIAgentResumeFlags {
 	return CLIAgentResumeFlags{}
+}
+
+func ProvisionAgentUpdateFlags() CLIAgentUpdateFlags {
+	return CLIAgentUpdateFlags{}
 }
 
 func ProvisionAgentUpgradeFlags() CLIAgentUpgradeFlags {

@@ -1378,6 +1378,54 @@ func (o *DefaultOperator) DeleteAgent(params operator.DeleteAgentParams) error {
 	return nil
 }
 
+// UpdateAgent merges run_config overrides into the agent's persisted settings
+// without launching a session.
+func (o *DefaultOperator) UpdateAgent(params operator.UpdateAgentParams) error {
+	workspace, err := o.resolveWorkspace(params.Workspace)
+	if err != nil {
+		logger.Error("UpdateAgent: workspace resolution failed", "workspace", params.Workspace, "err", err)
+		return err
+	}
+	name := sanitizeAgentName(params.Name)
+	if name == "" {
+		return fmt.Errorf("operator: agent name is required")
+	}
+
+	agents, err := o.store.ListAgentsByDir(workspace)
+	if err != nil {
+		return fmt.Errorf("operator: update agent: list agents: %w", err)
+	}
+	var agent *omniagent.AgentInfo
+	for _, a := range agents {
+		if a.Name == name {
+			agent = a
+			break
+		}
+	}
+	if agent == nil {
+		return fmt.Errorf("operator: agent %q not found in workspace %q", name, workspace)
+	}
+
+	if o.agentStore == nil {
+		return fmt.Errorf("operator: agent store unavailable")
+	}
+
+	storedSettings, sErr := o.agentStore.GetSettings(agent.ID)
+	if sErr != nil {
+		// No settings row yet — start from scratch.
+		storedSettings = &omniagent.Settings{}
+	}
+
+	merged := mergeRunConfig(storedSettings.RunConfig, params.RunConfig, params.ClearArgs, params.ClearEnvs)
+	storedSettings.RunConfig = merged
+	if uErr := o.agentStore.UpdateSettings(agent.ID, storedSettings); uErr != nil {
+		logger.Error("UpdateAgent: settings persist failed", "agentID", agent.ID, "err", uErr)
+		return fmt.Errorf("operator: update agent %q: %w", name, uErr)
+	}
+	logger.Info("UpdateAgent: run_config updated", "agentID", agent.ID, "name", name)
+	return nil
+}
+
 // workspaceDirOf converts a TeamInfo directory string to a WorkspaceDir.
 func (o *DefaultOperator) workspaceDirOf(ws *operator.TeamInfo) sandbox.WorkspaceDir {
 	return sandbox.WorkspaceDir(ws.WorkspaceDir)
