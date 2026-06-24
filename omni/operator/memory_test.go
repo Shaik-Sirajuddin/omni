@@ -213,3 +213,99 @@ func TestListTemplateVersionsIncludesV3(t *testing.T) {
 	assert.Contains(t, versions, "v3", "v3 should appear in ListTemplateVersions output")
 	assert.Contains(t, versions, "v1", "v1 should still appear in ListTemplateVersions output")
 }
+
+// ---------------------------------------------------------------------------
+// Upgrade relocates v1→v3
+// ---------------------------------------------------------------------------
+
+func TestUpgradeRelocatesV1ToV3(t *testing.T) {
+	memRoot := t.TempDir()
+	require.NoError(t, writeVersionConfig(memRoot, "v1"))
+	agentName := "myagent"
+	v1Dir := filepath.Join(memRoot, "agents", agentName)
+	require.NoError(t, os.MkdirAll(v1Dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(v1Dir, "metadata.yaml"), []byte("version: v1\nversion_code: 1\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(v1Dir, "entry", "instructions"), 0o755))
+
+	mem := NewDefaultAgentMemory()
+	newDir, err := mem.Upgrade(v1Dir, "v3")
+	require.NoError(t, err)
+
+	expectedDir := filepath.Join(memRoot, agentName)
+	assert.Equal(t, expectedDir, newDir, "Upgrade should return the new v3 dir")
+	assert.DirExists(t, expectedDir, "v3 dir should exist after relocation")
+	_, err = os.Stat(v1Dir)
+	assert.True(t, os.IsNotExist(err), "old v1 dir should be gone after relocation")
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade rolls back the relocation when applyTemplate fails
+// ---------------------------------------------------------------------------
+
+func TestUpgradeRollsBackRelocationOnApplyTemplateFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("file-permission enforcement is bypassed for root; cannot force applyTemplate failure")
+	}
+	memRoot := t.TempDir()
+	require.NoError(t, writeVersionConfig(memRoot, "v1"))
+	agentName := "myagent"
+	v1Dir := filepath.Join(memRoot, "agents", agentName)
+	require.NoError(t, os.MkdirAll(filepath.Join(v1Dir, "entry", "instructions"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(v1Dir, "metadata.yaml"), []byte("version: v1\nversion_code: 1\n"), 0o644))
+
+	// Make the agent dir read-only so applyTemplate (which writes into the
+	// relocated dir) fails after the rename succeeds. Restore perms on cleanup
+	// so t.TempDir can remove the tree.
+	require.NoError(t, os.Chmod(v1Dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(v1Dir, 0o755) })
+
+	mem := NewDefaultAgentMemory()
+	newDir, err := mem.Upgrade(v1Dir, "v3")
+
+	require.Error(t, err, "Upgrade must fail when applyTemplate cannot write")
+	assert.Equal(t, v1Dir, newDir, "on rollback, Upgrade should return the original dir")
+	assert.DirExists(t, v1Dir, "original v1 dir must be restored after rollback")
+	_, statErr := os.Stat(filepath.Join(memRoot, agentName))
+	assert.True(t, os.IsNotExist(statErr), "relocated v3 dir must not remain after rollback")
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade is idempotent
+// ---------------------------------------------------------------------------
+
+func TestUpgradeIdempotent(t *testing.T) {
+	memRoot := t.TempDir()
+	require.NoError(t, writeVersionConfig(memRoot, "v3"))
+	agentName := "myagent"
+	v3Dir := filepath.Join(memRoot, agentName)
+	require.NoError(t, os.MkdirAll(v3Dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(v3Dir, "metadata.yaml"), []byte("version: v3\nversion_code: 3\n"), 0o644))
+
+	mem := NewDefaultAgentMemory()
+	newDir, err := mem.Upgrade(v3Dir, "v3")
+	require.NoError(t, err, "Upgrade to same version should be a no-op, not error")
+	assert.Equal(t, v3Dir, newDir, "Upgrade no-op should return same dir")
+}
+
+// ---------------------------------------------------------------------------
+// Created agent has no literal <agent_name> in memory.md
+// ---------------------------------------------------------------------------
+
+func TestCreatedAgentHasRealNameInMemoryMd(t *testing.T) {
+	memRoot := t.TempDir()
+	require.NoError(t, writeVersionConfig(memRoot, "v3"))
+	agentName := "specialagent"
+	memDir := filepath.Join(memRoot, agentName)
+
+	mem := NewDefaultAgentMemory()
+	require.NoError(t, mem.Create(memDir))
+
+	data, err := os.ReadFile(filepath.Join(memDir, "memory.md"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "<agent_name>", "memory.md must not contain literal <agent_name>")
+	assert.Contains(t, string(data), agentName, "memory.md must contain the real agent name")
+
+	data2, err := os.ReadFile(filepath.Join(memDir, "instructions", "memory.md"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data2), "<agent_name>", "instructions/memory.md must not contain literal <agent_name>")
+}

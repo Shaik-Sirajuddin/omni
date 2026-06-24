@@ -17,6 +17,12 @@ type Session struct {
 
 // --- Create ---
 type CreateSessionParams struct {
+	// Context controls the lifetime of the seed/bootstrap call. When nil,
+	// connectors apply a default bounded timeout (createSeedTimeout) so a hung
+	// unauthenticated CLI cannot freeze the operator indefinitely. Callers that
+	// want a shorter or longer deadline should wrap with context.WithTimeout
+	// and pass the result here.
+	Context        context.Context
 	ID             string
 	ParentID       string
 	Model          string

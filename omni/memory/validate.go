@@ -482,15 +482,19 @@ func validateV3Agent(agentPath, semPath string, opts Options, report *Report) {
 		_ = yaml.Unmarshal(data, &sem)
 	}
 
+	agentName := filepath.Base(agentPath)
+
 	// Required top-level files.
 	for _, f := range sem.Layout.AgentFiles {
 		p := filepath.Join(agentPath, f)
 		if _, err := os.Stat(p); err != nil {
 			if f == "memory.md" && opts.Fix {
-				scaffoldMemoryMd(p, filepath.Base(agentPath), report)
+				scaffoldMemoryMd(p, agentName, report)
 			} else {
 				report.addError(p, fmt.Sprintf("required file %q missing", f))
 			}
+		} else {
+			fixAgentNamePlaceholder(p, agentName, opts.Fix, report)
 		}
 	}
 
@@ -539,6 +543,7 @@ func validateV3Dir(base string, d v3AgentDir, opts Options, report *Report) {
 // required memory.md files by their full path; we skip those paths here to avoid
 // double-reporting the same missing file.
 func enforceCircuitRule(agentPath string, opts Options, report *Report) {
+	agentName := filepath.Base(agentPath)
 	alreadyReported := make(map[string]bool)
 	for _, v := range report.Violations {
 		alreadyReported[v.Path] = true
@@ -560,11 +565,41 @@ func enforceCircuitRule(agentPath string, opts Options, report *Report) {
 			} else {
 				report.addError(mmd, fmt.Sprintf("circuit rule: directory %q has no memory.md", filepath.Base(path)))
 			}
+		} else {
+			fixAgentNamePlaceholder(mmd, agentName, opts.Fix, report)
 		}
 		return nil
 	})
 	if err != nil {
 		report.addWarn(agentPath, fmt.Sprintf("circuit rule walk error: %v", err))
+	}
+}
+
+// fixAgentNamePlaceholder checks a file for literal "<agent_name>" placeholders.
+// When fix is true it replaces them in-place and records an Info violation.
+// When fix is false it records a Warning violation.
+func fixAgentNamePlaceholder(path, agentName string, fix bool, report *Report) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	s := string(data)
+	if !strings.Contains(s, "<agent_name>") {
+		return
+	}
+	if fix {
+		replaced := strings.ReplaceAll(s, "<agent_name>", agentName)
+		if err := os.WriteFile(path, []byte(replaced), 0o644); err != nil {
+			report.addWarn(path, fmt.Sprintf("fix: replace <agent_name>: write failed: %v", err))
+			return
+		}
+		report.Violations = append(report.Violations, Violation{
+			Path:     path,
+			Severity: SeverityInfo,
+			Message:  "fix: replaced literal <agent_name> with " + agentName,
+		})
+	} else {
+		report.addWarn(path, "file contains literal <agent_name> placeholder (run with --fix to repair)")
 	}
 }
 

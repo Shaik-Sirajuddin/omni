@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Shaik-Sirajuddin/memory/connector/codeagent"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
@@ -17,6 +18,12 @@ import (
 const (
 	Claude codeagent.Provider = "claude"
 )
+
+// createSeedTimeout is the maximum time allowed for the bootstrap seed call
+// (`claude -p hello`). If no deadline is already set on p.Context, Create wraps
+// the seed with this timeout so an unauthenticated or hung CLI cannot freeze the
+// operator indefinitely.
+const createSeedTimeout = 120 * time.Second
 
 // submitKey is sent by ExecInSession after the prompt to trigger submission.
 const submitKey = "\r"
@@ -67,6 +74,19 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 	env := mergeEnv(os.Environ(), p.Envs)
 	a.mu.Unlock()
 
+	// Derive a context for the seed call. If the caller provided one with a
+	// deadline, use it as-is; otherwise apply a bounded default so an
+	// unauthenticated or hung CLI cannot freeze the operator indefinitely.
+	ctx := p.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancelSeed context.CancelFunc
+		ctx, cancelSeed = context.WithTimeout(ctx, createSeedTimeout)
+		defer cancelSeed()
+	}
+
 	// Verify binary.
 	out, err := captureOutputEnv(workDir, env, binPath, "--version")
 	if err != nil {
@@ -109,8 +129,11 @@ func (a *claudeAgent) Create(p codeagent.CreateSessionParams) (*codeagent.Create
 		seedArgs = append(seedArgs, "--model", p.Model)
 	}
 	seedArgs = append(seedArgs, p.ExtraArgs...)
-	seedOut, seedErr := execOutputEnv(workDir, rt, env, binPath, seedArgs...)
+	seedOut, seedErr := execOutputEnvContext(ctx, workDir, rt, env, binPath, seedArgs...)
 	if seedErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("claude: create: seed session timed out after %s (is the CLI authenticated?): %w", createSeedTimeout, ctx.Err())
+		}
 		return nil, fmt.Errorf("claude: create: seed session: %w", seedErr)
 	}
 	logger.Debug("Create: session seeded", "id", id, "output", trimSpace(seedOut))
@@ -531,6 +554,30 @@ func execOutputEnv(workDir string, rt sandbox.SandboxRuntime, env []string, name
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
+	res, err := rt.Capture(name, args)
+	if err != nil {
+		return "", runtimeErrorf("claude exec", res, err)
+	}
+	return strings.TrimSpace(res.Stdout), nil
+}
+
+// execOutputEnvContext is like execOutputEnv but honours ctx: when the context
+// is cancelled or times out the subprocess is killed via exec.CommandContext.
+// This prevents a hung seed call (e.g. unauthenticated CLI blocking on a login
+// prompt) from freezing the caller indefinitely.
+func execOutputEnvContext(ctx context.Context, workDir string, rt sandbox.SandboxRuntime, env []string, name string, args ...string) (string, error) {
+	if rt == nil {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Dir = workDir
+		cmd.Env = env
+		out, err := cmd.Output()
+		if err != nil {
+			return "", wrapExitError("claude exec", err)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	// Sandbox path does not support context cancellation; fall through to the
+	// non-context variant and rely on the sandbox's own timeout handling.
 	res, err := rt.Capture(name, args)
 	if err != nil {
 		return "", runtimeErrorf("claude exec", res, err)

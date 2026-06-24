@@ -238,7 +238,9 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			newID = uuid.NewString()
 		}
 		envs := mcpSessionEnvs(agent)
+		createCtx, cancelCreate := context.WithTimeout(context.Background(), operatorCreateTimeout)
 		createResult, err := ca.Create(codeagent.CreateSessionParams{
+			Context:   createCtx,
 			ID:        newID,
 			Name:      agent.Name,
 			Model:     model,
@@ -246,6 +248,7 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			SessionID: requestedSessionID,
 			Envs:      envs,
 		})
+		cancelCreate()
 		if err != nil {
 			return fmt.Errorf("operator: switch provider: create session for agent %q: %w", agent.ID, err)
 		}
@@ -323,6 +326,12 @@ const (
 	// ptyRecentStartThreshold: a session started within this window is treated as "just started"
 	// and receives the readiness grace even when the caller did not trigger the resume.
 	ptyRecentStartThreshold = 3 * time.Second
+
+	// operatorCreateTimeout is the deadline applied by the operator to every
+	// ca.Create call (session bootstrap/seed). It acts as an outer guard so a hung
+	// connector (e.g. unauthenticated CLI blocking on a login prompt) cannot freeze
+	// the operator indefinitely, even if the connector forgets to honour p.Context.
+	operatorCreateTimeout = 120 * time.Second
 )
 
 // ptySessionLive checks whether a PTY session is active using a two-step probe:
@@ -795,7 +804,9 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	// which fails with "No conversation found". Don't resume a phantom session.
 	if !knownSession {
 		logger.Info("ResumeAgent: no existing session, seeding a new one before resume", "agentID", agent.ID, "sessionID", sessionID)
+		seedCtx, cancelSeed := context.WithTimeout(context.Background(), operatorCreateTimeout)
 		seedResult, seedErr := ca.Create(codeagent.CreateSessionParams{
+			Context:   seedCtx,
 			ID:        sessionID,
 			Name:      agent.Name,
 			Model:     model,
@@ -803,6 +814,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			Envs:      envs,
 			ExtraArgs: rcArgs,
 		})
+		cancelSeed()
 		if seedErr != nil {
 			logger.Error("ResumeAgent: seed session failed", "agentID", agent.ID, "sessionID", sessionID, "err", seedErr)
 			return fmt.Errorf("operator: seed session for agent %q: %w", agent.ID, seedErr)
@@ -857,7 +869,9 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			return fmt.Errorf("operator: resume session for agent %q: %w", agent.ID, err)
 		}
 		logger.Warn("ResumeAgent: no resumable session found, creating a new session", "agentID", agent.ID, "sessionID", sessionID)
+		fallbackCtx, cancelFallback := context.WithTimeout(context.Background(), operatorCreateTimeout)
 		createResult, createErr := ca.Create(codeagent.CreateSessionParams{
+			Context:   fallbackCtx,
 			ID:        sessionID,
 			Name:      agent.Name,
 			Model:     model,
@@ -866,6 +880,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			Envs:      envs,
 			ExtraArgs: rcArgs,
 		})
+		cancelFallback()
 		if createErr != nil {
 			logger.Error("ResumeAgent: fallback create failed", "agentID", agent.ID, "err", createErr)
 			return fmt.Errorf("operator: create session fallback for agent %q: %w", agent.ID, createErr)
@@ -1304,11 +1319,25 @@ func (o *DefaultOperator) UpgradeAgent(params operator.UpgradeAgentParams) error
 	if version == "" {
 		version = operator.LatestVersion
 	}
-	if err := o.agentMemory.Upgrade(agent.MemoryDir, version); err != nil {
-		logger.Error("UpgradeAgent: template upgrade failed", "agentID", params.ID, "version", version, "memoryDir", agent.MemoryDir, "err", err)
-		return fmt.Errorf("operator: upgrade agent %q: %w", params.ID, err)
+	newDir, upErr := o.agentMemory.Upgrade(agent.MemoryDir, version)
+	// Persist the new location whenever the dir actually moved — even if upErr
+	// is set. Upgrade rolls back the relocation on failure (returning the
+	// original dir), but if that rollback itself failed it returns the new dir
+	// where the files now live; recording it keeps the store consistent with
+	// disk so a retry resumes from the right place.
+	if newDir != "" && newDir != agent.MemoryDir {
+		logger.Info("UpgradeAgent: agent dir relocated, updating store", "agentID", params.ID, "oldDir", agent.MemoryDir, "newDir", newDir)
+		agent.MemoryDir = newDir
+		if err := o.store.UpdateAgent(agent); err != nil {
+			logger.Error("UpgradeAgent: store update failed after relocation", "agentID", params.ID, "newDir", newDir, "err", err)
+			return fmt.Errorf("operator: upgrade agent %q: update store after relocation: %w", params.ID, err)
+		}
 	}
-	logger.Info("UpgradeAgent: completed", "agentID", params.ID, "version", version, "memoryDir", agent.MemoryDir)
+	if upErr != nil {
+		logger.Error("UpgradeAgent: template upgrade failed", "agentID", params.ID, "version", version, "memoryDir", agent.MemoryDir, "err", upErr)
+		return fmt.Errorf("operator: upgrade agent %q: %w", params.ID, upErr)
+	}
+	logger.Info("UpgradeAgent: completed", "agentID", params.ID, "version", version, "memoryDir", newDir)
 	return nil
 }
 
@@ -1647,7 +1676,9 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 	rcArgs, rcEnvs := resolveRunConfig(runCfg)
 	envs := append(mcpSessionEnvs(agent), rcEnvs...)
 	// provider can return a different sessionId than requested
+	startCtx, cancelStart := context.WithTimeout(context.Background(), operatorCreateTimeout)
 	createResult, err := ca.Create(codeagent.CreateSessionParams{
+		Context:   startCtx,
 		ID:        createID,
 		Name:      agent.Name,
 		Model:     model,
@@ -1656,6 +1687,7 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		Envs:      envs,
 		ExtraArgs: rcArgs,
 	})
+	cancelStart()
 	if err != nil {
 		return fmt.Errorf("operator: create session for agent %q: %w", agent.ID, err)
 	}

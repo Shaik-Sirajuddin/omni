@@ -19,5 +19,6 @@ type OperatorStore interface {
 	CreateAgent(*omniagent.AgentInfo) error
 	GetAgent(id string) (*omniagent.AgentInfo, error)
 	ListAgentsByDir(dir sandbox.WorkspaceDir) ([]*omniagent.AgentInfo, error)
+	UpdateAgent(agent *omniagent.AgentInfo) error
 	DeleteAgent(id string) error
 }
