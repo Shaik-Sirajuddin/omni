@@ -249,6 +249,18 @@ func (s *sqlStore) CreateAgent(agent *omniagent.AgentInfo) error {
 	return err
 }
 
+func (s *sqlStore) UpdateAgent(agent *omniagent.AgentInfo) error {
+	logger.Debug("UpdateAgent(store): update", "agentID", agent.ID, "workspaceDir", agent.WorkspaceDir, "memoryDir", agent.MemoryDir)
+	_, err := s.db.Exec(
+		`UPDATE agents SET name=?, workspace_dir=?, memory_dir=? WHERE id=?`,
+		agent.Name, string(agent.WorkspaceDir), agent.MemoryDir, agent.ID,
+	)
+	if err != nil {
+		logger.Error("UpdateAgent(store): update failed", "agentID", agent.ID, "err", err)
+	}
+	return err
+}
+
 func (s *sqlStore) DeleteAgent(id string) error {
 	logger.Debug("DeleteAgent(store): delete", "agentID", id)
 	res, err := s.db.Exec(`DELETE FROM agents WHERE id = ?`, id)
