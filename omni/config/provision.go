@@ -41,9 +41,11 @@ type CLIAgentCreateFlags struct {
 	Name               string `koanf:"name" json:"name"`
 	Provider           string `koanf:"provider" json:"provider"`
 	Model              string `koanf:"model" json:"model"`
-	AllowGeneratedName bool   `koanf:"allow_generated_name" json:"allow_generated_name"`
-	ResumeIfExists     bool   `koanf:"resume_if_exists" json:"resume_if_exists"`
-	Interactive        bool   `koanf:"interactive" json:"interactive"`
+	AllowGeneratedName bool `koanf:"allow_generated_name" json:"allow_generated_name"`
+	ResumeIfExists     bool `koanf:"resume_if_exists" json:"resume_if_exists"`
+	Interactive        bool `koanf:"interactive" json:"interactive"`
+	// SkipConnect seeds memory and registers the agent without starting a provider session.
+	SkipConnect bool `koanf:"skip_connect" json:"skip_connect"`
 }
 
 // CLIAgentDeleteFlags is a koanf-compatible flag schema for `agent delete`.

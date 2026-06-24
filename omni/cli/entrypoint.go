@@ -739,6 +739,7 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 				ResumeIfExists:     resolved.ResumeIfExists,
 				Interactive:        resolved.Interactive,
 				SessionID:          sessionID,
+				SkipConnect:        resolved.SkipConnect,
 			})
 		},
 	}
@@ -749,6 +750,7 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 	createCmd.Flags().Bool("allow_generated_name", flags.AllowGeneratedName, "Allow operator to generate agent name when name is empty")
 	createCmd.Flags().BoolP("resume_if_exists", "r", flags.ResumeIfExists, "Resume agent when the provided name already exists in workspace")
 	createCmd.Flags().Bool("interactive", flags.Interactive, "Launch agent after create")
+	createCmd.Flags().Bool("skip-connect", flags.SkipConnect, "Seed memory and register agent without starting a provider session")
 	createCmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 
 	return createCmd

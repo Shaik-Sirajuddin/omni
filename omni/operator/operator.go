@@ -29,6 +29,10 @@ type CreateAgentParams struct {
 	ResumeIfExists     bool                 `json:"resume_if_exists,omitempty"`
 	Interactive        bool                 `json:"interactive"` // launch after create; default true
 	SessionID          string               `json:"session_id,omitempty"`
+	// SkipConnect seeds memory and registers the agent in the store but does not
+	// start a provider session. Useful for workspace bootstrap without launching
+	// a code-agent process.
+	SkipConnect bool `json:"skip_connect,omitempty"`
 }
 
 type ResumeAgentParams struct {
