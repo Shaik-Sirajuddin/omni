@@ -4,6 +4,20 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Semver bump level applied to the latest tag"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      force:
+        description: "Create a new tag even if the latest tag already points to the current commit"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -15,6 +29,66 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # On manual dispatch, decide which tag GoReleaser will release:
+      #
+      #  - HEAD is NOT yet tagged        -> bump latest by `level`, tag HEAD, push.
+      #  - HEAD already carries `latest`:
+      #      * force=false (default)     -> REUSE the existing tag and re-run the
+      #                                     release. This makes reruns idempotent:
+      #                                     if a prior dispatch pushed the tag but
+      #                                     then setup-go/GoReleaser failed, the
+      #                                     orphaned tag gets its release instead
+      #                                     of the run aborting.
+      #      * force=true                -> deliberate re-version: bump to a new
+      #                                     tag on the same commit and release it.
+      #
+      # GoReleaser auto-detects HEAD's tag, so we only control whether a new tag
+      # is created. Pushing with the default GITHUB_TOKEN does not re-trigger the
+      # `push: tags` event, so this still produces exactly one release run.
+      - name: Resolve release tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          [ -n "$latest" ] || latest="v0.0.0"
+          echo "latest tag: $latest"
+
+          head=$(git rev-parse HEAD)
+          latest_commit=$(git rev-list -n1 "$latest" 2>/dev/null || echo "")
+
+          if [ "$head" = "$latest_commit" ] && [ "${{ inputs.force }}" != "true" ]; then
+            # Idempotent rerun: HEAD is already tagged; reuse it and let the
+            # release step (re)publish. No new tag is created.
+            echo "::notice::HEAD already tagged $latest; reusing it for release (force=false)."
+            exit 0
+          fi
+
+          ver=${latest#v}
+          major=$(echo "$ver" | cut -d. -f1)
+          minor=$(echo "$ver" | cut -d. -f2)
+          patch=$(echo "$ver" | cut -d. -f3)
+
+          case "${{ inputs.level }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            *) echo "::error::unknown level '${{ inputs.level }}'"; exit 1 ;;
+          esac
+          next="v${major}.${minor}.${patch}"
+          echo "next tag: $next"
+
+          if git rev-parse -q --verify "refs/tags/$next" >/dev/null; then
+            echo "::error::tag $next already exists"
+            exit 1
+          fi
+
+          git tag -a "$next" -m "$next"
+          git push origin "$next"
+          echo "::notice::created and pushed tag $next"
 
       - uses: actions/setup-go@v5
         with:
