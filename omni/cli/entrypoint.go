@@ -237,6 +237,7 @@ func (c *DefaultCli) newAgentCommand() *cobra.Command {
 	agentCmd.AddCommand(c.newAgentListCommand())
 	agentCmd.AddCommand(c.newAgentCreateCommand())
 	agentCmd.AddCommand(c.newAgentResumeCommand())
+	agentCmd.AddCommand(c.newAgentUpdateCommand())
 	agentCmd.AddCommand(c.newAgentUpgradeCommand())
 	agentCmd.AddCommand(c.newAgentDeleteCommand())
 	agentCmd.AddCommand(c.newAgentSwitchProviderCommand())
@@ -730,6 +731,14 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 			if len(args) == 1 {
 				resolved.Name = args[0]
 			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
 			return c.operator.CreateAgent(operator.CreateAgentParams{
 				Workspace:          sandbox.WorkspaceDir(resolved.Workspace),
 				Name:               resolved.Name,
@@ -739,6 +748,7 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 				ResumeIfExists:     resolved.ResumeIfExists,
 				Interactive:        resolved.Interactive,
 				SessionID:          sessionID,
+				RunConfig:          runCfg,
 			})
 		},
 	}
@@ -750,6 +760,8 @@ func (c *DefaultCli) newAgentCreateCommand() *cobra.Command {
 	createCmd.Flags().BoolP("resume_if_exists", "r", flags.ResumeIfExists, "Resume agent when the provided name already exists in workspace")
 	createCmd.Flags().Bool("interactive", flags.Interactive, "Launch agent after create")
 	createCmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
+	createCmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	createCmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
 
 	return createCmd
 }
@@ -771,6 +783,14 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
 			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
 			return c.operator.ResumeAgent(operator.ResumeAgentParams{
 				Workspace:     sandbox.WorkspaceDir(resolved.Workspace),
 				Name:          args[0],
@@ -779,6 +799,9 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 				Model:         resolved.Model,
 				SessionID:     sessionID,
 				Detached:      detach,
+				RunConfig:     runCfg,
+				ClearArgs:     resolved.ClearArgs,
+				ClearEnvs:     resolved.ClearEnvs,
 			})
 		},
 	}
@@ -789,15 +812,20 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 	cmd.Flags().String("model", flags.Model, "Model used only when --init_if_missing creates a new agent")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start PTY daemon session and return immediately without attaching")
+	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
+	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
+	cmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
 	return cmd
 }
 
-func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
-	flags := config.ProvisionAgentUpgradeFlags()
+func (c *DefaultCli) newAgentUpdateCommand() *cobra.Command {
+	flags := config.ProvisionAgentUpdateFlags()
 
 	cmd := &cobra.Command{
-		Use:   "upgrade",
-		Short: "Upgrade an agent memory template",
+		Use:   "update <name>",
+		Short: "Update a persisted agent's run config (args/envs) without launching a session",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if c.operator == nil {
 				return errors.New("operator is required")
@@ -806,8 +834,64 @@ func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
 			if err := loadFlags(cmd, &resolved); err != nil {
 				return err
 			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
+			if err := c.operator.UpdateAgent(operator.UpdateAgentParams{
+				Workspace: sandbox.WorkspaceDir(resolved.Workspace),
+				Name:      args[0],
+				RunConfig: runCfg,
+				ClearArgs: resolved.ClearArgs,
+				ClearEnvs: resolved.ClearEnvs,
+			}); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "agent %q updated\n", args[0])
+			return nil
+		},
+	}
+
+	cmd.Flags().String("workspace", flags.Workspace, "Workspace directory")
+	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
+	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
+	cmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
+	return cmd
+}
+
+func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
+	flags := config.ProvisionAgentUpgradeFlags()
+
+	cmd := &cobra.Command{
+		Use:   "upgrade [name]",
+		Short: "Upgrade an agent memory template",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c.operator == nil {
+				return errors.New("operator is required")
+			}
+			resolved := flags
+			if err := loadFlags(cmd, &resolved); err != nil {
+				return err
+			}
+			// Accept agent name as positional arg (mirrors `omni agent resume`).
+			if len(args) == 1 {
+				resolved.Name = args[0]
+			}
 			if resolved.ID == "" {
-				return errors.New("agent id is required")
+				if resolved.Name == "" {
+					return errors.New("agent name or --id is required")
+				}
+				id, err := c.resolveAgentIDByName(resolved.Workspace, resolved.Name)
+				if err != nil {
+					return err
+				}
+				resolved.ID = id
 			}
 			return c.operator.UpgradeAgent(operator.UpgradeAgentParams{
 				ID:      resolved.ID,
@@ -816,7 +900,9 @@ func (c *DefaultCli) newAgentUpgradeCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().String("id", flags.ID, "Agent ID")
+	cmd.Flags().String("id", flags.ID, "Agent ID (alternative to positional name)")
+	cmd.Flags().String("name", flags.Name, "Agent name (alternative to --id)")
+	cmd.Flags().String("workspace", flags.Workspace, "Workspace directory (used with name)")
 	cmd.Flags().String("version", flags.Version, "Target version (default: latest)")
 	return cmd
 }
@@ -1344,6 +1430,23 @@ func loadFlags(cmd *cobra.Command, target any) error {
 		return fmt.Errorf("resolve command flags: %w", err)
 	}
 	return nil
+}
+
+// parseEnvSlice converts ["KEY=VALUE", ...] strings into a map[string]string.
+// Returns an error on any entry that does not contain "=".
+func parseEnvSlice(envs []string) (map[string]string, error) {
+	if len(envs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(envs))
+	for _, e := range envs {
+		idx := strings.IndexByte(e, '=')
+		if idx <= 0 {
+			return nil, fmt.Errorf("--env %q: expected KEY=VALUE format", e)
+		}
+		out[e[:idx]] = e[idx+1:]
+	}
+	return out, nil
 }
 
 func printOutput(kind, format string, v any) error {

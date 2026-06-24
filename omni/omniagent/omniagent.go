@@ -61,11 +61,26 @@ type PersistentMemory struct {
 	// agent write memory
 }
 
+// RunConfig holds agent-scoped runner invocation settings that survive across
+// init → resume. Fields are merged (not replaced) when overrides are supplied
+// at resume time.
+type RunConfig struct {
+	// ExtraArgs are pass-through CLI flags appended verbatim to the provider
+	// binary's argument list on every Create and Resume call.
+	// Example: ["--dangerously-skip-permissions", "--output-format=json"]
+	ExtraArgs []string `json:"extra_args,omitempty"`
+	// Envs are extra environment variables injected into the provider process.
+	// Keys are plain names; values are the raw string value.
+	// Example: {"ANTHROPIC_API_KEY": "sk-...", "DEBUG": "1"}
+	Envs map[string]string `json:"envs,omitempty"`
+}
+
 type Settings struct {
 	settings config.Settings
 	// Default workspace
 	Sandbox      *sandbox.Config  `json:"sandbox"`
 	DefaultModel *codeagent.Model `json:"default_model"`
+	RunConfig    *RunConfig       `json:"run_config,omitempty"`
 	hooks.Capabilities
 }
 

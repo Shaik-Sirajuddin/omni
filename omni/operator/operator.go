@@ -29,6 +29,8 @@ type CreateAgentParams struct {
 	ResumeIfExists     bool                 `json:"resume_if_exists,omitempty"`
 	Interactive        bool                 `json:"interactive"` // launch after create; default true
 	SessionID          string               `json:"session_id,omitempty"`
+	// RunConfig holds pass-through runner flags and env vars to persist for this agent.
+	RunConfig *omniagent.RunConfig `json:"run_config,omitempty"`
 }
 
 type ResumeAgentParams struct {
@@ -39,6 +41,23 @@ type ResumeAgentParams struct {
 	Model         string               `json:"model,omitempty"`
 	SessionID     string               `json:"session_id,omitempty"`
 	Detached      bool                 `json:"detached,omitempty"`
+	// RunConfig overrides to merge into the persisted RunConfig.
+	RunConfig *omniagent.RunConfig `json:"run_config,omitempty"`
+	// ClearArgs wipes stored ExtraArgs before applying any RunConfig.ExtraArgs.
+	ClearArgs bool `json:"clear_args,omitempty"`
+	// ClearEnvs wipes stored Envs before applying any RunConfig.Envs.
+	ClearEnvs bool `json:"clear_envs,omitempty"`
+}
+
+type UpdateAgentParams struct {
+	Workspace sandbox.WorkspaceDir `json:"workspace,omitempty"`
+	Name      string               `json:"name,omitempty"`
+	// RunConfig overrides to merge into the persisted RunConfig.
+	RunConfig *omniagent.RunConfig `json:"run_config,omitempty"`
+	// ClearArgs wipes stored ExtraArgs before applying any RunConfig.ExtraArgs.
+	ClearArgs bool `json:"clear_args,omitempty"`
+	// ClearEnvs wipes stored Envs before applying any RunConfig.Envs.
+	ClearEnvs bool `json:"clear_envs,omitempty"`
 }
 
 type DeleteAgentParams struct {
@@ -235,6 +254,10 @@ type Operator interface {
 	GetWorkspace(params GetWorkSpaceParams) (GetTeamResult, error)
 	// DeleteAgent from index , memory is retained
 	DeleteAgent(params DeleteAgentParams) error
+
+	// UpdateAgent merges run_config overrides into the agent's persisted settings
+	// without launching a session. Useful for updating --arg/--env flags in place.
+	UpdateAgent(params UpdateAgentParams) error
 	// ForkAgent(params)
 	GetCodeAgentResolver(agent codeagent.Provider) (*codeagent.SettingsResolver, error)
 

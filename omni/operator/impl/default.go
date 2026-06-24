@@ -3,6 +3,7 @@ package impl
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -729,6 +730,26 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	}
 	omnilog.InitSessionLog(sessionID)
 
+	// Load stored RunConfig, merge with CLI-provided overrides, persist if changed.
+	var activeRunCfg *omniagent.RunConfig
+	if o.agentStore != nil {
+		if storedSettings, sErr := o.agentStore.GetSettings(agent.ID); sErr == nil {
+			merged := mergeRunConfig(storedSettings.RunConfig, params.RunConfig, params.ClearArgs, params.ClearEnvs)
+			if runConfigDiffers(storedSettings.RunConfig, merged) {
+				storedSettings.RunConfig = merged
+				if uErr := o.agentStore.UpdateSettings(agent.ID, storedSettings); uErr != nil {
+					logger.Warn("ResumeAgent: run_config persist failed", "agentID", agent.ID, "err", uErr)
+				}
+			}
+			activeRunCfg = merged
+		} else {
+			// Settings row may not exist yet; fall back to CLI-provided override only.
+			activeRunCfg = params.RunConfig
+		}
+	} else {
+		activeRunCfg = params.RunConfig
+	}
+
 	// Hydrate the agent into the engine's in-memory state and re-activate its
 	// delivery loop before attaching the PTY client. Best-effort: a down or
 	// absent engine must not block resume/attach.
@@ -774,7 +795,8 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		return fmt.Errorf("operator: init code agent runtime: %w", err)
 	}
 
-	envs := mcpSessionEnvs(agent)
+	rcArgs, rcEnvs := resolveRunConfig(activeRunCfg)
+	envs := append(mcpSessionEnvs(agent), rcEnvs...)
 
 	// If we minted a fresh session id (no persisted session and none requested),
 	// the conversation does not exist in the connector's store yet. Seed it via
@@ -784,12 +806,13 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		logger.Info("ResumeAgent: no existing session, seeding a new one before resume", "agentID", agent.ID, "sessionID", sessionID)
 		seedCtx, cancelSeed := context.WithTimeout(context.Background(), operatorCreateTimeout)
 		seedResult, seedErr := ca.Create(codeagent.CreateSessionParams{
-			Context: seedCtx,
-			ID:      sessionID,
-			Name:    agent.Name,
-			Model:   model,
-			WorkDir: string(agent.WorkspaceDir),
-			Envs:    envs,
+			Context:   seedCtx,
+			ID:        sessionID,
+			Name:      agent.Name,
+			Model:     model,
+			WorkDir:   string(agent.WorkspaceDir),
+			Envs:      envs,
+			ExtraArgs: rcArgs,
 		})
 		cancelSeed()
 		if seedErr != nil {
@@ -839,7 +862,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		}
 	}
 
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, ExtraArgs: rcArgs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
@@ -855,6 +878,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
+			ExtraArgs: rcArgs,
 		})
 		cancelFallback()
 		if createErr != nil {
@@ -874,7 +898,7 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 				logger.Warn("ResumeAgent: fallback session store sync failed", "agentID", agent.ID, "sessionID", sessionID, "err", storeErr)
 			}
 		}
-		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
+		resumeResult, err = ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, ExtraArgs: rcArgs})
 		if err != nil {
 			logger.Error("ResumeAgent: fallback resume failed", "agentID", agent.ID, "sessionID", sessionID, "err", err)
 			return fmt.Errorf("operator: resume fallback session for agent %q: %w", agent.ID, err)
@@ -1178,7 +1202,8 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		return fmt.Errorf("operator: create agent (workspace %s): %w", ws.ID, err)
 	}
 	if o.agentStore != nil {
-		if err := o.agentStore.UpdateSettings(agentID, &omniagent.Settings{}); err != nil {
+		initSettings := &omniagent.Settings{RunConfig: params.RunConfig}
+		if err := o.agentStore.UpdateSettings(agentID, initSettings); err != nil {
 			logger.Warn("CreateAgent: settings init failed", "agentID", agentID, "err", err)
 		}
 	}
@@ -1196,7 +1221,7 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 		logger.Info("CreateAgent: memory seeded", "agentID", agentID, "memoryDir", memDir)
 	}
 
-	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID); err != nil {
+	if err := o.startAgentSession(agent, params.Provider, params.Model, params.Interactive, params.SessionID, params.RunConfig); err != nil {
 		logger.Warn("CreateAgent: session bootstrap failed — agent persisted; use 'omni agent resume' to start session", "agentID", agentID, "provider", params.Provider, "model", params.Model, "err", err)
 	}
 	logger.Info("CreateAgent: completed", "workspaceID", ws.ID, "agentID", agentID)
@@ -1382,6 +1407,54 @@ func (o *DefaultOperator) DeleteAgent(params operator.DeleteAgentParams) error {
 	return nil
 }
 
+// UpdateAgent merges run_config overrides into the agent's persisted settings
+// without launching a session.
+func (o *DefaultOperator) UpdateAgent(params operator.UpdateAgentParams) error {
+	workspace, err := o.resolveWorkspace(params.Workspace)
+	if err != nil {
+		logger.Error("UpdateAgent: workspace resolution failed", "workspace", params.Workspace, "err", err)
+		return err
+	}
+	name := sanitizeAgentName(params.Name)
+	if name == "" {
+		return fmt.Errorf("operator: agent name is required")
+	}
+
+	agents, err := o.store.ListAgentsByDir(workspace)
+	if err != nil {
+		return fmt.Errorf("operator: update agent: list agents: %w", err)
+	}
+	var agent *omniagent.AgentInfo
+	for _, a := range agents {
+		if a.Name == name {
+			agent = a
+			break
+		}
+	}
+	if agent == nil {
+		return fmt.Errorf("operator: agent %q not found in workspace %q", name, workspace)
+	}
+
+	if o.agentStore == nil {
+		return fmt.Errorf("operator: agent store unavailable")
+	}
+
+	storedSettings, sErr := o.agentStore.GetSettings(agent.ID)
+	if sErr != nil {
+		// No settings row yet — start from scratch.
+		storedSettings = &omniagent.Settings{}
+	}
+
+	merged := mergeRunConfig(storedSettings.RunConfig, params.RunConfig, params.ClearArgs, params.ClearEnvs)
+	storedSettings.RunConfig = merged
+	if uErr := o.agentStore.UpdateSettings(agent.ID, storedSettings); uErr != nil {
+		logger.Error("UpdateAgent: settings persist failed", "agentID", agent.ID, "err", uErr)
+		return fmt.Errorf("operator: update agent %q: %w", name, uErr)
+	}
+	logger.Info("UpdateAgent: run_config updated", "agentID", agent.ID, "name", name)
+	return nil
+}
+
 // workspaceDirOf converts a TeamInfo directory string to a WorkspaceDir.
 func (o *DefaultOperator) workspaceDirOf(ws *operator.TeamInfo) sandbox.WorkspaceDir {
 	return sandbox.WorkspaceDir(ws.WorkspaceDir)
@@ -1469,7 +1542,66 @@ func mcpSessionEnvs(agent *omniagent.AgentInfo) []string {
 	return envs
 }
 
-func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string) (retErr error) {
+// resolveRunConfig flattens a RunConfig into (extraArgs, KEY=VALUE envs) slices
+// ready to pass into connector params. Safe to call with nil rc.
+func resolveRunConfig(rc *omniagent.RunConfig) (args []string, envs []string) {
+	if rc == nil {
+		return nil, nil
+	}
+	args = append(args, rc.ExtraArgs...)
+	for k, v := range rc.Envs {
+		envs = append(envs, k+"="+v)
+	}
+	return args, envs
+}
+
+// mergeRunConfig merges override into stored, applying clear flags first.
+// Returns a new RunConfig (never mutates its inputs). Safe with nil inputs.
+func mergeRunConfig(stored, override *omniagent.RunConfig, clearArgs, clearEnvs bool) *omniagent.RunConfig {
+	out := &omniagent.RunConfig{}
+	if stored != nil {
+		if !clearArgs {
+			out.ExtraArgs = append(out.ExtraArgs, stored.ExtraArgs...)
+		}
+		if !clearEnvs && len(stored.Envs) > 0 {
+			out.Envs = make(map[string]string, len(stored.Envs))
+			for k, v := range stored.Envs {
+				out.Envs[k] = v
+			}
+		}
+	}
+	if override != nil {
+		out.ExtraArgs = append(out.ExtraArgs, override.ExtraArgs...)
+		if len(override.Envs) > 0 {
+			if out.Envs == nil {
+				out.Envs = make(map[string]string, len(override.Envs))
+			}
+			for k, v := range override.Envs {
+				out.Envs[k] = v
+			}
+		}
+	}
+	if len(out.ExtraArgs) == 0 && len(out.Envs) == 0 {
+		return nil
+	}
+	return out
+}
+
+// runConfigDiffers reports whether a and b differ enough to warrant a DB write.
+// Uses JSON serialisation as a simple structural equality check.
+func runConfigDiffers(a, b *omniagent.RunConfig) bool {
+	if a == nil && b == nil {
+		return false
+	}
+	if a == nil || b == nil {
+		return true
+	}
+	aj, _ := json.Marshal(a)
+	bj, _ := json.Marshal(b)
+	return string(aj) != string(bj)
+}
+
+func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider codeagent.Provider, model string, interactive bool, requestedSessionID string, runCfg *omniagent.RunConfig) (retErr error) {
 	if provider == "" {
 		provider = codeagent.Provider(operator.DefaultProvider)
 	}
@@ -1541,7 +1673,8 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		}
 	}
 
-	envs := mcpSessionEnvs(agent)
+	rcArgs, rcEnvs := resolveRunConfig(runCfg)
+	envs := append(mcpSessionEnvs(agent), rcEnvs...)
 	// provider can return a different sessionId than requested
 	startCtx, cancelStart := context.WithTimeout(context.Background(), operatorCreateTimeout)
 	createResult, err := ca.Create(codeagent.CreateSessionParams{
@@ -1552,6 +1685,7 @@ func (o *DefaultOperator) startAgentSession(agent *omniagent.AgentInfo, provider
 		WorkDir:   string(agent.WorkspaceDir),
 		SessionID: requestedSessionID,
 		Envs:      envs,
+		ExtraArgs: rcArgs,
 	})
 	cancelStart()
 	if err != nil {
