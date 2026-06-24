@@ -175,10 +175,15 @@ func (c *UnixSocketClient) Start(sessionID string, command []string, env []strin
 	return nil
 }
 
+// ptyDialTimeout is the maximum time allowed for a single Unix-socket connect
+// to the PTY daemon. Connection-refused returns immediately; this guards against
+// a hung accept on the daemon side (e.g. daemon unresponsive under load).
+const ptyDialTimeout = 5 * time.Second
+
 func (c *UnixSocketClient) Attach(ctx context.Context, sessionID string) error {
 	ptylog.Debug("client: attach", "session_id", sessionID, "socket", c.socketPath)
 
-	conn, err := net.Dial("unix", c.socketPath)
+	conn, err := net.DialTimeout("unix", c.socketPath, ptyDialTimeout)
 	if err != nil {
 		ptylog.Error("client: attach dial failed", "err", err, "session_id", sessionID)
 		return err
@@ -259,7 +264,7 @@ func (c *UnixSocketClient) Attach(ctx context.Context, sessionID string) error {
 // openStdinRelay dials the daemon, sends a stdin-relay handshake, and returns
 // the open connection ready for raw stdin bytes. The caller must close it.
 func (c *UnixSocketClient) openStdinRelay(sessionID string) (net.Conn, error) {
-	conn, err := net.Dial("unix", c.socketPath)
+	conn, err := net.DialTimeout("unix", c.socketPath, ptyDialTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +373,7 @@ func (c *UnixSocketClient) Detach(sessionID string) error {
 }
 
 func (c *UnixSocketClient) roundtrip(req unixRequest) (unixResponse, *net.UnixConn, error) {
-	conn, err := net.Dial("unix", c.socketPath)
+	conn, err := net.DialTimeout("unix", c.socketPath, ptyDialTimeout)
 	if err != nil {
 		return unixResponse{}, nil, err
 	}
