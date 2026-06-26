@@ -126,8 +126,7 @@ func (a *geminiAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 		// Gemini CLI does not expose a fork-session flag in non-interactive args.
 		logger.Warn("Resume: ForkSession requested but unsupported by gemini CLI; continuing without fork")
 	}
-	geminiArgs = append(geminiArgs, p.ExtraArgs...)
-
+	// ExtraArgs are not forwarded on Resume: session flags are baked in at Create time.
 	cmd := exec.Command(resumeShell(), "-lc", buildShellExecCommand("gemini", geminiArgs...))
 	cmd.Dir = workDir
 	if ptyClient != nil {

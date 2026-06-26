@@ -862,7 +862,11 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 		}
 	}
 
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs, ExtraArgs: rcArgs})
+	// ExtraArgs are session-creation flags (e.g. --dangerously-bypass-approvals-and-sandbox).
+	// They are baked into the session at Create time and persisted by the provider CLI.
+	// Passing them again on Resume causes "cannot be used multiple times" errors, so we
+	// intentionally omit ExtraArgs here — the session already carries them.
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: sessionID, SessionID: requestedSessionID, Detached: params.Detached, Envs: envs})
 	if err != nil {
 		if !isSessionNotFoundError(err) {
 			logger.Error("ResumeAgent: resume failed", "agentID", agent.ID, "err", err)
@@ -1141,6 +1145,9 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 					return o.ResumeAgent(operator.ResumeAgentParams{
 						Workspace: workspace,
 						Name:      agentName,
+						Provider:  params.Provider,
+						Model:     params.Model,
+						RunConfig: params.RunConfig,
 					})
 				}
 			}

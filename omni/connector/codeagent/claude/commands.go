@@ -188,7 +188,10 @@ func (a *claudeAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.Resume
 	if p.ForkSession {
 		args = append(args, "--fork-session")
 	}
-	args = append(args, p.ExtraArgs...)
+	// ExtraArgs are not forwarded on Resume: session-creation flags (e.g.
+	// --dangerously-bypass-approvals-and-sandbox) are baked into the session
+	// at Create time and passing them again causes a "cannot be used multiple
+	// times" error from the Claude CLI.
 
 	// sandbox disabled:
 	// if rt != nil {

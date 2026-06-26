@@ -343,8 +343,7 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		args = append(args, "--last")
 		resolvedSessionID = "last"
 	}
-	args = append(args, p.ExtraArgs...)
-
+	// ExtraArgs are not forwarded on Resume: session flags are baked in at Create time.
 	logger.Info("Resume: running command", "bin", binPath, "args", args)
 
 	// sandbox disabled:
