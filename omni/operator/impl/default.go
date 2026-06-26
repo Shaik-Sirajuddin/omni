@@ -1145,6 +1145,9 @@ func (o *DefaultOperator) CreateAgent(params operator.CreateAgentParams) error {
 					return o.ResumeAgent(operator.ResumeAgentParams{
 						Workspace: workspace,
 						Name:      agentName,
+						Provider:  params.Provider,
+						Model:     params.Model,
+						RunConfig: params.RunConfig,
 					})
 				}
 			}
