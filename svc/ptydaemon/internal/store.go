@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -39,6 +41,12 @@ type Store struct {
 }
 
 func NewStore(dbPath string) (*Store, error) {
+	// Create the parent directory if it doesn't exist. In systemd installs
+	// StateDirectory= handles this; in non-systemd environments (Coder workspaces,
+	// containers) it must be created explicitly or sqlite returns SQLITE_CANTOPEN (14).
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		return nil, fmt.Errorf("store: create db dir: %w", err)
+	}
 	// modernc.org/sqlite reads PRAGMAs via "_pragma=" DSN params; the older
 	// "_journal_mode=" form (mattn syntax) is silently ignored by this driver,
 	// which left the daemon with no WAL and no busy timeout. Set both so

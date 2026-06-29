@@ -50,7 +50,7 @@ func readMCPRaw(path string) (raw map[string]json.RawMessage, servers map[string
 
 	raw = map[string]json.RawMessage{}
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) || len(data) == 0 {
 		return raw, map[string]rawMCPServer{}, mtime, nil
 	}
 	if err != nil {
