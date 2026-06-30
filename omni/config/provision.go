@@ -62,11 +62,15 @@ type CLIAgentDiscoverFlags struct {
 
 // CLIAgentSwitchProviderFlags is a koanf-compatible flag schema for `agent switch-provider`.
 type CLIAgentSwitchProviderFlags struct {
-	ID         string `koanf:"id" json:"id"`
-	Name       string `koanf:"name" json:"name"`
-	Workspace  string `koanf:"workspace" json:"workspace"`
-	Provider   string `koanf:"provider" json:"provider"`
-	CleanStart bool   `koanf:"clean_start" json:"clean_start"`
+	ID         string   `koanf:"id" json:"id"`
+	Name       string   `koanf:"name" json:"name"`
+	Workspace  string   `koanf:"workspace" json:"workspace"`
+	Provider   string   `koanf:"provider" json:"provider"`
+	CleanStart bool     `koanf:"clean_start" json:"clean_start"`
+	ExtraArgs  []string `koanf:"arg" json:"arg"`
+	ExtraEnvs  []string `koanf:"env" json:"env"`
+	ClearArgs  bool     `koanf:"clear_args" json:"clear_args"`
+	ClearEnvs  bool     `koanf:"clear_envs" json:"clear_envs"`
 }
 
 // CLIAgentSandboxSyncFlags is a koanf-compatible flag schema for `agent sandbox sync`.

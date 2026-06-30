@@ -982,11 +982,22 @@ func (c *DefaultCli) newAgentSwitchProviderCommand() *cobra.Command {
 				}
 				resolved.ID = id
 			}
+			envMap, err := parseEnvSlice(resolved.ExtraEnvs)
+			if err != nil {
+				return err
+			}
+			var runCfg *omniagent.RunConfig
+			if len(resolved.ExtraArgs) > 0 || len(envMap) > 0 {
+				runCfg = &omniagent.RunConfig{ExtraArgs: resolved.ExtraArgs, Envs: envMap}
+			}
 			return c.operator.SwitchProvider(operator.SwitchProviderParams{
 				ID:         resolved.ID,
 				Provider:   codeagent.Provider(resolved.Provider),
 				CleanStart: resolved.CleanStart,
 				SessionID:  sessionID,
+				RunConfig:  runCfg,
+				ClearArgs:  resolved.ClearArgs,
+				ClearEnvs:  resolved.ClearEnvs,
 			})
 		},
 	}
@@ -997,6 +1008,10 @@ func (c *DefaultCli) newAgentSwitchProviderCommand() *cobra.Command {
 	switchCmd.Flags().StringP("provider", "p", flags.Provider, "Target provider")
 	switchCmd.Flags().Bool("clean_start", flags.CleanStart, "Force a clean session instead of reusing an active one")
 	switchCmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
+	switchCmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
+	switchCmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
+	switchCmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
+	switchCmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
 
 	return switchCmd
 }

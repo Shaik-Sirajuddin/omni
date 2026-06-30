@@ -136,10 +136,13 @@ type ForkAgentParams struct {
 }
 
 type SwitchProviderParams struct {
-	ID         string             `json:"id"`
-	CleanStart bool               `json:"clean_start,omitempty"`
-	Provider   codeagent.Provider `json:"provider,omitempty"`
-	SessionID  string             `json:"session_id,omitempty"`
+	ID         string               `json:"id"`
+	CleanStart bool                 `json:"clean_start,omitempty"`
+	Provider   codeagent.Provider   `json:"provider,omitempty"`
+	SessionID  string               `json:"session_id,omitempty"`
+	RunConfig  *omniagent.RunConfig `json:"run_config,omitempty"`
+	ClearArgs  bool                 `json:"clear_args,omitempty"`
+	ClearEnvs  bool                 `json:"clear_envs,omitempty"`
 }
 
 type ExecInSessionParams struct {
