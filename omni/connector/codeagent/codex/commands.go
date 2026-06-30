@@ -436,15 +436,17 @@ func (a *codexAgent) Resume(p codeagent.ResumeSessionParams) (*codeagent.ResumeS
 		return &codeagent.ResumeSessionResult{ProcessID: resolvedSessionID, SessionID: resolvedSessionID, Done: done}, nil
 	}
 
-	pid, _ := a.attachAndRun(ctx, binPath, workDir, args, env)
-	// TODO: re-enable new-session fallback once bootstrap reliably returns a real session ID
-	// if runErr != nil {
-	// 	logger.Warn("Resume: session not found, falling back to new session", "sessionID", resolvedSessionID, "err", runErr)
-	// 	newArgs := []string{"-C", workDir}
-	// 	logger.Info("Resume: running command", "bin", binPath, "args", newArgs)
-	// 	pid, _ = a.attachAndRun(binPath, workDir, newArgs)
-	// 	resolvedSessionID = "new"
-	// }
+	pid, runErr := a.attachAndRun(ctx, binPath, workDir, args, env)
+	if runErr != nil {
+		// Session not found in codex store. Fall back to resume --last, which shows
+		// the user available sessions to choose from. This gracefully handles the case
+		// where omni's stored session ID is stale (e.g., codex session was purged).
+		logger.Warn("Resume: session not found, falling back to last session", "sessionID", resolvedSessionID, "err", runErr)
+		fallbackArgs := []string{"resume", "-C", workDir, "--last"}
+		logger.Info("Resume: running command (fallback)", "bin", binPath, "args", fallbackArgs)
+		pid, _ = a.attachAndRun(ctx, binPath, workDir, fallbackArgs, env)
+		resolvedSessionID = "last"
+	}
 
 	return &codeagent.ResumeSessionResult{ProcessID: pid, SessionID: resolvedSessionID}, nil
 }
