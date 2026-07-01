@@ -1,0 +1,455 @@
+//go:build windows
+
+package handoff
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+// conpty_windows.go is the REAL Win32 ConPTY + relay-pipe mechanism behind the
+// conpty seam. Everything platform-specific lives here; the testable pump and
+// endpoint core (relaypump.go / winendpoint_core.go) never import this.
+//
+// Design (plan §7/§19.0, Option B relay): the daemon CREATES a ConPTY, spawns the
+// child attached to it, and is the SOLE, ALWAYS-ON reader of the ConPTY output
+// pipe (B1). Bytes are relayed to a per-attach named pipe the client opens by name.
+
+// kernel32 ConPTY procs not exported by x/sys/windows are declared lazily.
+var (
+	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
+
+	procCreatePseudoConsole = modkernel32.NewProc("CreatePseudoConsole")
+	procResizePseudoConsole = modkernel32.NewProc("ResizePseudoConsole")
+	procClosePseudoConsole  = modkernel32.NewProc("ClosePseudoConsole")
+	// UpdateProcThreadAttribute called directly so the PSEUDOCONSOLE lpValue can be
+	// the HPCON VALUE (not a pointer to it) without an unsafe.Pointer(uintptr) cast
+	// that `go vet` flags.
+	procUpdateProcThreadAttribute = modkernel32.NewProc("UpdateProcThreadAttribute")
+)
+
+// hpcon is the opaque HPCON pseudoconsole handle.
+type hpcon windows.Handle
+
+// winConPTY is the real conpty seam implementation.
+type winConPTY struct {
+	mu sync.Mutex
+
+	hpc hpcon
+
+	// The four pipe ends of the ConPTY. The ConPTY owns inRead/outWrite; the daemon
+	// keeps inWrite (to feed the child) and outRead (to read child output).
+	inRead   windows.Handle
+	inWrite  windows.Handle
+	outRead  windows.Handle
+	outWrite windows.Handle
+
+	proc   windows.Handle // child process handle
+	thread windows.Handle
+	job    windows.Handle // kill-on-close Job Object (H5 kill-tree)
+
+	out      *blockingReader // always-on output reader seam (B1)
+	attrList *windows.ProcThreadAttributeListContainer
+
+	pendingName string // relay pipe name currently being served (published pre-connect)
+
+	closed bool
+}
+
+// NewWinConPTY creates a ConPTY of the given size and spawns commandLine attached to
+// it. commandLine is a full Windows command line (e.g. `cmd.exe /c echo MARKER`).
+// The returned seam is wired into newWinEndpoint.
+func NewWinConPTY(size Winsize, commandLine string) (*winConPTY, error) {
+	w := &winConPTY{}
+
+	// Child stdin stays an anonymous pipe (we write it synchronously via rawWrite):
+	// inRead is read by the ConPTY, inWrite is written by us.
+	if err := windows.CreatePipe(&w.inRead, &w.inWrite, nil, 0); err != nil {
+		return nil, fmt.Errorf("CreatePipe(in): %w", err)
+	}
+	// Child stdout: an anonymous pipe (outWrite written by the ConPTY, outRead read
+	// by us). The always-on pump reads it with a BLOCKING ReadFile and cancels by
+	// CLOSING the handle (blockingReader). ConPTY does not reliably emit to a
+	// named-pipe output, and anonymous pipes don't support overlapped I/O — so
+	// blocking-read + close-to-cancel is the proven model (matches battle-tested Go
+	// ConPTY libraries). The always-on relay reader only stops at teardown, so it
+	// never needs mid-session overlapped cancellation.
+	if err := windows.CreatePipe(&w.outRead, &w.outWrite, nil, 0); err != nil {
+		w.cleanupPartial()
+		return nil, fmt.Errorf("CreatePipe(out): %w", err)
+	}
+
+	// CreatePseudoConsole(size COORD, hInput, hOutput, dwFlags, &hpcon).
+	coord := packCoord(size)
+	r1, _, _ := procCreatePseudoConsole.Call(
+		uintptr(coord),
+		uintptr(w.inRead),
+		uintptr(w.outWrite),
+		0,
+		uintptr(unsafe.Pointer(&w.hpc)),
+	)
+	if r1 != 0 { // S_OK == 0
+		w.cleanupPartial()
+		return nil, fmt.Errorf("CreatePseudoConsole: HRESULT 0x%x", r1)
+	}
+
+	// Do NOT close inRead/outWrite here. They are the ConPTY's ends of the pipes;
+	// closing them before the child is spawned and attached breaks the output
+	// plumbing (the cause of the second Windows CI hang — the overlapped read
+	// pended but ConPTY wrote nothing). They are closed in close() at teardown,
+	// matching Microsoft's EchoCon lifecycle.
+	if err := w.spawn(commandLine); err != nil {
+		w.cleanupPartial()
+		return nil, err
+	}
+
+	w.out = newBlockingReader(w.outRead)
+	return w, nil
+}
+
+// spawn launches the child via STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+// and assigns it to a kill-on-close Job Object so Close() kills the whole tree.
+func (w *winConPTY) spawn(commandLine string) error {
+	attrList, err := windows.NewProcThreadAttributeList(1)
+	if err != nil {
+		return fmt.Errorf("NewProcThreadAttributeList: %w", err)
+	}
+	w.attrList = attrList
+	// PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE is the classic special-case attribute: its
+	// lpValue must be the HPCON HANDLE VALUE ITSELF, not a pointer to it. Passing
+	// &w.hpc makes the child attach to a bogus pseudoconsole and produce NO output
+	// (the cause of "ConPTY emitted NOTHING"). Every reference impl — Microsoft's
+	// EchoCon, UserExistsError/conpty, aymanbagabas/go-pty — passes the handle value.
+	// Call UpdateProcThreadAttribute directly so lpValue is the handle value as a
+	// plain syscall arg (no unsafe.Pointer(uintptr) cast that `go vet` would flag).
+	if r1, _, e1 := procUpdateProcThreadAttribute.Call(
+		uintptr(unsafe.Pointer(attrList.List())),
+		0, // dwFlags
+		windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+		uintptr(w.hpc),       // lpValue = the HPCON value itself
+		unsafe.Sizeof(w.hpc), // cbSize = sizeof(HPCON)
+		0,                    // lpPreviousValue
+		0,                    // lpReturnSize
+	); r1 == 0 {
+		attrList.Delete()
+		w.attrList = nil
+		return fmt.Errorf("UpdateProcThreadAttribute(PSEUDOCONSOLE): %w", e1)
+	}
+
+	// Job Object: kill the child tree when the job handle closes (SIGHUP-equiv).
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return fmt.Errorf("CreateJobObject: %w", err)
+	}
+	w.job = job
+	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(
+		job,
+		windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)),
+		uint32(unsafe.Sizeof(info)),
+	); err != nil {
+		return fmt.Errorf("SetInformationJobObject(kill-on-close): %w", err)
+	}
+
+	cmd16, err := windows.UTF16PtrFromString(commandLine)
+	if err != nil {
+		return fmt.Errorf("UTF16PtrFromString: %w", err)
+	}
+	si := new(windows.StartupInfoEx)
+	si.Cb = uint32(unsafe.Sizeof(*si))
+	si.ProcThreadAttributeList = attrList.List()
+
+	pi := new(windows.ProcessInformation)
+	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
+	// CreateProcess with a writable copy of the command line (Win32 may mutate it).
+	if err := windows.CreateProcess(
+		nil,
+		cmd16,
+		nil, nil,
+		false, // do not inherit handles — the ConPTY plumbs them
+		flags,
+		nil, nil,
+		&si.StartupInfo,
+		pi,
+	); err != nil {
+		return fmt.Errorf("CreateProcess: %w", err)
+	}
+	w.proc = pi.Process
+	w.thread = pi.Thread
+
+	// Assign to the job AFTER creation. (Acceptable for our single-child case; a
+	// fully race-free variant would create suspended + assign + resume.)
+	if err := windows.AssignProcessToJobObject(w.job, w.proc); err != nil {
+		return fmt.Errorf("AssignProcessToJobObject: %w", err)
+	}
+	return nil
+}
+
+func (w *winConPTY) output() outputSource { return w.out }
+
+// pendingPipeName returns the relay pipe name newSink is currently serving (set
+// before ConnectNamedPipe so a connecting client can learn it). Empty otherwise.
+func (w *winConPTY) pendingPipeName() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pendingName
+}
+
+// newSink creates the per-attach relay named pipe (server side) with an owner-only
+// SDDL ACL (H4), FILE_FLAG_OVERLAPPED and an explicit out buffer; waits for the
+// client to ConnectNamedPipe; PID-verifies it (H4); and returns the connected sink.
+func (w *winConPTY) newSink(ctx context.Context, clientPID uint32) (relaySink, *pipeRef, error) {
+	name := newPipeName()
+
+	name16, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Owner-only ACL: D:P(A;;GA;;;OW) — grant GENERIC_ALL to the OWNER only, and the
+	// protected (P) flag blocks inherited ACEs. SDDL is necessary but NOT sufficient
+	// (H4) — the PID check below is the real gate.
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;OW)")
+	if err != nil {
+		return nil, nil, fmt.Errorf("SecurityDescriptorFromString: %w", err)
+	}
+	sa := &windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		SecurityDescriptor: sd,
+	}
+
+	// Publish the name BEFORE ConnectNamedPipe so the client (which learns it over
+	// the control conn) can CreateFile while Grant is still blocked on connect.
+	w.mu.Lock()
+	w.pendingName = name
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.pendingName = ""
+		w.mu.Unlock()
+	}()
+
+	const outBufSize = 64 * 1024
+	pipe, err := windows.CreateNamedPipe(
+		name16,
+		windows.PIPE_ACCESS_OUTBOUND|windows.FILE_FLAG_OVERLAPPED|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
+		windows.PIPE_TYPE_BYTE|windows.PIPE_REJECT_REMOTE_CLIENTS,
+		1, // nMaxInstances = 1 (single client)
+		outBufSize,
+		0,
+		0,
+		sa,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("CreateNamedPipe: %w", err)
+	}
+
+	if err := w.waitConnect(ctx, pipe); err != nil {
+		windows.CloseHandle(pipe)
+		return nil, nil, err
+	}
+
+	// H4: PID-verify the connecting process; disconnect on mismatch.
+	var gotPID uint32
+	if err := windows.GetNamedPipeClientProcessId(pipe, &gotPID); err != nil {
+		windows.DisconnectNamedPipe(pipe)
+		windows.CloseHandle(pipe)
+		return nil, nil, fmt.Errorf("GetNamedPipeClientProcessId: %w", err)
+	}
+	if verr := verifyClientPID(clientPID, gotPID); verr != nil {
+		windows.DisconnectNamedPipe(pipe)
+		windows.CloseHandle(pipe)
+		return nil, nil, verr
+	}
+
+	return newPipeSink(pipe), &pipeRef{Name: name}, nil
+}
+
+// waitConnect performs an overlapped ConnectNamedPipe and waits for either the
+// client or ctx cancellation.
+func (w *winConPTY) waitConnect(ctx context.Context, pipe windows.Handle) error {
+	ev, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(ev)
+	ov := &windows.Overlapped{HEvent: ev}
+
+	cerr := windows.ConnectNamedPipe(pipe, ov)
+	if cerr == windows.ERROR_PIPE_CONNECTED {
+		return nil // client connected between create and connect; fine
+	}
+	if cerr != nil && cerr != windows.ERROR_IO_PENDING {
+		return fmt.Errorf("ConnectNamedPipe: %w", cerr)
+	}
+
+	// Wait for the connect to complete or ctx to cancel.
+	done := make(chan error, 1)
+	go func() {
+		_, werr := windows.WaitForSingleObject(ev, windows.INFINITE)
+		done <- werr
+	}()
+	select {
+	case <-ctx.Done():
+		windows.CancelIoEx(pipe, ov)
+		<-done
+		return ctx.Err()
+	case werr := <-done:
+		if werr != nil {
+			return werr
+		}
+		var transferred uint32
+		return windows.GetOverlappedResult(pipe, ov, &transferred, true)
+	}
+}
+
+// resize maps to ResizePseudoConsole (M1).
+func (w *winConPTY) resize(size Winsize) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("handoff: conpty closed")
+	}
+	coord := packCoord(size)
+	r1, _, _ := procResizePseudoConsole.Call(uintptr(w.hpc), uintptr(coord))
+	if r1 != 0 {
+		return fmt.Errorf("ResizePseudoConsole: HRESULT 0x%x", r1)
+	}
+	return nil
+}
+
+// writeInput feeds raw VT input to the child, intercepting Ctrl-C (0x03) →
+// GenerateConsoleCtrlEvent(CTRL_C_EVENT) (plan §18.1). Callers in the input relay
+// path use this instead of writing the inWrite handle directly.
+func (w *winConPTY) writeInput(p []byte) (int, error) {
+	written := 0
+	for i := 0; i < len(p); i++ {
+		if p[i] == 0x03 { // Ctrl-C
+			// Flush bytes before the Ctrl-C, then raise the console ctrl event.
+			if i > written {
+				if err := w.rawWrite(p[written:i]); err != nil {
+					return written, err
+				}
+			}
+			// processGroupID 0 == every process attached to this console.
+			if err := windows.GenerateConsoleCtrlEvent(windows.CTRL_C_EVENT, 0); err != nil {
+				return i, err
+			}
+			written = i + 1
+		}
+	}
+	if written < len(p) {
+		if err := w.rawWrite(p[written:]); err != nil {
+			return written, err
+		}
+	}
+	return len(p), nil
+}
+
+func (w *winConPTY) rawWrite(p []byte) error {
+	var done uint32
+	return windows.WriteFile(w.inWrite, p, &done, nil)
+}
+
+// close tears down the ConPTY and kills the child tree (closing the job handle
+// triggers JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE). Idempotent.
+func (w *winConPTY) close() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	w.mu.Unlock()
+
+	// Teardown order matters: ClosePseudoConsole can DEADLOCK if the output pipe
+	// still has buffered data and no one is reading it. So first stop our reader,
+	// kill the child (closing the job), and break ALL pipe plumbing — only then
+	// ClosePseudoConsole, which now returns promptly because conhost's writes fail.
+	if w.out != nil {
+		_ = w.out.Close() // cancel the in-flight overlapped read (M3)
+	}
+	// Closing the job kills the child tree (SIGHUP-equiv) so it stops writing.
+	if w.job != 0 {
+		windows.CloseHandle(w.job)
+		w.job = 0
+	}
+	if w.inWrite != 0 {
+		windows.CloseHandle(w.inWrite)
+		w.inWrite = 0
+	}
+	if w.inRead != 0 {
+		windows.CloseHandle(w.inRead)
+		w.inRead = 0
+	}
+	if w.outWrite != 0 {
+		windows.CloseHandle(w.outWrite)
+		w.outWrite = 0
+	}
+	// outRead is owned by w.out (blockingReader); w.out.Close() above already closed
+	// it (which is also what unblocked the pump's blocking ReadFile). Don't double-close.
+	w.outRead = 0
+	// Now safe: pipes are gone, child is dead. ClosePseudoConsole is KNOWN to
+	// occasionally block (it waits for conhost to drain output); bound it so Close
+	// never hangs. The Job Object already killed the child, so abandoning a stuck
+	// ClosePseudoConsole goroutine is benign.
+	if w.hpc != 0 {
+		hpc := w.hpc
+		done := make(chan struct{})
+		go func() {
+			procClosePseudoConsole.Call(uintptr(hpc))
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		w.hpc = 0
+	}
+	if w.thread != 0 {
+		windows.CloseHandle(w.thread)
+		w.thread = 0
+	}
+	if w.proc != 0 {
+		windows.CloseHandle(w.proc)
+		w.proc = 0
+	}
+	if w.attrList != nil {
+		w.attrList.Delete()
+		w.attrList = nil
+	}
+	return nil
+}
+
+// cleanupPartial closes whatever handles were opened during a failed constructor.
+func (w *winConPTY) cleanupPartial() {
+	for _, h := range []*windows.Handle{&w.inRead, &w.inWrite, &w.outRead, &w.outWrite, &w.proc, &w.thread, &w.job} {
+		if *h != 0 {
+			windows.CloseHandle(*h)
+			*h = 0
+		}
+	}
+	if w.hpc != 0 {
+		procClosePseudoConsole.Call(uintptr(w.hpc))
+		w.hpc = 0
+	}
+	if w.attrList != nil {
+		w.attrList.Delete()
+		w.attrList = nil
+	}
+}
+
+// packCoord packs a Winsize into the DWORD that CreatePseudoConsole/Resize expect:
+// a COORD is {X int16 (cols), Y int16 (rows)} laid out little-endian in a uintptr.
+func packCoord(s Winsize) uint32 {
+	return uint32(s.Cols) | uint32(s.Rows)<<16
+}
+
+var _ conpty = (*winConPTY)(nil)

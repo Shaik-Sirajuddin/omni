@@ -1,0 +1,52 @@
+name: handoff-windows
+
+# Manual-only functional verification of the Windows ConPTY relay endpoint
+# (svc/ptydaemon/handoff) on a GitHub-hosted Windows runner. WIP branch — trigger
+# by hand (gh workflow run / Actions UI), never on push.
+#
+# The repo contains a path with a trailing space ('omni/operator/design.md ')
+# that is illegal on NTFS. A normal actions/checkout fails with git exit 128 even
+# with sparse-checkout, because git VALIDATES every tree path (core.protectNTFS)
+# before writing. So we check out manually with core.protectNTFS=false AND a
+# sparse-checkout limited to svc/ptydaemon + pkg, so the offending path is never
+# materialised. GOWORK=off isolates the build to the svc/ptydaemon module.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-handoff:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: svc/ptydaemon
+    env:
+      GOWORK: off
+    steps:
+      - name: checkout (sparse, NTFS-tolerant)
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
+          git -c core.protectNTFS=false fetch --depth=1 -q origin "${{ github.sha }}"
+          git sparse-checkout init --cone
+          git sparse-checkout set svc/ptydaemon pkg
+          git -c core.protectNTFS=false checkout -q FETCH_HEAD
+          echo "checked out paths:" && ls
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: go version
+        run: go version
+      - name: build (windows)
+        run: go build ./handoff/
+      - name: vet (windows)
+        run: go vet ./handoff/
+      - name: test (windows, verbose)
+        run: go test -count=1 -v -timeout 120s ./handoff/
