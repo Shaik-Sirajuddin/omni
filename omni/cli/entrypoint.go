@@ -25,6 +25,7 @@ import (
 	"github.com/Shaik-Sirajuddin/memory/omniagent"
 	"github.com/Shaik-Sirajuddin/memory/operator"
 	"github.com/Shaik-Sirajuddin/memory/operator/impl/defaults"
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 	omnisandbox "github.com/Shaik-Sirajuddin/memory/sandbox"
 	sandbox "github.com/Shaik-Sirajuddin/memory/sandbox/provider"
 	"github.com/Shaik-Sirajuddin/memory/store/codesession"
@@ -446,8 +447,17 @@ func (c *DefaultCli) newServerStartCommand() *cobra.Command {
 				return err
 			}
 			proc := exec.Command(bin)
-			proc.Stdout = os.Stdout
-			proc.Stderr = os.Stderr
+			// Redirect to a log file instead of inheriting the caller's stdout/stderr.
+			// The daemon keeps writing to these fds for its entire lifetime, so a
+			// direct inherit means any non-interactive caller (SSH exec, CI, a
+			// Coder startup_script) hangs forever waiting for EOF that never comes.
+			logFile, logErr := openServerLogFile()
+			if logErr != nil {
+				return fmt.Errorf("open ptydaemon log file: %w", logErr)
+			}
+			defer logFile.Close()
+			proc.Stdout = logFile
+			proc.Stderr = logFile
 			if debug {
 				proc.Env = append(os.Environ(), "DEV=1")
 			}
@@ -1381,11 +1391,13 @@ func fetchServerStatus(socketPath string) (*serverStatusResponse, error) {
 	return &status, nil
 }
 
+// ptyDaemonSocketPath resolves the same socket the running daemon actually
+// listens on (see sockpath.PTY / ptydaemon.DefaultSocketPath). It previously
+// hardcoded PTYDAEMON_SOCKET / "/tmp/ptydaemon.sock", which stopped matching
+// reality once the daemon moved to sockpath-based resolution — "omni server
+// status" would report "server not running" against a live daemon.
 func ptyDaemonSocketPath() string {
-	if path := os.Getenv("PTYDAEMON_SOCKET"); path != "" {
-		return path
-	}
-	return "/tmp/ptydaemon.sock"
+	return sockpath.PTY()
 }
 
 func newUnixHTTPClient(socketPath string) *http.Client {
@@ -1419,6 +1431,24 @@ func ptyDaemonPIDFile() string {
 		return path
 	}
 	return filepath.Join(os.TempDir(), "omni-server.pid")
+}
+
+// openServerLogFile returns the append-mode file the detached ptydaemon
+// process should write stdout/stderr to. Defaults to ~/.omni/log/server.log,
+// falling back to a temp-dir path when the home directory is unavailable.
+func openServerLogFile() (*os.File, error) {
+	logPath := os.Getenv("PTYDAEMON_LOG")
+	if logPath == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			logPath = filepath.Join(home, ".omni", "log", "server.log")
+		} else {
+			logPath = filepath.Join(os.TempDir(), "omni-server.log")
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 }
 
 func loadFlags(cmd *cobra.Command, target any) error {
