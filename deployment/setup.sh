@@ -159,13 +159,24 @@ check_agent_binaries() {
 }
 
 reload_and_enable() {
+  # omni-server is self-sufficient without systemd (creates its own socket/db
+  # dirs, falls back to a direct exec + PID file via `omni server start`), so
+  # a missing systemd/D-Bus session should degrade to a note, not a hard
+  # install failure — this is the common case in containers and Coder
+  # workspaces, where the binaries above already installed successfully.
+  if ! command -v systemctl &>/dev/null; then
+    echo "==> systemd not found — skipping service setup" >&2
+    echo "    omni works without systemd: run 'omni server start' to start it directly." >&2
+    return 0
+  fi
   if [[ "$USER_INSTALL" == "1" ]]; then
     if [[ -z "${XDG_RUNTIME_DIR:-}" ]] && [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-      echo "error: user-mode systemd requires an active D-Bus session (XDG_RUNTIME_DIR not set)." >&2
-      echo "       Run this script in a login session, or first run:" >&2
-      echo "         loginctl enable-linger $(id -un)" >&2
-      echo "         export XDG_RUNTIME_DIR=/run/user/$(id -u)" >&2
-      exit 1
+      echo "==> no active D-Bus/user session — skipping systemd service setup" >&2
+      echo "    omni works without it: run 'omni server start' to start it directly," >&2
+      echo "    or enable a lingering session first to use systemd:" >&2
+      echo "      loginctl enable-linger $(id -un)" >&2
+      echo "      export XDG_RUNTIME_DIR=/run/user/$(id -u)" >&2
+      return 0
     fi
   fi
   $SYSTEMCTL daemon-reload
