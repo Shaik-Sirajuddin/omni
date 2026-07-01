@@ -814,8 +814,13 @@ func (c *DefaultCli) newAgentResumeCommand() *cobra.Command {
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start PTY daemon session and return immediately without attaching")
 	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
 	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
-	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
-	cmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
+	// Flag names use underscores, not hyphens, to match the koanf struct tags
+	// (clear_args/clear_envs) that loadFlags binds against — koanf's posflag
+	// provider keys map to struct tags by exact string match, with no
+	// hyphen/underscore normalization, so a hyphenated flag name silently
+	// never binds and the flag becomes a permanent no-op.
+	cmd.Flags().Bool("clear_args", false, "Wipe stored extra args before applying any --arg values")
+	cmd.Flags().Bool("clear_envs", false, "Wipe stored extra envs before applying any --env values")
 	return cmd
 }
 
@@ -859,8 +864,13 @@ func (c *DefaultCli) newAgentUpdateCommand() *cobra.Command {
 	cmd.Flags().String("workspace", flags.Workspace, "Workspace directory")
 	cmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
 	cmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
-	cmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
-	cmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
+	// Flag names use underscores, not hyphens, to match the koanf struct tags
+	// (clear_args/clear_envs) that loadFlags binds against — koanf's posflag
+	// provider keys map to struct tags by exact string match, with no
+	// hyphen/underscore normalization, so a hyphenated flag name silently
+	// never binds and the flag becomes a permanent no-op.
+	cmd.Flags().Bool("clear_args", false, "Wipe stored extra args before applying any --arg values")
+	cmd.Flags().Bool("clear_envs", false, "Wipe stored extra envs before applying any --env values")
 	return cmd
 }
 
@@ -1010,8 +1020,10 @@ func (c *DefaultCli) newAgentSwitchProviderCommand() *cobra.Command {
 	switchCmd.Flags().StringVar(&sessionID, "session-id", "", "Optional session ID")
 	switchCmd.Flags().StringArray("arg", nil, "Pass-through flag appended to the runner command line (repeatable)")
 	switchCmd.Flags().StringArray("env", nil, "Extra env var injected into the runner process, KEY=VALUE (repeatable)")
-	switchCmd.Flags().Bool("clear-args", false, "Wipe stored extra args before applying any --arg values")
-	switchCmd.Flags().Bool("clear-envs", false, "Wipe stored extra envs before applying any --env values")
+	// See resume/update's identical comment: flag names must match the koanf
+	// struct tags exactly (underscore, not hyphen) for loadFlags to bind them.
+	switchCmd.Flags().Bool("clear_args", false, "Wipe stored extra args before applying any --arg values")
+	switchCmd.Flags().Bool("clear_envs", false, "Wipe stored extra envs before applying any --env values")
 
 	return switchCmd
 }
