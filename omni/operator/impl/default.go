@@ -200,6 +200,26 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 		return fmt.Errorf("operator: switch provider: list sessions for agent %q: %w", agent.ID, err)
 	}
 
+	// Load stored RunConfig, merge with CLI-provided overrides, persist if changed.
+	// Mirrors ResumeAgent so --arg/--env behave the same way across both commands.
+	var activeRunCfg *omniagent.RunConfig
+	if o.agentStore != nil {
+		if storedSettings, sErr := o.agentStore.GetSettings(agent.ID); sErr == nil {
+			merged := mergeRunConfig(storedSettings.RunConfig, params.RunConfig, params.ClearArgs, params.ClearEnvs)
+			if runConfigDiffers(storedSettings.RunConfig, merged) {
+				storedSettings.RunConfig = merged
+				if uErr := o.agentStore.UpdateSettings(agent.ID, storedSettings); uErr != nil {
+					logger.Warn("SwitchProvider: run_config persist failed", "agentID", agent.ID, "err", uErr)
+				}
+			}
+			activeRunCfg = merged
+		} else {
+			activeRunCfg = params.RunConfig
+		}
+	} else {
+		activeRunCfg = params.RunConfig
+	}
+
 	target := (*omniagent.CodeSession)(nil)
 	if !params.CleanStart {
 		for _, s := range sessions {
@@ -237,7 +257,8 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 		if newID == "" {
 			newID = uuid.NewString()
 		}
-		envs := mcpSessionEnvs(agent)
+		rcArgs, rcEnvs := resolveRunConfig(activeRunCfg)
+		envs := append(mcpSessionEnvs(agent), rcEnvs...)
 		createCtx, cancelCreate := context.WithTimeout(context.Background(), operatorCreateTimeout)
 		createResult, err := ca.Create(codeagent.CreateSessionParams{
 			Context:   createCtx,
@@ -247,6 +268,7 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 			WorkDir:   string(agent.WorkspaceDir),
 			SessionID: requestedSessionID,
 			Envs:      envs,
+			ExtraArgs: rcArgs,
 		})
 		cancelCreate()
 		if err != nil {
