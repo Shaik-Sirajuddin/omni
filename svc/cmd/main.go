@@ -55,7 +55,7 @@ func main() {
 		PTYDaemon: PTYDaemonConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disablePTY},
 			SocketPath:    sockpath.PTY(),
-			DBPath:        envOr("PTYDAEMON_DB", "/var/lib/omni-"+username+"/ptydaemon.db"),
+			DBPath:        envOr("PTYDAEMON_DB", defaultDBPath(username)),
 		},
 		HookOperator: HookOperatorConfig{
 			ServiceConfig: ServiceConfig{Enabled: !*disableHook},
@@ -96,6 +96,21 @@ func currentUsername() string {
 		return v
 	}
 	return "omni"
+}
+
+// defaultDBPath mirrors sockpath's root-vs-non-root split: /var/lib is
+// root-owned 0755, so a non-root process can never mkdir a subdirectory
+// there (systemd's StateDirectory= handles that for root-run services).
+// Non-root installs fall back to ~/.omni/data, matching the ~/.omni
+// convention used elsewhere (e.g. pkg/log).
+func defaultDBPath(username string) string {
+	if os.Geteuid() == 0 {
+		return "/var/lib/omni-" + username + "/ptydaemon.db"
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home + "/.omni/data/ptydaemon.db"
+	}
+	return os.TempDir() + "/omni-" + username + "/ptydaemon.db"
 }
 
 // resolveAxolinkMCPEnabled determines whether the Axolink MCP service should

@@ -149,6 +149,10 @@ func (s *operatorService) Start(ctx context.Context) error {
 		return fmt.Errorf("hook-operator: watch config: %w", err)
 	}
 
+	// A non-graceful prior exit (crash, OOM kill, SIGKILL, container restart)
+	// leaves the socket file on disk without a listener behind it; net.Listen
+	// would otherwise fail with EADDRINUSE forever. Mirrors ptyunix.Daemon.ListenAndServe.
+	_ = os.Remove(s.unixPath)
 	ln, err := net.Listen("unix", s.unixPath)
 	if err != nil {
 		return fmt.Errorf("hook-operator: listen on %s: %w", s.unixPath, err)

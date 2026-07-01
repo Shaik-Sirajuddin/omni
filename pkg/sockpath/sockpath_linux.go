@@ -7,8 +7,11 @@
 // Priority:
 //  1. Explicit env var (e.g. OMNI_PTY_SOCKET) — always wins; set by systemd unit
 //  2. $XDG_RUNTIME_DIR/omni/<name> — user-local install
-//  3. /run/user/<uid>/omni/<name> — user-local without XDG_RUNTIME_DIR
-//  4. /run/omni-<username>/<name> — system-wide install (legacy default)
+//  3. /run/user/<uid>/omni/<name> — user-local, already provisioned by systemd-logind
+//  4. /run/omni-<username>/<name> — system-wide install (root only; /run itself is
+//     root-owned 0755 so a non-root process cannot create a subdirectory there)
+//  5. ~/.omni/run/<name> — non-root fallback when none of the above are writable
+//     (e.g. containers/Coder workspaces with no systemd and no root)
 package sockpath
 
 import (
@@ -38,7 +41,9 @@ func Resolve(envVar, name string) string {
 		return filepath.Join(xdg, "omni", name)
 	}
 
-	// user-local: derive from UID when XDG_RUNTIME_DIR isn't exported
+	// user-local: derive from UID when XDG_RUNTIME_DIR isn't exported. Only used
+	// if systemd-logind (or similar) already created it — we never try to create
+	// /run/user/<uid> ourselves since /run is root-owned.
 	if u, err := user.Current(); err == nil && u.Uid != "" {
 		candidate := filepath.Join("/run/user", u.Uid, "omni", name)
 		if _, err := os.Stat(candidate); err == nil {
@@ -46,11 +51,22 @@ func Resolve(envVar, name string) string {
 		}
 	}
 
-	// system-wide fallback
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return filepath.Join("/run", "omni-"+u.Username, name)
+	// system-wide fallback: only viable when running as root, since /run itself
+	// is root-owned 0755 and a non-root process cannot mkdir a subdirectory in it.
+	if os.Geteuid() == 0 {
+		if u, err := user.Current(); err == nil && u.Username != "" {
+			return filepath.Join("/run", "omni-"+u.Username, name)
+		}
+		return filepath.Join("/run", "omni-root", name)
 	}
-	return filepath.Join("/run", "omni-root", name)
+
+	// non-root, no systemd-provided runtime dir: fall back to a per-user
+	// location we can always create, matching the ~/.omni convention used
+	// elsewhere (e.g. pkg/log).
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".omni", "run", name)
+	}
+	return filepath.Join(os.TempDir(), "omni-run", name)
 }
 
 // PTY returns the omni-pty socket path, honouring OMNI_PTY_SOCKET.

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Shaik-Sirajuddin/memory/pkg/sockpath"
 )
 
 type httpClient struct {
@@ -21,7 +23,7 @@ type httpClient struct {
 func newHTTPClient() *httpClient {
 	socketPath := os.Getenv("PTYDAEMON_SOCKET")
 	if socketPath == "" {
-		socketPath = "/tmp/ptydaemon.sock"
+		socketPath = sockpath.PTY()
 	}
 	return &httpClient{
 		socketPath: socketPath,
