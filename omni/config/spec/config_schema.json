@@ -9,6 +9,11 @@
           "type": "boolean",
           "title": "Debug",
           "description": "Enable debug logging"
+        },
+        "profiling": {
+          "type": "boolean",
+          "title": "Profiling",
+          "description": "Enable pprof profiling endpoint on 127.0.0.1 (requires dev.debug=true)"
         }
       },
       "additionalProperties": false,
