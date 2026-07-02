@@ -73,13 +73,17 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 	}
 	logger.Debug("Create: codex binary ok", "version", trimSpace(out))
 
-	// Verify authentication via `codex login status` (exit 0 = authenticated).
+	// `codex login status` only recognises ChatGPT/OpenAI OAuth. Deployments that
+	// configure a custom model_provider in config.toml (e.g. an API-key-backed
+	// proxy) work correctly via `codex exec` despite reporting "Not logged in" —
+	// so this is logged for visibility only, never a hard gate. If the CLI is
+	// genuinely unauthenticated, bootstrapSessionCtx below will fail with a real,
+	// specific error instead of this generic pre-check false-negative.
 	authCmd := exec.Command(binPath, "login", "status")
 	authCmd.Dir = workDir
 	authCmd.Env = env
 	if err := authCmd.Run(); err != nil {
-		logger.Warn("Create: user not authenticated", "err", err)
-		return nil, fmt.Errorf("codex: create: not authenticated — run 'codex login' first")
+		logger.Debug("Create: codex login status reports not logged in (may still work via a configured model_provider)", "err", err)
 	}
 
 	// Persist model into .codex/config.toml so interactive sessions inherit it.
@@ -134,13 +138,13 @@ func (a *codexAgent) Create(p codeagent.CreateSessionParams) (*codeagent.CreateS
 			if bootstrapCtx.Err() != nil {
 				return nil, fmt.Errorf("codex: create: bootstrap timed out after %s (is the CLI authenticated?): %w", createSeedTimeout, bootstrapCtx.Err())
 			}
-			// Non-fatal: fall back to the caller-supplied ID (or a generated one).
-			if p.ID != "" {
-				sessionID = p.ID
-			} else {
-				sessionID = generateID()
-			}
-			logger.Warn("Create: bootstrap session failed, using fallback id", "sessionID", sessionID, "err", bootstrapErr)
+			// Bootstrap genuinely failed (bad config, missing model catalog, auth
+			// failure, etc). Previously this fell back to a fake/generated session
+			// ID and reported success — which meant the real failure only surfaced
+			// much later, confusingly, as "No saved session found with ID <fake-id>"
+			// the first time something tried to Resume it. Fail loudly here instead,
+			// with the actual codex error, so the real cause is visible immediately.
+			return nil, fmt.Errorf("codex: create: seed session: %w", bootstrapErr)
 		}
 	}
 
@@ -221,7 +225,8 @@ func bootstrapSessionCtx(ctx context.Context, workDir, binPath, model string, en
 	cmd := exec.CommandContext(ctx, binPath, args...)
 	cmd.Dir = workDir
 	cmd.Env = env
-	cmd.Stderr = io.Discard
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -259,13 +264,25 @@ func bootstrapSessionCtx(ctx context.Context, workDir, binPath, model string, en
 	case <-ctx.Done():
 		_ = cmd.Wait()
 		logger.Debug("bootstrapSession: timed out", "sessionID", id)
-		return id, nil
+		return "", fmt.Errorf("bootstrap: timed out waiting for codex to complete a turn")
+	}
+
+	if id == "" {
+		// The found channel closed (codex's stdout hit EOF / the process exited)
+		// without ever reaching turn.completed — codex crashed or errored before
+		// registering a usable session (bad config, missing model catalog, auth
+		// failure, etc). Report this as a real error instead of letting the
+		// caller fabricate a fake session ID: a fake ID makes Create() look like
+		// it succeeded, and the failure only surfaces much later — confusingly —
+		// as "No saved session found with ID <fake-id>" when Resume is attempted.
+		waitErr := cmd.Wait()
+		stderrTail := strings.TrimSpace(stderrBuf.String())
+		return "", fmt.Errorf("bootstrap: codex exited before completing a turn (%v): %s", waitErr, stderrTail)
 	}
 
 	// SIGTERM lets codex flush the session file before exiting.
 	_ = cmd.Process.Signal(os.Interrupt)
 	_ = cmd.Wait()
-
 
 	logger.Debug("bootstrapSession: completed", "sessionID", id)
 	return id, nil

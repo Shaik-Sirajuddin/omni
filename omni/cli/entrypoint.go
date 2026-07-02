@@ -973,6 +973,7 @@ func (c *DefaultCli) newAgentDeleteCommand() *cobra.Command {
 func (c *DefaultCli) newAgentSwitchProviderCommand() *cobra.Command {
 	flags := config.ProvisionAgentSwitchProviderFlags()
 	var sessionID string
+	var detach bool
 
 	switchCmd := &cobra.Command{
 		Use:   "switch-provider [name]",
@@ -1018,6 +1019,7 @@ func (c *DefaultCli) newAgentSwitchProviderCommand() *cobra.Command {
 				RunConfig:  runCfg,
 				ClearArgs:  resolved.ClearArgs,
 				ClearEnvs:  resolved.ClearEnvs,
+				Detached:   detach,
 			})
 		},
 	}
@@ -1034,6 +1036,7 @@ func (c *DefaultCli) newAgentSwitchProviderCommand() *cobra.Command {
 	// struct tags exactly (underscore, not hyphen) for loadFlags to bind them.
 	switchCmd.Flags().Bool("clear_args", false, "Wipe stored extra args before applying any --arg values")
 	switchCmd.Flags().Bool("clear_envs", false, "Wipe stored extra envs before applying any --env values")
+	switchCmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start PTY daemon session and return immediately without attaching")
 
 	return switchCmd
 }
