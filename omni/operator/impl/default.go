@@ -327,7 +327,7 @@ func (o *DefaultOperator) SwitchProvider(params operator.SwitchProviderParams) e
 
 	resumeCtx, cancelResume := newResumeContext()
 	defer cancelResume()
-	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: target.Id, Envs: mcpSessionEnvs(agent)})
+	resumeResult, err := ca.Resume(codeagent.ResumeSessionParams{Context: resumeCtx, ID: target.Id, Detached: params.Detached, Envs: mcpSessionEnvs(agent)})
 	if err != nil {
 		return fmt.Errorf("operator: switch provider: resume session %q: %w", target.Id, err)
 	}
@@ -721,8 +721,48 @@ func (o *DefaultOperator) ResumeAgent(params operator.ResumeAgentParams) error {
 	// conversation (from the store or an explicit request). When false we minted a
 	// fresh id below and must seed it before resuming — never `-r` a phantom id.
 	knownSession := false
+	requestedProvider := params.Provider
 	if o.sessionStore != nil {
-		if session, sErr := o.sessionStore.GetSession(agent.ID); sErr == nil && session != nil {
+		if requestedProvider != "" {
+			// An explicit --provider was requested: honour it instead of blindly
+			// resuming whatever session GetSession reports as "active". Look for
+			// a session already using that provider first (same semantics as
+			// SwitchProvider's session matching).
+			sessions, lErr := o.sessionStore.ListSessions(agent.ID, nil)
+			if lErr != nil {
+				logger.Error("ResumeAgent: list sessions failed", "agentID", agent.ID, "err", lErr)
+				return fmt.Errorf("operator: list sessions for agent %q: %w", agent.ID, lErr)
+			}
+			for _, s := range sessions {
+				if s != nil && s.Model != nil && s.Model.Provider == requestedProvider {
+					provider = requestedProvider
+					if s.Model.Model != "" {
+						model = s.Model.Model
+					}
+					if s.Id != "" {
+						sessionID = s.Id
+						knownSession = true
+					}
+					break
+				}
+			}
+			if sessionID == "" {
+				// No session exists yet for the requested provider — this is a
+				// provider switch. Delegate to SwitchProvider, which creates the
+				// new session, deactivates the old one, and resumes/attaches it
+				// (Detached-aware, same as this function).
+				logger.Info("ResumeAgent: requested provider differs from active session, delegating to SwitchProvider", "agentID", agent.ID, "provider", requestedProvider)
+				return o.SwitchProvider(operator.SwitchProviderParams{
+					ID:        agent.ID,
+					Provider:  requestedProvider,
+					SessionID: params.SessionID,
+					RunConfig: params.RunConfig,
+					ClearArgs: params.ClearArgs,
+					ClearEnvs: params.ClearEnvs,
+					Detached:  params.Detached,
+				})
+			}
+		} else if session, sErr := o.sessionStore.GetSession(agent.ID); sErr == nil && session != nil {
 			if session.Model != nil {
 				if session.Model.Provider != "" {
 					provider = session.Model.Provider

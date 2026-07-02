@@ -143,6 +143,10 @@ type SwitchProviderParams struct {
 	RunConfig  *omniagent.RunConfig `json:"run_config,omitempty"`
 	ClearArgs  bool                 `json:"clear_args,omitempty"`
 	ClearEnvs  bool                 `json:"clear_envs,omitempty"`
+	// Detached skips the interactive attach, matching ResumeAgentParams.Detached.
+	// Needed so ResumeAgent can delegate here when the requested --provider
+	// differs from the agent's currently active session.
+	Detached bool `json:"detached,omitempty"`
 }
 
 type ExecInSessionParams struct {

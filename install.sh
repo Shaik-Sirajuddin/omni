@@ -66,15 +66,28 @@ download_and_install() {
 
   local do_global="${OMNI_GLOBAL_INSTALL:-}"
   if [[ -z "$do_global" && "$can_global" == "1" ]]; then
-    # root/sudo detected — ask user which mode they want
-    echo ""
-    echo "  Root/sudo access detected. Choose install mode:"
-    echo "    [1] User-local  — ~/.local/opt/omni  (default, no system changes)"
-    echo "    [2] System-wide — /opt/omni           (installs for all users, requires root)"
-    echo ""
-    local choice
-    read -r -p "  Enter choice [1]: " choice </dev/tty || choice="1"
-    [[ "$choice" == "2" ]] && do_global="1" || do_global="0"
+    # `-r /dev/tty` only checks permission bits, not whether the device is
+    # actually attachable — under `curl | bash` (or any exec with no
+    # controlling terminal) the file exists and is readable by mode, but
+    # opening it fails with ENXIO. Probe by actually opening it instead.
+    if { true < /dev/tty; } 2>/dev/null; then
+      # root/sudo detected and a real terminal is available — ask which mode.
+      echo ""
+      echo "  Root/sudo access detected. Choose install mode:"
+      echo "    [1] User-local  — ~/.local/opt/omni  (default, no system changes)"
+      echo "    [2] System-wide — /opt/omni           (installs for all users, requires root)"
+      echo ""
+      local choice
+      read -r -p "  Enter choice [1]: " choice </dev/tty
+      [[ "$choice" == "2" ]] && do_global="1" || do_global="0"
+    else
+      # curl | bash (or any non-interactive exec) has no controlling terminal —
+      # /dev/tty is unopenable there, so skip the prompt instead of printing a
+      # raw "No such device or address" error and default to the safe choice.
+      echo "==> no terminal detected — defaulting to user-local install"
+      echo "    (set OMNI_GLOBAL_INSTALL=1 to install system-wide instead)"
+      do_global="0"
+    fi
   fi
 
   if [[ "${do_global:-0}" == "1" ]]; then
